@@ -1,0 +1,88 @@
+# LPQ_VISION - compose.mac.yaml
+# The file for every machine WITHOUT a local model in Docker: in this era that is
+# BOTH the Windows laptop and the VPS lpq-brain.
+# Always run with -f:  docker compose -f compose.mac.yaml up -d
+# No file named compose.yaml may ever exist: the bare command failing is typo-proofing, by design.
+# Every service carries its own capped log budget (10m x 3): disk bounded forever, zero maintenance.
+
+services:
+  fastapi:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    volumes:
+      - ./config:/app/config
+      - photos:/data/photos
+      - logs:/data/logs
+    # BIND_IP comes from .env: unset on the laptop -> 127.0.0.1; on the server 100.126.179.123
+    # (the Tailscale IP). Docker publishes ports through its own iptables chains and BYPASSES UFW,
+    # so this bind IS the exposure control. Never rely on UFW for Docker-published ports.
+    ports:
+      - "${BIND_IP:-127.0.0.1}:8000:8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: python -m brain.worker.loop
+    env_file: .env
+    volumes:
+      - ./config:/app/config
+      - photos:/data/photos
+      - logs:/data/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    # Pinned to the exact 16.x minor verified at creation (rule 1: versions are frozen, never "latest").
+    image: postgres:16.15
+    env_file: .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Readiness layer 1 (connection). Layer 2 (tables) is the fastapi init at startup (SPEC 1.8).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lpq}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  bot:
+    build: .
+    command: python -m bot.main
+    env_file: .env
+    volumes:
+      - ./config:/app/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata: {}
+  photos: {}
+  logs: {}

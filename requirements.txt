@@ -1,0 +1,10 @@
+# LPQ_VISION Fase 1: the sealed dependency list. Exactly these 8 packages, each pinned to the
+# version verified on PyPI at install time (hard-learned rule 1). Anything more must be flagged first.
+fastapi==0.141.1
+uvicorn==0.54.0
+litellm==1.103.0
+pydantic==2.13.5
+psycopg[binary]==3.3.6
+python-multipart==0.0.32
+pyyaml==6.0.3
+python-telegram-bot==22.8
