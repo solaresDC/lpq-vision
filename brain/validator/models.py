@@ -1,7 +1,7 @@
 """LPQ_VISION boundary shapes: the one house for every shape that crosses a boundary.
 
-Config files -> typed objects (load_config, load_menu), the HTTP upload form
-(UploadRequest) and the model's answer (LLMResponse). This module validates and
+Config files -> typed objects (load_config, load_menu, load_prompt), the HTTP upload
+form (UploadRequest) and the model's answer (LLMResponse). This module validates and
 loads; it never touches the database, the network or the photo bytes.
 """
 
@@ -66,6 +66,32 @@ def bucket(value: int) -> int:
     """
     rounded = (value + BUCKET_SIZE // 2) // BUCKET_SIZE * BUCKET_SIZE
     return min(100, rounded)
+
+
+# --------------------------------------------------------------------------- the prompt
+
+def prompt_version_of(path: Path) -> str:
+    """Derive the version string from the prompt file name: prompt_sonnet_v1.txt -> 'v1'."""
+    match = re.search(r"_(v\d+)$", path.stem)
+    if not match:
+        raise ValueError(
+            f"{path.name}: prompt files must be named <name>_v<N>.txt so the version is derived"
+        )
+    return match.group(1)
+
+
+# The active prompt file. Its `_vN` suffix IS the prompt version string (SPEC section 4),
+# derived once here beside the loader. Choosing it becomes an admin knob in FASE 3.
+ACTIVE_PROMPT_FILE = PROMPTS_DIR / "prompt_sonnet_v1.txt"
+PROMPT_VERSION = prompt_version_of(ACTIVE_PROMPT_FILE)
+
+
+def load_prompt(path: Path = ACTIVE_PROMPT_FILE) -> str:
+    """Read the system prompt. Called per job by the adapter (config is read per job)."""
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"{path} is empty")
+    return text
 
 
 # --------------------------------------------------------------------------- config.yaml
