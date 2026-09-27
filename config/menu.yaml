@@ -1,0 +1,25 @@
+# LPQ_VISION - menu.yaml (the sealed layered shape)
+# menu:  universal layer, one entry per dish_id (snake_case key) with its components and portions.
+# sites: per-site layer, reference photos per dish. Empty fotos_ref = inherits brand (none yet),
+#        so the model works from the definitions alone.
+# Fase-1 seed: TWO placeholder dishes so the smoke test has a universe. The REAL LPQ dishes
+# replace them at T-E1 (Fase 2) on this same template. Component names are ASCII snake_case on
+# purpose: they become the exact keys of the model's JSON answer.
+menu:
+  tartine_aguacate:
+    nombre: Tartine de aguacate
+    componentes:
+      - {nombre: pan_masa_madre, porcion_g: 80}
+      - {nombre: aguacate, porcion_g: 90}
+      - {nombre: jitomate, porcion_g: 40}
+      - {nombre: arugula, porcion_g: 15}
+  omelette_champinones:
+    nombre: Omelette de champiñones
+    componentes:
+      - {nombre: omelette, porcion_g: 150}
+      - {nombre: champinones, porcion_g: 60}
+      - {nombre: ensalada, porcion_g: 40}
+      - {nombre: pan, porcion_g: 40}
+sites:
+  demo:
+    fotos_ref: {}

@@ -1,0 +1,12 @@
+# LPQ_VISION - config.yaml (operational knobs; exact keys, absent-when-off, nothing else)
+# YAML orthography rule of this system: any STRING value that collides with a YAML magic word
+# is quoted (bare on/off/yes/no parse as booleans, none/null as null). Real booleans stay bare.
+active_model: claude-sonnet-5
+cache: "on"                        # prompt caching mark on the stable prefix for Anthropic calls; a discount, never a dependency
+cascade: "off"                     # sealed three-position switch; Fase 1 accepts only "off"
+raw_logging: false                 # forensic river; strips image bytes if ever true
+brain_host: lpq-brain              # the club name; informational for tooling
+poll_seconds: 2                    # worker idle poll when the queue is empty
+sites:
+  demo:
+    ingestion: phone_web
