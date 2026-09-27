@@ -27,7 +27,8 @@ log = logging.getLogger("lpq.adapter.llm")
 # --- named constants (SPEC section 4) -------------------------------------------------
 LLM_TIMEOUT_S = 120          # one attempt may take at most this; the worker asserts it < ORPHAN_TIMEOUT
 MAX_TOKENS = 1024
-TEMPERATURE = 0
+# No sampling parameter is sent: claude-sonnet-5 rejects any non-default temperature/top_p/top_k
+# with a 400, so the provider default applies (temperature=0 never guaranteed identical outputs).
 CACHE_TTL = "5m"             # the ephemeral mark's TTL (provider default for ephemeral); 1h is on hold
 ANTHROPIC_PROVIDER = "anthropic"
 
@@ -128,7 +129,6 @@ def complete(model: str, messages: list[dict[str, Any]], provider: str | None) -
         model=model,
         messages=messages,
         max_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
         timeout=LLM_TIMEOUT_S,
         num_retries=0,                      # the queue is the only retry mechanism
         custom_llm_provider=provider,
