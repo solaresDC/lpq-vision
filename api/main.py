@@ -1,11 +1,13 @@
-"""LPQ_VISION API (la ventanilla): the three Fase-1 endpoints and nothing else.
+"""LPQ_VISION API (la ventanilla): the three Fase-1 endpoints, plus the Fase-2 routers.
 
 GET  /api/health       -> alive + queue depth; 503 {"ok": false, "db": false} if Postgres is unreachable
 POST /api/upload       -> saves the photo, inserts plates + jobs in ONE transaction, {"plate_id": n}
 GET  /api/plates/{id}  -> the full row as JSON, or 404
 
-Ownership: this service runs brain.db.init at startup, BEFORE serving (SPEC 1.8).
-The auto docs are switched off on purpose: no other endpoint exists in Fase 1.
+Fase 2 mounts, without touching the three above: api/auth.py (login/logout/session),
+api/routes.py (every other /api/* endpoint; arrives in 2.6/2.7), frontend/routes.py (the five
+pages as static files) and /static (the page assets). Ownership: this service runs
+brain.db.init at startup, BEFORE serving (SPEC 1.8). The auto docs stay switched off.
 """
 
 from __future__ import annotations
@@ -17,18 +19,22 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from api import auth
+from brain.capture.backends import PHOTO_ROOT
 from brain.db import init as db_init
 from brain.db import queries as q
 from brain.validator.models import PROMPT_VERSION, UploadRequest, load_config
+from frontend import routes as frontend_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,9 +43,9 @@ logging.basicConfig(
 log = logging.getLogger("lpq.api")
 
 # --- named constants (SPEC section 4) -------------------------------------------------
-# The photos root inside the container (compose volume photos:/data/photos). Rows store
-# paths RELATIVE to it; the root itself never enters a row.
-PHOTO_ROOT = Path("/data/photos")
+# PHOTO_ROOT is imported from brain.capture.backends: the ONE home of the photos root (the
+# Fase-1 duplication died at the first Fase-2 touch of this file). Rows store paths RELATIVE
+# to it; the root itself never enters a row.
 # The pinned uuid5 namespace for photo filenames. It is part of the idempotency contract
 # (filename = uuid5(PHOTO_NS, sha256 of the bytes)) and it NEVER changes.
 PHOTO_NS = uuid.UUID("7f2a9c1e-3b4d-4f6a-8e5c-1d2b3a4c5e6f")
@@ -75,6 +81,12 @@ async def _on_validation_error(request: Request, exc: RequestValidationError) ->
     first = exc.errors()[0]
     where = ".".join(str(p) for p in first.get("loc", ()))
     return _error(400, f"malformed request: {where}: {first.get('msg', 'invalid')}")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _on_http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    # The session dependency (401) and unknown routes (404) keep the system's {"error": ...} shape.
+    return _error(exc.status_code, str(exc.detail))
 
 
 @app.exception_handler(Exception)
@@ -221,3 +233,10 @@ async def get_plate(plate_id: int) -> Any:
         return _error(404, f"plate {plate_id} not found")
     # JSONB columns arrive as Python objects, timestamps as datetimes: the encoder makes them JSON/ISO.
     return jsonable_encoder(row)
+
+
+# --- Fase-2 wiring (the three endpoints above are untouched) --------------------------
+
+app.include_router(auth.router)
+app.include_router(frontend_routes.router)
+app.mount("/static", StaticFiles(directory=str(frontend_routes.STATIC_DIR)), name="static")

@@ -17,12 +17,15 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
-# Only the three code packages enter the image. config/ is bind-mounted by
-# compose (editable without a rebuild) and .env NEVER enters an image: secrets
-# reach containers through env_file only.
+# The code packages enter the image: brain/api/bot from Fase 1, frontend/ (static pages
+# served as files) and scripts/ (seed, bake-off, backup) from Fase 2. config/ is bind-mounted
+# by compose (editable without a rebuild) and .env NEVER enters an image: secrets reach
+# containers through env_file only.
 COPY brain ./brain
 COPY api ./api
 COPY bot ./bot
+COPY frontend ./frontend
+COPY scripts ./scripts
 
 # Runtime data lives on compose volumes mounted here, never inside the image.
 RUN mkdir -p /data/photos /data/logs
