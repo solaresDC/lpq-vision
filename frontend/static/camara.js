@@ -86,6 +86,14 @@ async function fetchFrame() {
   img.classList.remove("hidden");
   empty.classList.add("hidden");
   const ok = Number.isFinite(sharp) && sharp >= S.st.sharpness_min;
+  // A copy older than 3 polls means captura stopped pushing: say so instead of grading a stale frame.
+  const stale = Number.isFinite(parseFloat(age)) && parseFloat(age) > 3 * S.st.frame_poll_s;
+  if (stale) {
+    badge.textContent = "copia vieja: la captura no está enviando";
+    badge.className = "badge bad";
+    $("#frame-info").textContent = `copia de hace ${age} s · nitidez ${Number.isFinite(sharp) ? sharp : "—"} · piso ${S.st.sharpness_min}`;
+    return sharp;
+  }
   badge.textContent = Number.isFinite(sharp) ? `nitidez ${sharp}` : "nitidez —";
   badge.className = `badge ${ok ? "ok" : "bad"}`;
   $("#frame-info").textContent = `copia de hace ${age} s · piso ${S.st.sharpness_min}`;
