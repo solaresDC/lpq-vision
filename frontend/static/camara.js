@@ -18,6 +18,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // the next push (polling the frame every OTRA_POLL_MS, at most OTRA_CAP_MS) and show it when it lands.
 const OTRA_POLL_MS = 1000;
 const OTRA_CAP_MS = 25000;
+const OTRA_TICK_MS = 250;      // the countdown repaints this often; the frame poll stays at OTRA_POLL_MS
 const PUSH_WATCHED_S = 5;      // captura's cadence while someone watches (mirrors captura.js)
 const PUSH_IDLE_S = 15;        // captura's idle cadence
 
@@ -125,12 +126,16 @@ async function otra() {
   const cadence = await cadenceS();
   // A fresh copy: the age reset (dropped) or is younger than one push cadence. Shown as today.
   if (before === null || S.lastAge < before || S.lastAge < cadence) { note.textContent = ""; return; }
-  // The same copy, aging: count down to the next push and show it the moment it lands.
+  // The same copy, aging: count down to the estimated arrival and show the copy the moment it lands.
   btn.disabled = true;
   const t0 = Date.now();
+  const eta = t0 + Math.max(0, cadence - S.lastAge) * 1000;   // estimated once; the ticker counts against it
+  const ticker = setInterval(() => {
+    const left = Math.ceil((eta - Date.now()) / 1000);
+    note.textContent = left > 0 ? `siguiente foto en ${left}…` : `esperando la copia… (${Math.floor((Date.now() - eta) / 1000)} s)`;
+  }, OTRA_TICK_MS);
   try {
     while (Date.now() - t0 < OTRA_CAP_MS) {
-      note.textContent = `siguiente foto en ~${Math.max(1, Math.round(cadence - S.lastAge))} s`;
       await sleep(OTRA_POLL_MS);
       const prev = S.lastAge;
       await fetchFrame();
@@ -138,6 +143,7 @@ async function otra() {
     }
     note.textContent = `sin copia nueva en ${OTRA_CAP_MS / 1000} s: la captura no está enviando`;
   } finally {
+    clearInterval(ticker);
     btn.disabled = false;
   }
 }
