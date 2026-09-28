@@ -63,6 +63,11 @@ def make_hash(password: str, iterations: int = PBKDF2_ITERATIONS) -> str:
     return f"{HASH_SCHEME}${iterations}${salt}${digest.hex()}"
 
 
+# The dummy hash an UNKNOWN user is checked against, computed ONCE at import: every login costs
+# exactly one PBKDF2 round, so timing never reveals which user names exist.
+_DUMMY_HASH = make_hash("")
+
+
 def verify_hash(password: str, stored: str) -> bool:
     """Constant-time check of a password against a stored hash; any malformed hash is a miss."""
     try:
@@ -113,10 +118,10 @@ def scoped_site(session: Session, requested: str | None) -> str | None:
 # --- the endpoints --------------------------------------------------------------------
 
 def _check_password(password: str, stored: str | None) -> bool:
-    """One PBKDF2 round ALWAYS (a dummy hash when the user is unknown, so timing does not reveal
+    """One PBKDF2 round ALWAYS (the import-time dummy hash when the user is unknown, so timing does not reveal
     which user names exist), then the constant-time compare. Runs in a thread: a login never
     freezes the api's event loop."""
-    target = stored if stored is not None else make_hash("")
+    target = stored if stored is not None else _DUMMY_HASH
     return verify_hash(password, target) and stored is not None
 
 
