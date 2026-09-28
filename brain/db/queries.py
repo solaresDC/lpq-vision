@@ -35,6 +35,24 @@ WORKER_WAIT = "SELECT 1 AS ok FROM sites LIMIT 1"
 COUNT_PENDING_JOBS = "SELECT COUNT(*) AS n FROM jobs WHERE status = 'pending'"
 
 
+# --------------------------------------------------------------------- migrations (Fase 2, SPEC 1.2)
+
+# The per-column existence gate of brain/db/migrations.py: TRUE when the column already exists.
+COLUMN_PRESENT = """
+SELECT EXISTS (
+  SELECT 1
+  FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = %(table)s AND column_name = %(column)s
+) AS present
+"""
+
+# Migration 1: the human's corrected percentages, beside the model's draft, never over it.
+ADD_PLATES_LEFTOVERS_VERIFIED = "ALTER TABLE plates ADD COLUMN leftovers_verified JSONB"
+
+# Migration 3: capture-time facts (sharpness, direction_dudosa), written once at insert.
+ADD_PLATES_CAPTURE = "ALTER TABLE plates ADD COLUMN capture JSONB"
+
+
 # --------------------------------------------------------------------- seeds (idempotent)
 
 INSERT_SITE = """

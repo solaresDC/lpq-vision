@@ -1,9 +1,11 @@
-"""Idempotent database init, gated on existence (SPEC 1.8).
+"""Idempotent database init, gated on existence (SPEC 1.8), plus the migrations on EVERY boot.
 
 Owner: the fastapi service calls run() at startup, BEFORE serving. If the `sites`
-table is absent, schema.sql runs verbatim and the seeds follow, all inside ONE
-transaction (a half-built schema can never exist). If it is present, nothing happens,
-so every boot after the first passes through in milliseconds.
+table is absent, schema.sql runs verbatim and the seeds follow. If it is present, the
+create step is skipped. EITHER WAY, brain.db.migrations.run() then applies every missing
+Fase-2 migration (each gated on its own column's existence), all inside ONE transaction:
+a half-built schema can never exist, and a database that already has everything passes
+through in milliseconds.
 
 `python -m brain.db.init` by hand is a debug tool only: the system never depends on
 anyone remembering it.
@@ -20,6 +22,7 @@ from pathlib import Path
 import psycopg
 from psycopg.types.json import Jsonb
 
+from brain.db import migrations
 from brain.db import queries as q
 from brain.validator.models import Config, Menu, load_config, load_menu
 
@@ -87,22 +90,32 @@ def seed(conn: psycopg.Connection, config: Config, menu: Menu) -> dict[str, int]
 
 
 def run() -> str:
-    """Gate -> (schema + seeds in one transaction) or nothing. Returns 'created' or 'present'."""
+    """Gate -> (schema + seeds) or nothing, THEN migrations, all in one transaction.
+
+    Returns 'created' or 'present' (the schema gate's verdict); the migrations' own verdict
+    goes to the log, per step.
+    """
     config = load_config()
     menu = load_menu()
     _check_menu_sites(config, menu)
 
     with q.connect() as conn, conn.transaction():
         if schema_present(conn):
-            log.info("db init: schema present, nothing to do")
-            return "present"
-        log.info("db init: schema absent, applying %s and seeding", SCHEMA_PATH.name)
-        # No parameters here on purpose: psycopg allows several statements in one
-        # execute() only when nothing is bound, which is exactly what a DDL file is.
-        conn.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
-        counts = seed(conn, config, menu)
-        log.info("db init: schema created, seeded %s", counts)
-        return "created"
+            log.info("db init: schema present, nothing to create")
+            outcome = "present"
+        else:
+            log.info("db init: schema absent, applying %s and seeding", SCHEMA_PATH.name)
+            # No parameters here on purpose: psycopg allows several statements in one
+            # execute() only when nothing is bound, which is exactly what a DDL file is.
+            conn.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
+            counts = seed(conn, config, menu)
+            log.info("db init: schema created, seeded %s", counts)
+            outcome = "created"
+
+        # Always, gate or no gate: each migration self-gates on its column (SPEC 1.2).
+        migrated = migrations.run(conn)
+        log.info("db init: migrations %s", migrated)
+        return outcome
 
 
 def main() -> None:
