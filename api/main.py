@@ -5,7 +5,7 @@ POST /api/upload       -> saves the photo, inserts plates + jobs in ONE transact
 GET  /api/plates/{id}  -> the full row as JSON, or 404
 
 Fase 2 mounts, without touching the three above: api/auth.py (login/logout/session),
-api/routes.py (every other /api/* endpoint; arrives in 2.6/2.7), frontend/routes.py (the five
+api/routes.py (every other /api/* endpoint: the capture lane from 2.6, review/stats/gallery from 2.7), frontend/routes.py (the five
 pages as static files) and /static (the page assets). Ownership: this service runs
 brain.db.init at startup, BEFORE serving (SPEC 1.8). The auto docs stay switched off.
 """
@@ -30,6 +30,7 @@ from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import auth
+from api import routes as api_routes
 from brain.capture.backends import PHOTO_ROOT
 from brain.db import init as db_init
 from brain.db import queries as q
@@ -238,5 +239,6 @@ async def get_plate(plate_id: int) -> Any:
 # --- Fase-2 wiring (the three endpoints above are untouched) --------------------------
 
 app.include_router(auth.router)
+app.include_router(api_routes.router)
 app.include_router(frontend_routes.router)
 app.mount("/static", StaticFiles(directory=str(frontend_routes.STATIC_DIR)), name="static")

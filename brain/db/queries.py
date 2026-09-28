@@ -117,6 +117,15 @@ ON CONFLICT (photo_path) DO NOTHING
 RETURNING id
 """
 
+# The burst edition (Fase 2, T-C1): identical, plus the capture JSONB written ONCE here
+# (sharpness of the winning frame, direction_dudosa when ambiguous); the worker never touches it.
+INSERT_PLATE_WITH_CAPTURE = """
+INSERT INTO plates (site, camera, record_type, ts, photo_path, model, prompt_version, menu_version, capture)
+VALUES (%(site)s, %(camera)s, %(record_type)s, now(), %(photo_path)s, %(model)s, %(prompt_version)s, %(menu_version)s, %(capture)s)
+ON CONFLICT (photo_path) DO NOTHING
+RETURNING id
+"""
+
 SELECT_PLATE = "SELECT * FROM plates WHERE id = %(id)s"
 
 INSERT_JOB = """
