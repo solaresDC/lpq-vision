@@ -12,7 +12,7 @@ let sess = await session();
 if (!sess) sess = await requireLogin();
 mountHeader("Cámara", sess);
 
-const S = { site: sess.site || "demo", camera: "", st: null, cam: null, edge: "top", frameUrl: null, liveStop: null, alignStop: null, secondsLeft: 0, lastAge: null };
+const S = { site: sess.site || "demo", camera: "", st: null, cam: null, edge: "top", frameUrl: null, liveStop: null, alignStop: null, secondsLeft: 0, lastAge: null, lastFetchAt: 0 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // "otra" as a self-completing interaction: when the copy on screen is the same one aging, wait for
 // the next push (polling the frame every OTRA_POLL_MS, at most OTRA_CAP_MS) and show it when it lands.
@@ -89,6 +89,7 @@ async function fetchFrame() {
   const sharp = parseFloat(res.headers.get("X-Sharpness"));
   const age = res.headers.get("X-Frame-Age-S");
   S.lastAge = parseFloat(age);   // the age of the copy now on screen: "otra" compares against it
+  S.lastFetchAt = Date.now();    // when that age was read, so "same copy" can be recognised later
   const blob = await res.blob();
   if (S.frameUrl) URL.revokeObjectURL(S.frameUrl);
   S.frameUrl = URL.createObjectURL(blob);
@@ -117,39 +118,50 @@ async function cadenceS() {
   } catch { return PUSH_IDLE_S; }
 }
 
+// "otra", sealed (HQ): vista viva ON = the button is grey and idle (the view refreshes itself).
+// Vista viva OFF + one click = grey instantly, a countdown with the REAL time left to the next
+// copy, the copy newer than the one on screen at click time shows itself, the button revives.
+// No silent case: every click ends in a new picture, a message, or the 25 s cap.
 async function otra() {
   const btn = $("#otra"), note = $("#otra-note");
   if (btn.disabled) return;
-  const before = S.lastAge;
-  const sharp = await fetchFrame();
-  if (sharp === null || sharp === undefined) { note.textContent = ""; return; }   // no copy at all: already painted
-  const cadence = await cadenceS();
-  // A fresh copy: the age reset (dropped) or is younger than one push cadence. Shown as today.
-  if (before === null || S.lastAge < before || S.lastAge < cadence) { note.textContent = ""; return; }
-  // The same copy, aging: count down to the estimated arrival and show the copy the moment it lands.
-  btn.disabled = true;
-  const t0 = Date.now();
-  const eta = t0 + Math.max(0, cadence - S.lastAge) * 1000;   // estimated once; the ticker counts against it
-  const ticker = setInterval(() => {
-    const left = Math.ceil((eta - Date.now()) / 1000);
-    note.textContent = left > 0 ? `siguiente foto en ${left}…` : `esperando la copia… (${Math.floor((Date.now() - eta) / 1000)} s)`;
-  }, OTRA_TICK_MS);
+  btn.disabled = true;                                        // (1) grey at once
+  const onScreenAge = S.lastAge, onScreenAt = S.lastFetchAt;  // the copy on screen at click time
+  let ticker = null;
   try {
+    const sharp = await fetchFrame();
+    if (sharp === null || sharp === undefined) { note.textContent = ""; return; }   // no copy: fetchFrame said so
+    // Newer than the copy that was on screen? Same copy = its age grew by the elapsed time.
+    const sameAge = onScreenAge === null ? null : onScreenAge + (Date.now() - onScreenAt) / 1000;
+    if (sameAge === null || S.lastAge < sameAge - 0.5) { note.textContent = ""; return; }   // a new copy landed already
+    // (2) the same copy: count down the REAL time left, synced to the push cadence.
+    const cadence = await cadenceS();
+    const t0 = Date.now();
+    const eta = t0 + Math.max(0, cadence - S.lastAge) * 1000;
+    const paint = () => {
+      const left = Math.ceil((eta - Date.now()) / 1000);
+      note.textContent = left > 0 ? `siguiente foto en ${left}…` : `esperando la copia… (${Math.floor((Date.now() - eta) / 1000)} s)`;
+    };
+    paint();
+    ticker = setInterval(paint, OTRA_TICK_MS);
+    // (3) poll until the age resets (a newer copy) or the cap; the fresh copy paints itself.
     while (Date.now() - t0 < OTRA_CAP_MS) {
       await sleep(OTRA_POLL_MS);
       const prev = S.lastAge;
       await fetchFrame();
-      if (S.lastAge === null || S.lastAge < prev) { note.textContent = ""; return; }   // landed (or gone)
+      if (S.lastAge === null || S.lastAge < prev) { note.textContent = ""; return; }
     }
     note.textContent = `sin copia nueva en ${OTRA_CAP_MS / 1000} s: la captura no está enviando`;
   } finally {
-    clearInterval(ticker);
-    btn.disabled = false;
+    if (ticker) clearInterval(ticker);
+    btn.disabled = $("#live").checked;                        // revive, unless vista viva took over
   }
 }
 
 $("#otra").addEventListener("click", () => otra().catch((err) => { $("#otra-note").textContent = ""; toast(err.message, "bad"); }));
 $("#live").addEventListener("change", (ev) => {
+  $("#otra").disabled = ev.target.checked;                    // vista viva ON: the button has no job
+  $("#otra-note").textContent = "";
   if (ev.target.checked) { S.liveStop = poll(fetchFrame, (S.st ? S.st.frame_poll_s : 5) * 1000); }
   else if (S.liveStop) { S.liveStop(); S.liveStop = null; }
 });
