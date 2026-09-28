@@ -21,7 +21,7 @@
   .arrow.off { background: rgba(120,120,120,.85); color: #ddd; }
   .rolesign { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); background: rgba(0,0,0,.6); color: #fff; padding: 6px 12px; border-radius: 8px; font-weight: 700; }
   .status { font-size: 18px; padding: 10px 0; min-height: 44px; }
-  .tiles { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
+  .tiles { display: grid; gap: 8px; grid-template-columns: repeat(4, 1fr); }
   .tile { background: #262626; border-radius: 8px; padding: 8px 10px; }
   .tile .label { font-size: 12px; color: #aaa; }
   #log { list-style: none; padding: 0; margin: 10px 0 0; font-size: 14px; color: #ccc; }
@@ -59,6 +59,7 @@
       <div class="tile"><div class="label">capturados</div><div class="big" id="n-captured">0</div></div>
       <div class="tile"><div class="label">descartados</div><div class="big" id="n-discarded">0</div></div>
       <div class="tile"><div class="label">última nitidez</div><div class="big" id="last-sharp">—</div></div>
+      <div class="tile"><div class="label">última copia enviada hace</div><div class="big" id="last-push">—</div></div>
     </div>
     <ul id="log"></ul>
   </section>

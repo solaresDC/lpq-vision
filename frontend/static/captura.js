@@ -20,6 +20,7 @@ const PUSH_IDLE_MS = 15000;     // a copy every 15 s when nobody watches (so the
 const PUSH_WATCHED_MS = 5000;   // every 5 s while the mirilla is watching
 const PUSH_ALIGN_MS = 2000;     // every 2 s during the alignment mode (live sharpness)
 const PUSH_WIDTH = 640;         // the copy's width; the api scores it on the same scale as bursts
+const PUSH_WATCHDOG_MS = 45000; // no copy accepted for this long while running = the push loop is stuck: restart it
 const FULL_QUALITY = 0.92;
 const PUSH_QUALITY = 0.7;
 const LOG_MAX = 20;
@@ -36,6 +37,7 @@ const S = {
   inMotion: false, motionFrames: 0, calmFrames: 0, entryCounts: null,
   counts: { captured: 0, discarded: 0 },
   watching: false, align: { active: false }, countdownTimer: null, secondsLeft: 0,
+  lastPushAt: 0, pushGen: 0,
 };
 
 const video = $("#video");
@@ -189,7 +191,12 @@ function grab(canvas, width, quality) {
   const w = Math.min(width, video.videoWidth), h = Math.round(video.videoHeight * (w / video.videoWidth));
   canvas.width = w; canvas.height = h;
   canvas.getContext("2d").drawImage(video, 0, 0, w, h);
-  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  // toDataURL is SYNCHRONOUS. toBlob encodes on idle tasks, which a hidden tab can starve forever,
+  // and an await that never resolves silently kills the push loop. Same JPEG, no scheduling.
+  const bin = atob(canvas.toDataURL("image/jpeg", quality).split(",")[1]);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return Promise.resolve(new Blob([bytes], { type: "image/jpeg" }));
 }
 
 async function burst() {
@@ -263,8 +270,10 @@ function applyAlign(align) {
   }
 }
 
-async function pushLoop() {
-  while (S.running) {
+// The loop carries a generation number: the watchdog can abandon a stuck generation and start a
+// fresh one without waiting for an await that may never resolve.
+async function pushLoop(gen) {
+  while (S.running && gen === S.pushGen) {
     try {
       if (video.readyState >= 2) {
         const blob = await grab(pushCanvas, PUSH_WIDTH, PUSH_QUALITY);
@@ -275,6 +284,7 @@ async function pushLoop() {
         const res = await fetch("/api/camera/frame", { method: "POST", body: form });
         if (res.ok) {
           const data = await res.json();
+          S.lastPushAt = Date.now();
           S.watching = Boolean(data.watching);
           applyAlign(data.align);
           if (!S.paused) chip("#conn-chip", S.watching ? "capturando · alguien mira" : "capturando", "ok");
@@ -286,6 +296,21 @@ async function pushLoop() {
       chip("#conn-chip", "sin conexión con la ventanilla", "bad");
     }
     await sleep(S.align.active ? PUSH_ALIGN_MS : S.watching ? PUSH_WATCHED_MS : PUSH_IDLE_MS);
+  }
+}
+
+// The watchdog: paints the age of the last accepted copy, and restarts the push loop when it
+// falls silent (a hidden tab, a hung encoder, anything). Runs on its own timer, never awaits.
+function watchdog() {
+  if (!S.running) return;
+  const age = S.lastPushAt ? Math.round((Date.now() - S.lastPushAt) / 1000) : null;
+  $("#last-push").textContent = age === null ? "—" : `${age} s`;
+  if (age !== null && age * 1000 > PUSH_WATCHDOG_MS) {
+    log(`sin copias aceptadas desde hace ${age} s: reiniciando el envío`);
+    chip("#conn-chip", "envío reiniciado", "warn");
+    S.lastPushAt = Date.now();      // one restart per watchdog window, not one per tick
+    S.pushGen++;
+    pushLoop(S.pushGen);
   }
 }
 
@@ -311,7 +336,10 @@ async function start() {
   status("esperando plato…");
   log(`cámara ${S.camera} de ${S.site}: ${video.videoWidth}x${video.videoHeight}`);
   setInterval(sample, SAMPLE_MS);
-  pushLoop();
+  setInterval(watchdog, 5000);
+  document.addEventListener("visibilitychange", () =>
+    log(document.visibilityState === "hidden" ? "pestaña oculta: el navegador puede frenar la captura" : "pestaña visible"));
+  pushLoop(S.pushGen);
 }
 
 async function setup() {
