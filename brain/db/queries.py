@@ -162,6 +162,20 @@ UPDATE plates SET
 WHERE id = %(plate_id)s
 """
 
+# The express lane's twin (T-E5): the grade lands in its own JSONB, the dish id in dish_predicted,
+# the parse repairs/flags in validator (the worker owns validator on both lanes), all welded to
+# MARK_JOB_DONE in ONE transaction with the presentation prompt's own version.
+WRITE_PRESENTATION_RESULT = """
+UPDATE plates SET
+  dish_predicted = %(dish_predicted)s,
+  presentation   = %(presentation)s,
+  validator      = %(validator)s,
+  model          = %(model)s,
+  prompt_version = %(prompt_version)s,
+  menu_version   = %(menu_version)s
+WHERE id = %(plate_id)s
+"""
+
 MARK_JOB_DONE = """
 UPDATE jobs SET status = 'done', finished_at = now()
 WHERE id = %(job_id)s
