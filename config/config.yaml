@@ -1,12 +1,33 @@
 # LPQ_VISION - config.yaml (operational knobs; exact keys, absent-when-off, nothing else)
 # YAML orthography rule of this system: any STRING value that collides with a YAML magic word
 # is quoted (bare on/off/yes/no parse as booleans, none/null as null). Real booleans stay bare.
+# Nothing TEMPORAL lives here: the era's scaffolding (chat id, account hashes) is three .env keys.
 active_model: claude-sonnet-5
 cache: "on"                        # prompt caching mark on the stable prefix for Anthropic calls; a discount, never a dependency
 cascade: "off"                     # sealed three-position switch; Fase 1 accepts only "off"
 raw_logging: false                 # forensic river; strips image bytes if ever true
 brain_host: lpq-brain              # the club name; informational for tooling
 poll_seconds: 2                    # worker idle poll when the queue is empty
+capture:                           # the phone guard's knobs (T-C1); standard, adjustable, per-deployment reality
+  diff_threshold: 12               # % of pixels changed between frames that counts as an arrival
+  settle_frames: 4                 # consecutive calm frames that confirm the landing
+  burst_frames: 3                  # frames per burst; the server keeps the sharpest
+alerts:                            # thresholds ONLY (the bot's six families); nothing temporal here
+  sharpness_min: 60.0              # Laplacian variance floor (calibrated once live)
+  sharpness_n: 3                   # consecutive uploads under the floor that fire the dirty-lens alert
+  sharpness_cooldown_min: 60       # minutes of silence after a dirty-lens alert
+  backlog_threshold: 25            # pending jobs that fire the backlog alert
+  worker_silence_min: 10           # minutes without a done job (while pending > 0) that fire the silent-worker alert
+  poll_s: 10                       # the bot's round cadence in seconds
+video_align:                       # the alignment mode's rope: never "forever"
+  default_s: 60                    # default rope length; per-session editable in the page
+  max_s: 3600                      # hard cap; the page cannot exceed it
 sites:
   demo:
     ingestion: phone_web
+    funciones: {merma: true, presentacion: true}   # real booleans stay bare (orthography rule)
+    cameras:
+      barra-1:
+        source: phone              # 'phone' | 'pi'
+        role: both                 # 'return' | 'outgoing' | 'both'
+        # kitchen_edge appears ONLY once calibrated (the alignment mode writes it): absent-when-off
