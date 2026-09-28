@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Galería · LPQ_VISION</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  figure { margin: 0; cursor: pointer; }
+  figcaption { font-size: 12px; color: var(--muted); padding: 4px 2px; line-height: 1.3; }
+  figcaption b { color: var(--ink); }
+  .pager { display: flex; gap: 10px; align-items: center; justify-content: center; margin-top: 12px; }
+  .detail { max-width: 960px; max-height: 92vh; overflow: auto; }
+  .detail .photo { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <section class="card">
+    <h2>Filtros</h2>
+    <div class="row" id="filters"></div>
+  </section>
+  <section class="card">
+    <h2>Platos <span class="muted" id="count"></span></h2>
+    <div class="grid" id="grid"></div>
+    <div class="pager" id="pager"></div>
+  </section>
+</main>
+<script type="module">
+import { api, session, requireLogin, mountHeader, el, $, qs, fmtDate, toast } from "/static/app.js";
+
+let sess = await session();
+if (!sess) sess = await requireLogin();
+mountHeader("Galería", sess);
+
+// --- filters --------------------------------------------------------------------------
+const STATUS_LABEL = { unreviewed: "pendiente", verified: "verificado", not_plate: "no es plato" };
+const siteInput = el("input", { placeholder: "todos los sitios" });
+const dishSelect = el("select", {}, el("option", { value: "", text: "todos los platillos" }));
+const typeSelect = el("select", {},
+  el("option", { value: "", text: "regresan y salen" }),
+  el("option", { value: "return", text: "regresan (merma)" }),
+  el("option", { value: "outgoing", text: "salen (emplatado)" }),
+);
+const statusSelect = el("select", {},
+  el("option", { value: "", text: "cualquier estado" }),
+  el("option", { value: "unreviewed", text: "pendientes" }),
+  el("option", { value: "verified", text: "verificados" }),
+  el("option", { value: "not_plate", text: "no-platos" }),
+);
+const fromInput = el("input", { type: "date" });
+const toInput = el("input", { type: "date" });
+const applyBtn = el("button", { class: "primary", text: "Aplicar" });
+if (!sess.admin) { siteInput.value = sess.site; siteInput.disabled = true; }
+$("#filters").append(
+  el("div", {}, el("label", { text: "Sitio" }), siteInput),
+  el("div", {}, el("label", { text: "Platillo" }), dishSelect),
+  el("div", {}, el("label", { text: "Flujo" }), typeSelect),
+  el("div", {}, el("label", { text: "Estado" }), statusSelect),
+  el("div", {}, el("label", { text: "Desde" }), fromInput),
+  el("div", {}, el("label", { text: "Hasta" }), toInput),
+  el("div", {}, applyBtn),
+);
+
+try {
+  for (const d of await api("/api/dishes")) dishSelect.append(el("option", { value: d.dish_id, text: d.nombre }));
+  dishSelect.append(el("option", { value: "desconocido", text: "desconocido" }));
+} catch (err) { toast(err.message, "bad"); }
+
+let page = 1;
+function params() {
+  return {
+    site: sess.admin ? siteInput.value.trim() : "",
+    dish: dishSelect.value, record_type: typeSelect.value, review_status: statusSelect.value,
+    date_from: fromInput.value, date_to: toInput.value, page,
+  };
+}
+
+// --- the grid -------------------------------------------------------------------------
+function caption(r) {
+  const dish = r.dish || "sin analizar";
+  const stream = r.record_type === "outgoing" ? "sale" : "regresa";
+  const grade = r.presentation ? ` · ${r.presentation.score}/100` : "";
+  return el("figcaption", {}, el("b", { text: `#${r.id} ${dish}` }), el("br"),
+    `${stream}${grade} · ${STATUS_LABEL[r.review_status] || r.review_status}`, el("br"), fmtDate(r.ts));
+}
+
+async function load() {
+  const g = await api(`/api/gallery${qs(params())}`);
+  const grid = $("#grid");
+  grid.replaceChildren(...g.rows.map((r) => el("figure", { onclick: () => openDetail(r.id) },
+    el("img", { class: "thumb", src: r.photo_url, loading: "lazy", alt: `plato ${r.id}` }), caption(r))));
+  if (!g.rows.length) grid.replaceChildren(el("p", { class: "muted", text: "Sin platos con estos filtros." }));
+  $("#count").textContent = `${g.total} en total`;
+  const prev = el("button", { text: "◀ Anterior", disabled: g.page <= 1, onclick: () => { page = g.page - 1; load(); } });
+  const next = el("button", { text: "Siguiente ▶", disabled: g.page >= g.pages, onclick: () => { page = g.page + 1; load(); } });
+  $("#pager").replaceChildren(prev, el("span", { class: "muted", text: `página ${g.page} de ${g.pages}` }), next);
+}
+
+applyBtn.addEventListener("click", async () => {
+  page = 1;
+  applyBtn.disabled = true;
+  try { await load(); } catch (err) { toast(err.message, "bad"); } finally { applyBtn.disabled = false; }
+});
+
+// --- the evidence view: the photo + the full row JSON --------------------------------------
+async function openDetail(id) {
+  let row;
+  try { row = await api(`/api/plates/${id}`); } catch (err) { toast(err.message, "bad"); return; }
+  const close = el("button", { text: "Cerrar" });
+  const box = el("div", { class: "card detail" },
+    el("div", { class: "row" }, el("h2", { text: `Plato #${id}` }), el("div", { style: "flex:0" }, close)),
+    el("img", { class: "photo", src: `/api/photo/${id}`, alt: `plato ${id}` }),
+    el("pre", { class: "json", text: JSON.stringify(row, null, 2) }),
+  );
+  const overlay = el("div", { class: "overlay" }, box);
+  close.addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.remove(); });
+  document.body.append(overlay);
+}
+
+try { await load(); } catch (err) { toast(err.message, "bad"); }
+</script>
+</body>
+</html>
