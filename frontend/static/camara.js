@@ -12,7 +12,14 @@ let sess = await session();
 if (!sess) sess = await requireLogin();
 mountHeader("Cámara", sess);
 
-const S = { site: sess.site || "demo", camera: "", st: null, cam: null, edge: "top", frameUrl: null, liveStop: null, alignStop: null, secondsLeft: 0 };
+const S = { site: sess.site || "demo", camera: "", st: null, cam: null, edge: "top", frameUrl: null, liveStop: null, alignStop: null, secondsLeft: 0, lastAge: null };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// "otra" as a self-completing interaction: when the copy on screen is the same one aging, wait for
+// the next push (polling the frame every OTRA_POLL_MS, at most OTRA_CAP_MS) and show it when it lands.
+const OTRA_POLL_MS = 1000;
+const OTRA_CAP_MS = 25000;
+const PUSH_WATCHED_S = 5;      // captura's cadence while someone watches (mirrors captura.js)
+const PUSH_IDLE_S = 15;        // captura's idle cadence
 
 // --- picker ---------------------------------------------------------------------------
 const siteInput = el("input", { value: S.site, placeholder: "sitio" });
@@ -74,11 +81,13 @@ async function fetchFrame() {
     badge.classList.add("hidden");
     empty.classList.remove("hidden");
     empty.textContent = "sin copia fresca: nadie está capturando ahora";
+    S.lastAge = null;
     return null;
   }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const sharp = parseFloat(res.headers.get("X-Sharpness"));
   const age = res.headers.get("X-Frame-Age-S");
+  S.lastAge = parseFloat(age);   // the age of the copy now on screen: "otra" compares against it
   const blob = await res.blob();
   if (S.frameUrl) URL.revokeObjectURL(S.frameUrl);
   S.frameUrl = URL.createObjectURL(blob);
@@ -100,7 +109,40 @@ async function fetchFrame() {
   return sharp;
 }
 
-$("#otra").addEventListener("click", () => fetchFrame().catch((err) => toast(err.message, "bad")));
+async function cadenceS() {
+  try {
+    const st = await api(`/api/camera/state?site=${encodeURIComponent(S.site)}`);
+    return st.cameras[S.camera] && st.cameras[S.camera].watching ? PUSH_WATCHED_S : PUSH_IDLE_S;
+  } catch { return PUSH_IDLE_S; }
+}
+
+async function otra() {
+  const btn = $("#otra"), note = $("#otra-note");
+  if (btn.disabled) return;
+  const before = S.lastAge;
+  const sharp = await fetchFrame();
+  if (sharp === null || sharp === undefined) { note.textContent = ""; return; }   // no copy at all: already painted
+  const cadence = await cadenceS();
+  // A fresh copy: the age reset (dropped) or is younger than one push cadence. Shown as today.
+  if (before === null || S.lastAge < before || S.lastAge < cadence) { note.textContent = ""; return; }
+  // The same copy, aging: count down to the next push and show it the moment it lands.
+  btn.disabled = true;
+  const t0 = Date.now();
+  try {
+    while (Date.now() - t0 < OTRA_CAP_MS) {
+      note.textContent = `siguiente foto en ~${Math.max(1, Math.round(cadence - S.lastAge))} s`;
+      await sleep(OTRA_POLL_MS);
+      const prev = S.lastAge;
+      await fetchFrame();
+      if (S.lastAge === null || S.lastAge < prev) { note.textContent = ""; return; }   // landed (or gone)
+    }
+    note.textContent = `sin copia nueva en ${OTRA_CAP_MS / 1000} s: la captura no está enviando`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("#otra").addEventListener("click", () => otra().catch((err) => { $("#otra-note").textContent = ""; toast(err.message, "bad"); }));
 $("#live").addEventListener("change", (ev) => {
   if (ev.target.checked) { S.liveStop = poll(fetchFrame, (S.st ? S.st.frame_poll_s : 5) * 1000); }
   else if (S.liveStop) { S.liveStop(); S.liveStop = null; }
