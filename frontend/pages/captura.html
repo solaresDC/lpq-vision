@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Captura · LPQ_VISION</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  body { background: #111; color: #eee; }
+  .topbar { background: #1c1c1c; border-color: #333; color: #eee; }
+  .card { background: #1c1c1c; border-color: #333; }
+  .viewport { position: relative; width: 100%; background: #000; border-radius: var(--radius); overflow: hidden; }
+  video { width: 100%; display: block; }
+  .arrow { position: absolute; font-weight: 700; font-size: 15px; padding: 6px 10px; border-radius: 8px; background: rgba(0,0,0,.55); color: #fff; }
+  .arrow.top { top: 8px; left: 50%; transform: translateX(-50%); }
+  .arrow.bottom { bottom: 8px; left: 50%; transform: translateX(-50%); }
+  .arrow.left { left: 8px; top: 50%; transform: translateY(-50%); }
+  .arrow.right { right: 8px; top: 50%; transform: translateY(-50%); }
+  .arrow.kitchen { background: rgba(224,138,30,.85); }
+  .arrow.room { background: rgba(46,158,91,.85); }
+  .arrow.off { background: rgba(120,120,120,.85); color: #ddd; }
+  .rolesign { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); background: rgba(0,0,0,.6); color: #fff; padding: 6px 12px; border-radius: 8px; font-weight: 700; }
+  .status { font-size: 18px; padding: 10px 0; min-height: 44px; }
+  .tiles { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
+  .tile { background: #262626; border-radius: 8px; padding: 8px 10px; }
+  .tile .label { font-size: 12px; color: #aaa; }
+  #log { list-style: none; padding: 0; margin: 10px 0 0; font-size: 14px; color: #ccc; }
+  #log li { padding: 4px 0; border-bottom: 1px solid #2a2a2a; }
+  .banner { position: fixed; inset: 0; background: rgba(183,121,31,.96); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; z-index: 40; padding: 20px; }
+  .banner .count { font-size: 64px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  label { color: #aaa; }
+  input, select { background: #262626; color: #eee; border-color: #333; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <h1>Captura</h1>
+  <span class="chip" id="role-chip">sin cámara</span>
+  <div class="spacer"></div>
+  <span class="chip" id="conn-chip">detenida</span>
+</header>
+<main class="wrap">
+  <section class="card" id="setup">
+    <h2>Sitio y cámara</h2>
+    <div class="row" id="setup-row"></div>
+    <p class="muted" id="setup-note"></p>
+  </section>
+  <section class="card hidden" id="stage">
+    <div class="viewport">
+      <video id="video" playsinline muted autoplay></video>
+      <div class="arrow top hidden" id="arrow-top"></div>
+      <div class="arrow bottom hidden" id="arrow-bottom"></div>
+      <div class="arrow left hidden" id="arrow-left"></div>
+      <div class="arrow right hidden" id="arrow-right"></div>
+      <div class="rolesign" id="rolesign"></div>
+    </div>
+    <div class="status" id="status">esperando plato…</div>
+    <div class="tiles">
+      <div class="tile"><div class="label">capturados</div><div class="big" id="n-captured">0</div></div>
+      <div class="tile"><div class="label">descartados</div><div class="big" id="n-discarded">0</div></div>
+      <div class="tile"><div class="label">última nitidez</div><div class="big" id="last-sharp">—</div></div>
+    </div>
+    <ul id="log"></ul>
+  </section>
+  <div class="banner hidden" id="banner">
+    <div style="font-size:22px;font-weight:700">⏸ ALINEACIÓN EN CURSO</div>
+    <div class="count" id="countdown">00:00</div>
+    <div>la captura de esta cámara está en pausa y se reanuda sola al terminar</div>
+  </div>
+</main>
+<canvas id="sample" class="hidden"></canvas>
+<canvas id="full" class="hidden"></canvas>
+<canvas id="push" class="hidden"></canvas>
+<script type="module" src="/static/captura.js"></script>
+</body>
+</html>
