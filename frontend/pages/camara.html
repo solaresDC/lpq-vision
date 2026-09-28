@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cámara · LPQ_VISION</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .viewport { position: relative; width: 100%; background: #000; border-radius: var(--radius); overflow: hidden; min-height: 200px; }
+  .viewport img { width: 100%; display: block; }
+  .guide { position: absolute; inset: 12%; border: 2px dashed rgba(255,255,255,.55); border-radius: 12px; pointer-events: none; }
+  .guide::after { content: ""; position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px; border-radius: 50%; background: rgba(255,255,255,.7); }
+  .badge { position: absolute; top: 8px; right: 8px; padding: 6px 12px; border-radius: 999px; font-weight: 700; font-size: 18px; color: #fff; background: rgba(0,0,0,.6); }
+  .badge.ok { background: var(--ok); }
+  .badge.bad { background: var(--bad); }
+  .arrow { position: absolute; font-weight: 700; font-size: 15px; padding: 6px 10px; border-radius: 8px; background: rgba(0,0,0,.55); color: #fff; }
+  .arrow.top { top: 8px; left: 50%; transform: translateX(-50%); }
+  .arrow.bottom { bottom: 8px; left: 50%; transform: translateX(-50%); }
+  .arrow.left { left: 8px; top: 50%; transform: translateY(-50%); }
+  .arrow.right { right: 8px; top: 50%; transform: translateY(-50%); }
+  .arrow.kitchen { background: rgba(224,138,30,.9); }
+  .arrow.room { background: rgba(46,158,91,.9); }
+  .arrow.off { background: rgba(120,120,120,.9); }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #ccc; padding: 20px; text-align: center; }
+  .switch { display: flex; align-items: center; gap: 8px; min-height: var(--tap); }
+  .switch input { width: 24px; height: 24px; }
+  .count { font-size: 40px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <section class="card">
+    <h2>Sitio y cámara</h2>
+    <div class="row" id="picker"></div>
+    <p class="muted" id="cam-info"></p>
+  </section>
+  <section class="card">
+    <h2>Mirilla <span class="muted" id="frame-info"></span></h2>
+    <div class="viewport" id="viewport">
+      <img id="frame" alt="" class="hidden">
+      <div class="guide"></div>
+      <div class="badge hidden" id="badge"></div>
+      <div class="arrow top hidden" id="arrow-top"></div>
+      <div class="arrow bottom hidden" id="arrow-bottom"></div>
+      <div class="arrow left hidden" id="arrow-left"></div>
+      <div class="arrow right hidden" id="arrow-right"></div>
+      <div class="empty" id="empty">elige una cámara y pide una copia</div>
+    </div>
+    <div class="controls">
+      <button class="primary" id="otra">📷 otra</button>
+      <label class="switch"><input type="checkbox" id="live"> vista viva (cada <span id="poll-s">5</span> s)</label>
+    </div>
+  </section>
+  <section class="card">
+    <h2>Modo alineación</h2>
+    <p class="muted">Pausa la captura de ESA cámara mientras acomodas el teléfono: nitidez en vivo, flechas y el borde-cocina. La cuerda es obligatoria: al vencer, la captura despierta sola.</p>
+    <div class="row" id="align-setup"></div>
+    <div class="hidden" id="align-active">
+      <div class="row">
+        <div><div class="muted">tiempo restante</div><div class="count" id="countdown">00:00</div></div>
+        <div><div class="muted">nitidez en vivo</div><div class="count" id="live-sharp">—</div></div>
+      </div>
+      <div class="controls" id="edge-controls"></div>
+      <div class="controls">
+        <button class="bad" id="stop">■ Terminar alineación</button>
+      </div>
+    </div>
+  </section>
+</main>
+<script type="module" src="/static/camara.js"></script>
+</body>
+</html>

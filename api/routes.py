@@ -268,6 +268,7 @@ async def camera_state(site: str = "") -> Any:
         "funciones": site_cfg.funciones.model_dump(),
         "capture": cfg.capture.model_dump(),
         "video_align": cfg.video_align.model_dump(),
+        "sharpness_min": cfg.alerts.sharpness_min,
         "frame_poll_s": FRAME_POLL_S,
         "now": now.isoformat(),
         "cameras": cameras,
