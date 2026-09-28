@@ -3,11 +3,13 @@
 Section 2.6 (this file's birth) is the CAPTURE LANE: /api/upload_burst, the ephemeral frame
 store with /api/camera/frame (POST + GET) and /api/camera/state, the alignment mode
 (/api/camera/align/start|stop) and the calibration write (/api/camera/calibration).
-Section 2.7 adds review, stats, gallery and the photo stream to this same file.
+Section 2.7 adds the HUMAN LANE: /api/review (tabs, filters, pagination, verify, not_plate,
+reopen, bulk), /api/stats, /api/gallery, /api/photo/{id} and /api/dishes.
 
 Session-free lane (the club is the outer wall this era; /captura runs as a kiosk; the bot's
 /foto reads the frame over the internal network): upload_burst, camera/frame, camera/state.
-Behind the session: align/start, align/stop, calibration, and everything 2.7 adds.
+Behind the session: align/start, align/stop, calibration, and the whole human lane, every
+list FORCED to a site account's own site (api.auth.scoped_site).
 
 The frame store is RAM only (SPEC 1.5): copies overwrite, nothing reaches disk, DB or logs; a
 restart blanks it and nothing breaks. It and the RAM sessions depend on the api being ONE
@@ -25,30 +27,36 @@ import logging
 import os
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from math import ceil
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse, JSONResponse, Response
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
-from api.auth import Session, require_session
+from api.auth import Session, require_session, scoped_site
+from brain.capture.backends import PHOTO_ROOT
 from brain.db import queries as q
+from brain.db.migrations import REVIEW_NOT_PLATE, REVIEW_STATUSES, REVIEW_UNREVIEWED, REVIEW_VERIFIED
 from brain.validator.models import (
     CONFIG_PATH,
     PRESENTATION_PROMPT_VERSION,
     PROMPT_VERSION,
     AlignStartRequest,
     AlignStopRequest,
+    BulkReviewRequest,
     CalibrationRequest,
     CameraConfig,
     Config,
     SiteConfig,
     UploadRequest,
+    VerifyRequest,
     load_config,
 )
 
@@ -63,6 +71,15 @@ FRAME_POLL_S = 5                   # the mirilla's poll cadence (told to the pag
 WATCHED_TTL_S = 15                 # how long one GET of the frame keeps a camera "watched"
 SHARPNESS_MAX_SIDE = 640           # px: every scored frame is downscaled to this longest side first
 MAX_FRAME_BYTES = 8 * 1024 * 1024  # a mirilla copy larger than this is refused
+PAGE_SIZE = 50                     # review and gallery pagination
+UNKNOWN_DISH = "desconocido"       # the contract's own valid answer (same string as brain.validator.repair)
+
+# The review tabs the page shows -> the review_status each one lists (SPEC 1.2 contract).
+REVIEW_TABS: dict[str, str] = {
+    "pendientes": REVIEW_UNREVIEWED,
+    "verificados": REVIEW_VERIFIED,
+    "no_platos": REVIEW_NOT_PLATE,
+}
 
 router = APIRouter()
 
@@ -294,6 +311,8 @@ async def align_stop(body: AlignStopRequest, session: Session = Depends(require_
 
 # --- the calibration write: the ONLY config write before FASE 3 (SPEC 1.3, HQ call 3) ---
 
+# An asyncio lock: it is held across the awaited thread, and a threading lock there would freeze
+# the event loop (and deadlock) on two overlapping calibrations.
 _CONFIG_WRITE_LOCK = asyncio.Lock()
 
 
@@ -532,3 +551,280 @@ async def upload_burst(
     if result.get("duplicate"):
         out["duplicate"] = True
     return out
+
+
+# --- the human lane (2.7): review, stats, gallery, photo, dishes ---------------------------
+
+def _scope(session: Session) -> str | None:
+    """The one-row scope parameter: None for admin (any site), the account's site otherwise."""
+    return scoped_site(session, None)
+
+
+def _date_or_400(value: str | None, name: str) -> str | None:
+    """YYYY-MM-DD or None; anything else is a 400 with the field named."""
+    if value is None or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip()).isoformat()
+    except ValueError:
+        raise Rejected(400, f"{name} must be YYYY-MM-DD, got {value!r}") from None
+
+
+def _record_type_or_400(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    value = value.strip()
+    if value not in ("return", "outgoing"):
+        raise Rejected(400, f"record_type must be return or outgoing, got {value!r}")
+    return value
+
+
+def _filters(session: Session, site: str | None, record_type: str | None, date_from: str | None, date_to: str | None) -> dict[str, Any]:
+    """The NULL-tolerant parameter set every list statement shares; the site is SCOPED here."""
+    return {
+        "site": scoped_site(session, (site or "").strip() or None),
+        "record_type": _record_type_or_400(record_type),
+        "date_from": _date_or_400(date_from, "date_from"),
+        "date_to": _date_or_400(date_to, "date_to"),
+    }
+
+
+def _pages(total: int) -> int:
+    return max(1, ceil(total / PAGE_SIZE))
+
+
+def _fetch_one(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+    with q.connect() as conn, conn.transaction():
+        return conn.execute(sql, params).fetchone()
+
+
+def _execute_count(sql: str, params: dict[str, Any]) -> int:
+    with q.connect() as conn, conn.transaction():
+        return conn.execute(sql, params).rowcount
+
+
+def _active_dishes() -> list[dict[str, Any]]:
+    with q.connect() as conn:
+        rows = conn.execute(q.SELECT_ACTIVE_DISHES).fetchall()
+    return [
+        {"dish_id": r["dish_id"], "nombre": r["nombre"], "componentes": [c["nombre"] for c in r["componentes"]]}
+        for r in rows
+    ]
+
+
+@router.get("/api/dishes")
+async def dishes(session: Session = Depends(require_session)) -> Any:
+    """The corrector's universe: active dishes and their component names (from the DATABASE)."""
+    return await asyncio.to_thread(_active_dishes)
+
+
+@router.get("/api/review")
+async def review_list(
+    tab: str = "pendientes",
+    site: str | None = None,
+    record_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    page: int = 1,
+    session: Session = Depends(require_session),
+) -> Any:
+    """The three tabs with live counts, the filters, one page of rows (newest first)."""
+    try:
+        status = REVIEW_TABS.get(tab)
+        if status is None:
+            raise Rejected(400, f"unknown tab {tab!r}; valid: {', '.join(REVIEW_TABS)}")
+        params = _filters(session, site, record_type, date_from, date_to)
+    except Rejected as exc:
+        return _error(exc.status, exc.reason)
+    page = max(1, page)
+
+    def work() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        with q.connect() as conn:
+            counts = conn.execute(q.REVIEW_COUNTS, params).fetchall()
+            rows = conn.execute(
+                q.REVIEW_LIST, {**params, "status": status, "limit": PAGE_SIZE, "offset": (page - 1) * PAGE_SIZE}
+            ).fetchall()
+        return counts, rows
+
+    count_rows, rows = await asyncio.to_thread(work)
+    by_status = {r["review_status"]: int(r["n"]) for r in count_rows}
+    counts = {name: by_status.get(st, 0) for name, st in REVIEW_TABS.items()}
+    total = counts[tab]
+    return {
+        "tab": tab,
+        "counts": counts,
+        "rows": jsonable_encoder(rows),
+        "page": page,
+        "pages": _pages(total),
+        "page_size": PAGE_SIZE,
+        "total": total,
+    }
+
+
+@router.post("/api/review/{plate_id}/verify")
+async def review_verify(plate_id: int, body: VerifyRequest, session: Session = Depends(require_session)) -> Any:
+    """The one-by-one correction. Validated against the active dishes so a typo never becomes truth."""
+    universe = {d["dish_id"]: d["componentes"] for d in await asyncio.to_thread(_active_dishes)}
+    if body.dish_verified != UNKNOWN_DISH and body.dish_verified not in universe:
+        return _error(400, f"dish_verified {body.dish_verified!r} is not an active dish (or 'desconocido')")
+    if body.leftovers_verified is not None:
+        if body.dish_verified == UNKNOWN_DISH:
+            return _error(400, "leftovers_verified makes no sense for 'desconocido': omit it")
+        unknown = sorted(k for k in body.leftovers_verified if k not in universe[body.dish_verified])
+        if unknown:
+            return _error(400, f"leftovers_verified has components not in {body.dish_verified!r}: {unknown}")
+    params = {
+        "id": plate_id,
+        "site": _scope(session),
+        "dish_verified": body.dish_verified,
+        "leftovers_verified": Jsonb(body.leftovers_verified) if body.leftovers_verified is not None else None,
+    }
+    row = await asyncio.to_thread(_fetch_one, q.VERIFY_PLATE, params)
+    if row is None:
+        return _error(404, f"plate {plate_id} not found")
+    log.info(
+        "review verify plate=%d dish_verified=%s corrected_pct=%s user=%s",
+        plate_id, body.dish_verified, body.leftovers_verified is not None, session.user,
+    )
+    return jsonable_encoder(row)
+
+
+async def _set_status(plate_id: int, status: str, session: Session) -> Any:
+    row = await asyncio.to_thread(_fetch_one, q.SET_REVIEW_STATUS, {"id": plate_id, "status": status, "site": _scope(session)})
+    if row is None:
+        return _error(404, f"plate {plate_id} not found")
+    log.info("review status plate=%d status=%s user=%s", plate_id, status, session.user)
+    return jsonable_encoder(row)
+
+
+@router.post("/api/review/{plate_id}/not_plate")
+async def review_not_plate(plate_id: int, session: Session = Depends(require_session)) -> Any:
+    return await _set_status(plate_id, REVIEW_NOT_PLATE, session)
+
+
+@router.post("/api/review/{plate_id}/reopen")
+async def review_reopen(plate_id: int, session: Session = Depends(require_session)) -> Any:
+    """Back to pendientes; a previous correction stays in the row until the next verify."""
+    return await _set_status(plate_id, REVIEW_UNREVIEWED, session)
+
+
+@router.post("/api/review/bulk")
+async def review_bulk(body: BulkReviewRequest, session: Session = Depends(require_session)) -> Any:
+    """One action over a multi-selection; correcting is one by one by design (Arch section 9)."""
+    ids = sorted(set(body.ids))
+    params: dict[str, Any] = {"ids": ids, "site": _scope(session)}
+    if body.action == "verify_as_is":
+        updated = await asyncio.to_thread(_execute_count, q.BULK_VERIFY_AS_IS, params)
+    else:
+        status = REVIEW_NOT_PLATE if body.action == "not_plate" else REVIEW_UNREVIEWED
+        updated = await asyncio.to_thread(_execute_count, q.BULK_SET_REVIEW_STATUS, {**params, "status": status})
+    log.info("review bulk action=%s requested=%d updated=%d user=%s", body.action, len(ids), updated, session.user)
+    return {"action": body.action, "requested": len(ids), "updated": updated}
+
+
+@router.get("/api/stats")
+async def stats(
+    site: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    session: Session = Depends(require_session),
+) -> Any:
+    """The panel: per dish and component averages (return records), the live queue, the presentation summary."""
+    try:
+        params = _filters(session, site, None, date_from, date_to)
+    except Rejected as exc:
+        return _error(exc.status, exc.reason)
+
+    def work() -> dict[str, Any]:
+        with q.connect() as conn:
+            comps = conn.execute(q.STATS_COMPONENTS, params).fetchall()
+            dish_counts = conn.execute(q.STATS_DISH_PLATES, params).fetchall()
+            names = {r["dish_id"]: r["nombre"] for r in conn.execute(q.SELECT_DISH_NAMES).fetchall()}
+            queue = conn.execute(q.STATS_QUEUE, {"site": params["site"]}).fetchone() or {}
+            pres = conn.execute(q.STATS_PRESENTATION, params).fetchone() or {}
+        by_dish: dict[str, list[dict[str, Any]]] = {}
+        for r in comps:
+            by_dish.setdefault(r["dish_id"], []).append({
+                "component": r["component"],
+                "avg_left_pct": round(float(r["avg_left"]), 1),
+                "return_rate_pct": round(float(r["return_rate"]), 1),
+                "n": int(r["n"]),
+            })
+        dishes_out = [
+            {"dish_id": r["dish_id"], "nombre": names.get(r["dish_id"], r["dish_id"]), "plates": int(r["plates"]), "components": by_dish.get(r["dish_id"], [])}
+            for r in dish_counts
+        ]
+        avg_s = queue.get("avg_upload_to_done_s_24h")
+        graded = int(pres.get("graded") or 0)
+        return {
+            "site": params["site"],
+            "date_from": params["date_from"],
+            "date_to": params["date_to"],
+            "dishes": dishes_out,
+            "queue": {
+                "pending": int(queue.get("pending") or 0),
+                "working": int(queue.get("working") or 0),
+                "failed_24h": int(queue.get("failed_24h") or 0),
+                "done_24h": int(queue.get("done_24h") or 0),
+                "avg_upload_to_done_s_24h": round(float(avg_s), 1) if avg_s is not None else None,
+            },
+            "presentation": {
+                "graded": graded,
+                "flagged": int(pres.get("flagged") or 0),
+                "avg_score": round(float(pres["avg_score"]), 1) if graded and pres.get("avg_score") is not None else None,
+                "pass_rate_pct": round(float(pres["pass_rate"]), 1) if graded and pres.get("pass_rate") is not None else None,
+            },
+        }
+
+    return await asyncio.to_thread(work)
+
+
+@router.get("/api/gallery")
+async def gallery(
+    site: str | None = None,
+    dish: str | None = None,
+    record_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    review_status: str | None = None,
+    page: int = 1,
+    session: Session = Depends(require_session),
+) -> Any:
+    """Thumbnails list with filters; each row carries its photo_url (the evidence view)."""
+    try:
+        params = _filters(session, site, record_type, date_from, date_to)
+        status = (review_status or "").strip() or None
+        if status is not None and status not in REVIEW_STATUSES:
+            raise Rejected(400, f"review_status must be one of {', '.join(REVIEW_STATUSES)}")
+    except Rejected as exc:
+        return _error(exc.status, exc.reason)
+    params["dish"] = (dish or "").strip() or None
+    params["review_status"] = status
+    page = max(1, page)
+
+    def work() -> tuple[int, list[dict[str, Any]]]:
+        with q.connect() as conn:
+            total = int(conn.execute(q.GALLERY_COUNT, params).fetchone()["n"])
+            rows = conn.execute(q.GALLERY_LIST, {**params, "limit": PAGE_SIZE, "offset": (page - 1) * PAGE_SIZE}).fetchall()
+        return total, rows
+
+    total, rows = await asyncio.to_thread(work)
+    out_rows = []
+    for r in rows:
+        item = dict(r)
+        item["dish"] = r["dish_verified"] or r["dish_predicted"]
+        item["photo_url"] = f"/api/photo/{r['id']}"
+        out_rows.append(item)
+    return {"rows": jsonable_encoder(out_rows), "page": page, "pages": _pages(total), "page_size": PAGE_SIZE, "total": total}
+
+
+@router.get("/api/photo/{plate_id}")
+async def photo(plate_id: int, session: Session = Depends(require_session)) -> Any:
+    """The plate's JPEG from PHOTO_ROOT; the path comes from the row, never from the client."""
+    row = await asyncio.to_thread(_fetch_one, q.SELECT_PHOTO_PATH_SCOPED, {"id": plate_id, "site": _scope(session)})
+    if row is None:
+        return _error(404, f"plate {plate_id} not found")
+    path = PHOTO_ROOT / row["photo_path"]
+    if not path.is_file():
+        return _error(404, f"photo of plate {plate_id} not on disk")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})

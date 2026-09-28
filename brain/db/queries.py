@@ -202,3 +202,155 @@ MARK_JOB_FAILED = """
 UPDATE jobs SET status = 'failed', finished_at = now(), last_error = %(last_error)s
 WHERE id = %(job_id)s
 """
+
+
+# --------------------------------------------------------------------- review / stats / gallery (Fase 2, SPEC 1.3)
+
+# The shared filter clause. Every optional filter is NULL-tolerant, so ONE statement serves every
+# filter combination and no SQL is ever assembled outside this file. `site` is the SCOPED site
+# (a site account is forced to its own; admin passes what it asked or NULL = all). date_to is
+# inclusive: ts < date_to + 1 day. Casts make a Python None a typed NULL.
+_PLATE_FILTERS = """
+  (%(site)s::text IS NULL OR site = %(site)s)
+  AND (%(record_type)s::text IS NULL OR record_type = %(record_type)s)
+  AND (%(date_from)s::date IS NULL OR ts >= %(date_from)s::date)
+  AND (%(date_to)s::date IS NULL OR ts < (%(date_to)s::date + 1))
+"""
+
+# The one-row scope: an id the session may touch, or nothing.
+_SCOPE = "(%(site)s::text IS NULL OR site = %(site)s)"
+
+# The three tab counts in one pass (the page paints Pendientes / Verificados / No-platos).
+REVIEW_COUNTS = f"""
+SELECT review_status, COUNT(*) AS n
+FROM plates
+WHERE {_PLATE_FILTERS}
+GROUP BY review_status
+"""
+
+REVIEW_LIST = f"""
+SELECT *
+FROM plates
+WHERE review_status = %(status)s AND {_PLATE_FILTERS}
+ORDER BY ts DESC, id DESC
+LIMIT %(limit)s OFFSET %(offset)s
+"""
+
+# The one-by-one correction: the human's dish and percentages land BESIDE the model's draft
+# (leftovers stays untouched; leftovers_verified NULL = the model was right).
+VERIFY_PLATE = f"""
+UPDATE plates SET
+  dish_verified      = %(dish_verified)s,
+  leftovers_verified = %(leftovers_verified)s,
+  review_status      = 'verified'
+WHERE id = %(id)s AND {_SCOPE}
+RETURNING *
+"""
+
+SET_REVIEW_STATUS = f"""
+UPDATE plates SET review_status = %(status)s
+WHERE id = %(id)s AND {_SCOPE}
+RETURNING *
+"""
+
+# Bulk "correcto": the model was right on the whole selection; rows without a prediction yet
+# have nothing to confirm and are skipped (the caller reports the count).
+BULK_VERIFY_AS_IS = f"""
+UPDATE plates SET
+  dish_verified      = dish_predicted,
+  leftovers_verified = NULL,
+  review_status      = 'verified'
+WHERE id = ANY(%(ids)s) AND dish_predicted IS NOT NULL AND {_SCOPE}
+"""
+
+BULK_SET_REVIEW_STATUS = f"""
+UPDATE plates SET review_status = %(status)s
+WHERE id = ANY(%(ids)s) AND {_SCOPE}
+"""
+
+# --- stats (panel): aggregates computed live, no rollup tables this era ---------------------
+
+# Per dish and component over RETURN records: the human's truth when it exists, else the model's.
+# avg_left = mean % left; return_rate = share of plates where the component came back (> 0).
+STATS_COMPONENTS = f"""
+SELECT
+  COALESCE(dish_verified, dish_predicted) AS dish_id,
+  e.key AS component,
+  AVG(e.value::numeric) AS avg_left,
+  100.0 * AVG(CASE WHEN e.value::numeric > 0 THEN 1 ELSE 0 END) AS return_rate,
+  COUNT(*) AS n
+FROM plates, jsonb_each_text(COALESCE(leftovers_verified, leftovers)) AS e
+WHERE record_type = 'return'
+  AND review_status <> 'not_plate'
+  AND COALESCE(dish_verified, dish_predicted) IS NOT NULL
+  AND COALESCE(dish_verified, dish_predicted) <> 'desconocido'
+  AND {_PLATE_FILTERS}
+GROUP BY 1, 2
+ORDER BY 1, 2
+"""
+
+STATS_DISH_PLATES = f"""
+SELECT COALESCE(dish_verified, dish_predicted) AS dish_id, COUNT(*) AS plates
+FROM plates
+WHERE record_type = 'return'
+  AND review_status <> 'not_plate'
+  AND COALESCE(dish_verified, dish_predicted) IS NOT NULL
+  AND COALESCE(dish_verified, dish_predicted) <> 'desconocido'
+  AND {_PLATE_FILTERS}
+GROUP BY 1
+ORDER BY plates DESC, dish_id
+"""
+
+SELECT_DISH_NAMES = "SELECT dish_id, nombre FROM menu_dishes"
+
+# The live queue block (site-scoped through the plate; dates do not apply: it is NOW).
+STATS_QUEUE = """
+SELECT
+  COUNT(*) FILTER (WHERE j.status = 'pending') AS pending,
+  COUNT(*) FILTER (WHERE j.status = 'working') AS working,
+  COUNT(*) FILTER (WHERE j.status = 'failed' AND j.finished_at > now() - interval '24 hours') AS failed_24h,
+  COUNT(*) FILTER (WHERE j.status = 'done' AND j.finished_at > now() - interval '24 hours') AS done_24h,
+  AVG(EXTRACT(EPOCH FROM (j.finished_at - p.created_at)))
+    FILTER (WHERE j.status = 'done' AND j.finished_at > now() - interval '24 hours') AS avg_upload_to_done_s_24h
+FROM jobs j
+JOIN plates p ON p.id = j.plate_id
+WHERE (%(site)s::text IS NULL OR p.site = %(site)s)
+"""
+
+# The presentation summary: graded OUTGOING rows; flagged rows (not fresh, unparseable) are counted
+# apart and excluded from the average and the pass rate.
+STATS_PRESENTATION = f"""
+SELECT
+  COUNT(*) FILTER (WHERE NOT (presentation ? 'flags')) AS graded,
+  COUNT(*) FILTER (WHERE presentation ? 'flags') AS flagged,
+  AVG((presentation->>'score')::numeric) FILTER (WHERE NOT (presentation ? 'flags')) AS avg_score,
+  100.0 * AVG(CASE WHEN (presentation->>'pass')::boolean THEN 1 ELSE 0 END)
+    FILTER (WHERE NOT (presentation ? 'flags')) AS pass_rate
+FROM plates
+WHERE record_type = 'outgoing'
+  AND presentation IS NOT NULL
+  AND review_status <> 'not_plate'
+  AND {_PLATE_FILTERS}
+"""
+
+# --- gallery ---------------------------------------------------------------------------------
+
+_GALLERY_FILTERS = f"""
+  {_PLATE_FILTERS}
+  AND (%(dish)s::text IS NULL OR COALESCE(dish_verified, dish_predicted) = %(dish)s)
+  AND (%(review_status)s::text IS NULL OR review_status = %(review_status)s)
+"""
+
+GALLERY_COUNT = f"SELECT COUNT(*) AS n FROM plates WHERE {_GALLERY_FILTERS}"
+
+GALLERY_LIST = f"""
+SELECT id, site, camera, record_type, ts, dish_predicted, dish_verified, confidence,
+       review_status, presentation, capture
+FROM plates
+WHERE {_GALLERY_FILTERS}
+ORDER BY ts DESC, id DESC
+LIMIT %(limit)s OFFSET %(offset)s
+"""
+
+# The photo stream reads the path from the ROW, never from client input (SPEC 1.3).
+SELECT_PHOTO_PATH_SCOPED = f"SELECT photo_path FROM plates WHERE id = %(id)s AND {_SCOPE}"
