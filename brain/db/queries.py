@@ -73,6 +73,24 @@ VALUES (%(site)s, %(dish_id)s, %(photo_path)s, %(condition)s)
 ON CONFLICT (site, dish_id, photo_path) DO NOTHING
 """
 
+# The seeder's twin of INSERT_MENU_DISH (T-E1): an EXISTING dish whose definition changed in
+# menu.yaml is updated in place (name, components, plate_type, contable, activo); menu_version is
+# never touched here (bumping is FASE 3). Unchanged dishes match no row: a second run updates nothing.
+UPDATE_MENU_DISH_IF_CHANGED = """
+UPDATE menu_dishes SET
+  nombre      = %(nombre)s,
+  plate_type  = %(plate_type)s,
+  componentes = %(componentes)s,
+  contable    = %(contable)s,
+  activo      = %(activo)s
+WHERE dish_id = %(dish_id)s
+  AND (nombre IS DISTINCT FROM %(nombre)s
+       OR plate_type IS DISTINCT FROM %(plate_type)s
+       OR componentes IS DISTINCT FROM %(componentes)s
+       OR contable IS DISTINCT FROM %(contable)s
+       OR activo IS DISTINCT FROM %(activo)s)
+"""
+
 
 # --------------------------------------------------------------------- sites and menu reads
 
