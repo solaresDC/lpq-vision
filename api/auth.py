@@ -15,6 +15,7 @@ The site rule: a site account gets every list endpoint FORCED to its site; admin
 
 from __future__ import annotations
 
+import asyncio
 import getpass
 import hashlib
 import hmac
@@ -111,21 +112,26 @@ def scoped_site(session: Session, requested: str | None) -> str | None:
 
 # --- the endpoints --------------------------------------------------------------------
 
+def _check_password(password: str, stored: str | None) -> bool:
+    """One PBKDF2 round ALWAYS (a dummy hash when the user is unknown, so timing does not reveal
+    which user names exist), then the constant-time compare. Runs in a thread: a login never
+    freezes the api's event loop."""
+    target = stored if stored is not None else make_hash("")
+    return verify_hash(password, target) and stored is not None
+
+
 router = APIRouter()
 
 
 @router.post("/api/login")
 async def login(body: LoginRequest, response: Response) -> dict:
-    stored = _stored_hash(body.user.strip())
-    # An unknown user still burns one PBKDF2 round against a dummy, so timing does not reveal
-    # which user names exist.
-    dummy = make_hash("") if stored is None else None
-    ok = verify_hash(body.password, stored if stored is not None else dummy or "")
-    if stored is None or not ok:
-        log.info("login rejected user=%s", body.user.strip())
+    user = body.user.strip()
+    ok = await asyncio.to_thread(_check_password, body.password, _stored_hash(user))
+    if not ok:
+        log.info("login rejected user=%s", user)
         raise HTTPException(status_code=401, detail="usuario o contrasena incorrectos")
     sid = secrets.token_urlsafe(32)
-    session = _session_for(body.user.strip())
+    session = _session_for(user)
     _SESSIONS[sid] = session
     response.set_cookie(SESSION_COOKIE, sid, httponly=True, samesite="lax", path="/")
     log.info("login ok user=%s admin=%s", session.user, session.is_admin)
