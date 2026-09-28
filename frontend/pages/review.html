@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review · LPQ_VISION</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .tabs button { min-height: 40px; }
+  .tabs button.current { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .thumb-sm { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; background: #ddd; display: block; }
+  td.pick { width: 40px; }
+  td.pick input { width: 22px; height: 22px; }
+  .bulkbar { position: sticky; bottom: 0; background: var(--paper); border-top: 1px solid var(--line); padding: 10px 14px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 0 -14px -14px; }
+  .pager { display: flex; gap: 10px; align-items: center; justify-content: center; margin-top: 12px; }
+  .corrector { max-width: 1000px; max-height: 94vh; overflow: auto; }
+  .corrector .cols { display: grid; gap: 14px; grid-template-columns: 1fr; }
+  @media (min-width: 820px) { .corrector .cols { grid-template-columns: 1.2fr 1fr; } }
+  .stepper { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .stepper .name { flex: 1; }
+  .stepper button { width: 52px; font-size: 22px; padding: 0; }
+  .stepper .val { width: 64px; text-align: center; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <section class="card">
+    <div class="tabs" id="tabs"></div>
+    <div class="row" id="filters"></div>
+  </section>
+  <section class="card">
+    <div id="list"></div>
+    <div class="pager" id="pager"></div>
+    <div class="bulkbar" id="bulkbar"></div>
+  </section>
+</main>
+<script type="module">
+import { api, session, requireLogin, mountHeader, el, $, qs, fmtDate, toast } from "/static/app.js";
+
+let sess = await session();
+if (!sess) sess = await requireLogin();
+mountHeader("Review", sess);
+
+const TABS = [["pendientes", "Pendientes"], ["verificados", "Verificados"], ["no_platos", "No-platos"]];
+const UNKNOWN = "desconocido";
+const BUCKET = 10;
+let tab = "pendientes";
+let page = 1;
+let selected = new Set();
+let dishes = [];           // [{dish_id, nombre, componentes: [...]}]
+let currentRows = [];
+
+try { dishes = await api("/api/dishes"); } catch (err) { toast(err.message, "bad"); }
+const dishById = Object.fromEntries(dishes.map((d) => [d.dish_id, d]));
+
+// --- filters --------------------------------------------------------------------------
+const siteInput = el("input", { placeholder: "todos los sitios" });
+const typeSelect = el("select", {},
+  el("option", { value: "", text: "regresan y salen" }),
+  el("option", { value: "return", text: "regresan (merma)" }),
+  el("option", { value: "outgoing", text: "salen (emplatado)" }),
+);
+const fromInput = el("input", { type: "date" });
+const toInput = el("input", { type: "date" });
+const applyBtn = el("button", { class: "primary", text: "Aplicar" });
+if (!sess.admin) { siteInput.value = sess.site; siteInput.disabled = true; }
+$("#filters").append(
+  el("div", {}, el("label", { text: "Sitio" }), siteInput),
+  el("div", {}, el("label", { text: "Flujo" }), typeSelect),
+  el("div", {}, el("label", { text: "Desde" }), fromInput),
+  el("div", {}, el("label", { text: "Hasta" }), toInput),
+  el("div", {}, applyBtn),
+);
+applyBtn.addEventListener("click", () => { page = 1; load(); });
+
+function params() {
+  return { tab, page, site: sess.admin ? siteInput.value.trim() : "", record_type: typeSelect.value, date_from: fromInput.value, date_to: toInput.value };
+}
+
+// --- helpers --------------------------------------------------------------------------
+function flagsOf(r) {
+  const out = [];
+  for (const f of (r.validator && r.validator.flags) || []) out.push(f);
+  if (r.capture && r.capture.direction_dudosa) out.push("direccion_dudosa");
+  for (const f of (r.presentation && r.presentation.flags) || []) out.push(f);
+  return out;
+}
+const FLAG_TEXT = {
+  unparseable: "respuesta ilegible", dish_not_in_menu: "platillo fuera del menú", unknown_component: "componente desconocido",
+  direccion_dudosa: "dirección dudosa", no_parece_recien_emplatado: "no parece recién emplatado",
+};
+function chip(text, kind = "warn") { return el("span", { class: `chip ${kind}`, text }); }
+function chips(r) {
+  const node = el("div", { class: "chips" });
+  for (const f of flagsOf(r)) node.append(chip(FLAG_TEXT[f] || f));
+  if (r.dish_verified && r.dish_verified !== r.dish_predicted) node.append(chip(`corregido: ${r.dish_verified}`, "ok"));
+  if (r.leftovers_verified) node.append(chip("porcentajes corregidos", "ok"));
+  return node;
+}
+function effectivePct(r) { return r.leftovers_verified || r.leftovers || {}; }
+function resultText(r) {
+  if (r.record_type === "outgoing") {
+    if (!r.presentation) return "sin calificar";
+    const p = r.presentation;
+    return p.flags && p.flags.length ? "a revisar" : `${p.score}/100 ${p.pass ? "✔" : "✘"}${p.issues && p.issues.length ? ` · ${p.issues.join(", ")}` : ""}`;
+  }
+  const pct = effectivePct(r);
+  const parts = Object.entries(pct).map(([k, v]) => `${k} ${v}%`);
+  return parts.length ? parts.join(" · ") : "sin analizar";
+}
+function dishText(r) { return r.dish_verified || r.dish_predicted || "—"; }
+
+// --- tabs, list, pager, bulk bar ------------------------------------------------------
+function renderTabs(counts) {
+  $("#tabs").replaceChildren(...TABS.map(([key, label]) =>
+    el("button", { class: key === tab ? "current" : "", text: `${label} (${counts[key]})`, onclick: () => { tab = key; page = 1; load(); } })));
+}
+
+function renderList(rows) {
+  currentRows = rows;
+  const node = $("#list");
+  if (!rows.length) { node.replaceChildren(el("p", { class: "muted", text: "Nada en esta pestaña con estos filtros." })); return; }
+  const all = el("input", { type: "checkbox", onchange: (ev) => { selected = ev.target.checked ? new Set(rows.map((r) => r.id)) : new Set(); renderList(rows); renderBulk(); } });
+  all.checked = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  const table = el("table", {},
+    el("thead", {}, el("tr", {},
+      el("th", { class: "pick" }, all), el("th", { text: "#" }), el("th", { text: "Foto" }), el("th", { text: "Flujo" }),
+      el("th", { text: "Platillo" }), el("th", { text: "Resultado" }), el("th", { text: "Conf." }), el("th", { text: "Banderas" }),
+      el("th", { text: "Fecha" }), el("th", { text: "" }),
+    )),
+    el("tbody", {}, rows.map((r) => {
+      const box = el("input", { type: "checkbox", onchange: (ev) => { if (ev.target.checked) selected.add(r.id); else selected.delete(r.id); ev.target.closest("tr").classList.toggle("selected", ev.target.checked); renderBulk(); } });
+      box.checked = selected.has(r.id);
+      return el("tr", { class: selected.has(r.id) ? "selected" : "" },
+        el("td", { class: "pick" }, box),
+        el("td", { text: r.id }),
+        el("td", {}, el("img", { class: "thumb-sm", src: `/api/photo/${r.id}`, loading: "lazy", alt: "" })),
+        el("td", { text: r.record_type === "outgoing" ? "sale" : "regresa" }),
+        el("td", { text: dishText(r) }),
+        el("td", { text: resultText(r) }),
+        el("td", { text: r.confidence || "" }),
+        el("td", {}, chips(r)),
+        el("td", { text: fmtDate(r.ts) }),
+        el("td", {}, el("button", { class: "primary", text: "Corregir", onclick: () => openCorrector(r) })),
+      );
+    })),
+  );
+  node.replaceChildren(table);
+}
+
+function renderPager(d) {
+  $("#pager").replaceChildren(
+    el("button", { text: "◀ Anterior", disabled: d.page <= 1, onclick: () => { page = d.page - 1; load(); } }),
+    el("span", { class: "muted", text: `página ${d.page} de ${d.pages} · ${d.total} en total` }),
+    el("button", { text: "Siguiente ▶", disabled: d.page >= d.pages, onclick: () => { page = d.page + 1; load(); } }),
+  );
+}
+
+function renderBulk() {
+  const n = selected.size;
+  const bar = $("#bulkbar");
+  const mk = (text, action, cls) => el("button", { class: cls || "", text, disabled: n === 0, onclick: () => bulk(action) });
+  bar.replaceChildren(
+    el("span", { class: "muted", text: n ? `${n} seleccionado${n === 1 ? "" : "s"}` : "Selecciona platos para actuar en lote" }),
+    tab === "pendientes" ? mk("✔ Correcto (verificar tal cual)", "verify_as_is", "ok") : null,
+    tab !== "no_platos" ? mk("✘ No es plato", "not_plate", "bad") : null,
+    tab !== "pendientes" ? mk("↩ Regresar a pendientes", "reopen") : null,
+  );
+}
+
+async function bulk(action) {
+  const ids = [...selected];
+  try {
+    const r = await api("/api/review/bulk", { method: "POST", json: { ids, action } });
+    toast(`${r.updated} de ${r.requested} actualizados`, "ok");
+    selected = new Set();
+    await load();
+  } catch (err) { toast(err.message, "bad"); }
+}
+
+async function load() {
+  try {
+    const d = await api(`/api/review${qs(params())}`);
+    selected = new Set([...selected].filter((id) => d.rows.some((r) => r.id === id)));
+    renderTabs(d.counts);
+    renderList(d.rows);
+    renderPager(d);
+    renderBulk();
+  } catch (err) { toast(err.message, "bad"); }
+}
+
+// --- the one-by-one corrector ---------------------------------------------------------
+function bucket(v) { return Math.max(0, Math.min(100, Math.round(v / BUCKET) * BUCKET)); }
+
+function openCorrector(r) {
+  const isReturn = r.record_type === "return";
+  const pct = {};
+  const base = effectivePct(r);
+  let dish = r.dish_verified || r.dish_predicted || UNKNOWN;
+
+  const dishSelect = el("select", {},
+    dishes.map((d) => el("option", { value: d.dish_id, text: `${d.nombre} (${d.dish_id})` })),
+    el("option", { value: UNKNOWN, text: "desconocido (no está en el menú)" }));
+  if (![...dishSelect.options].some((o) => o.value === dish)) dishSelect.append(el("option", { value: dish, text: `${dish} (no activo)` }));
+  dishSelect.value = dish;
+
+  const steppers = el("div");
+  function buildSteppers() {
+    steppers.replaceChildren();
+    const comps = dish === UNKNOWN ? [] : (dishById[dish] ? dishById[dish].componentes : Object.keys(base));
+    for (const c of comps) {
+      if (!(c in pct)) pct[c] = bucket(c in base ? base[c] : 100);
+      const val = el("div", { class: "val", text: `${pct[c]} %` });
+      const set = (v) => { pct[c] = bucket(v); val.textContent = `${pct[c]} %`; };
+      steppers.append(el("div", { class: "stepper" },
+        el("div", { class: "name", text: c }),
+        el("button", { text: "−", onclick: () => set(pct[c] - BUCKET) }),
+        val,
+        el("button", { text: "+", onclick: () => set(pct[c] + BUCKET) }),
+      ));
+    }
+    if (!comps.length) steppers.append(el("p", { class: "muted", text: dish === UNKNOWN ? "Sin componentes: el plato no está en el menú." : "Este platillo no tiene componentes activos." }));
+  }
+  dishSelect.addEventListener("change", () => { dish = dishSelect.value; for (const k of Object.keys(pct)) delete pct[k]; buildSteppers(); });
+  if (isReturn) buildSteppers();
+
+  const info = el("div", { class: "muted" },
+    `Modelo: ${r.dish_predicted || "sin analizar"}${r.confidence ? ` · confianza ${r.confidence}` : ""}`, el("br"),
+    isReturn ? `Borrador del modelo: ${Object.entries(r.leftovers || {}).map(([k, v]) => `${k} ${v}%`).join(" · ") || "ninguno"}` : `Emplatado: ${resultText(r)}`);
+
+  const save = el("button", { class: "ok", text: "✔ Guardar y verificar" });
+  const notPlate = el("button", { class: "bad", text: "✘ No es plato" });
+  const cancel = el("button", { text: "Cancelar" });
+  const box = el("div", { class: "card corrector" },
+    el("h2", { text: `Plato #${r.id} · ${isReturn ? "regresa (merma)" : "sale (emplatado)"} · ${fmtDate(r.ts)}` }),
+    el("div", { class: "cols" },
+      el("div", {}, el("img", { class: "photo", src: `/api/photo/${r.id}`, alt: `plato ${r.id}` })),
+      el("div", {},
+        chips(r), info,
+        el("label", { text: "Platillo" }), dishSelect,
+        isReturn ? el("label", { text: "Qué QUEDÓ en el plato, por componente (0 = nada, 100 = intacto)" }) : null,
+        isReturn ? steppers : null,
+        el("div", { class: "actions" }, save, notPlate, cancel),
+      ),
+    ),
+  );
+  const overlay = el("div", { class: "overlay" }, box);
+  cancel.addEventListener("click", () => overlay.remove());
+
+  save.addEventListener("click", async () => {
+    const body = { dish_verified: dish };
+    if (isReturn && dish !== UNKNOWN) {
+      const model = r.leftovers || {};
+      const comps = Object.keys(pct);
+      const changed = dish !== r.dish_predicted || comps.length !== Object.keys(model).length || comps.some((c) => pct[c] !== model[c]);
+      if (changed) body.leftovers_verified = { ...pct };
+    }
+    save.disabled = true;
+    try {
+      await api(`/api/review/${r.id}/verify`, { method: "POST", json: body });
+      toast(body.leftovers_verified ? "Corrección guardada" : "Verificado tal cual", "ok");
+      overlay.remove();
+      await load();
+    } catch (err) { toast(err.message, "bad"); save.disabled = false; }
+  });
+  notPlate.addEventListener("click", async () => {
+    try { await api(`/api/review/${r.id}/not_plate`, { method: "POST" }); toast("Marcado como no-plato", "ok"); overlay.remove(); await load(); }
+    catch (err) { toast(err.message, "bad"); }
+  });
+  document.body.append(overlay);
+}
+
+await load();
+</script>
+</body>
+</html>
