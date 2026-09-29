@@ -19,6 +19,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const OTRA_POLL_MS = 1000;
 const OTRA_CAP_MS = 25000;
 const OTRA_TICK_MS = 250;      // the countdown repaints this often; the frame poll stays at OTRA_POLL_MS
+const OTRA_CUSHION_S = 2;      // added to the estimate so the copy almost always lands before zero
 const PUSH_WATCHED_S = 5;      // captura's cadence while someone watches (mirrors captura.js)
 const PUSH_IDLE_S = 15;        // captura's idle cadence
 
@@ -134,26 +135,32 @@ async function otra() {
     // Newer than the copy that was on screen? Same copy = its age grew by the elapsed time.
     const sameAge = onScreenAge === null ? null : onScreenAge + (Date.now() - onScreenAt) / 1000;
     if (sameAge === null || S.lastAge < sameAge - 0.5) { note.textContent = ""; return; }   // a new copy landed already
-    // (2) the same copy: count down the REAL time left, synced to the push cadence.
+    // (2) the same copy: ONE overlay over the picture counting down the REAL time left plus a
+    // cushion; past zero the same overlay keeps a quiet spinner, the text stays as it was.
     const cadence = await cadenceS();
     const t0 = Date.now();
-    const eta = t0 + Math.max(0, cadence - S.lastAge) * 1000;
+    const eta = t0 + (Math.max(0, cadence - S.lastAge) + OTRA_CUSHION_S) * 1000;
+    const wait = $("#wait"), waitText = $("#wait-text"), waitSpin = $("#wait-spin");
     const paint = () => {
       const left = Math.ceil((eta - Date.now()) / 1000);
-      note.textContent = left > 0 ? `siguiente foto en ${left}…` : `esperando la copia… (${Math.floor((Date.now() - eta) / 1000)} s)`;
+      if (left > 0) { waitText.textContent = `siguiente foto en ${left}…`; waitSpin.classList.add("hidden"); }
+      else waitSpin.classList.remove("hidden");
     };
     paint();
+    wait.classList.remove("hidden");
     ticker = setInterval(paint, OTRA_TICK_MS);
     // (3) poll until the age resets (a newer copy) or the cap; the fresh copy paints itself.
     while (Date.now() - t0 < OTRA_CAP_MS) {
       await sleep(OTRA_POLL_MS);
       const prev = S.lastAge;
       await fetchFrame();
-      if (S.lastAge === null || S.lastAge < prev) { note.textContent = ""; return; }
+      if (S.lastAge === null || S.lastAge < prev) return;
     }
     note.textContent = `sin copia nueva en ${OTRA_CAP_MS / 1000} s: la captura no está enviando`;
   } finally {
     if (ticker) clearInterval(ticker);
+    $("#wait").classList.add("hidden");
+    $("#wait-spin").classList.add("hidden");
     btn.disabled = $("#live").checked;                        // revive, unless vista viva took over
   }
 }

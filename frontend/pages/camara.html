@@ -25,6 +25,10 @@
   .switch { display: flex; align-items: center; gap: 8px; min-height: var(--tap); }
   .switch input { width: 24px; height: 24px; }
   .count { font-size: 40px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  /* the "otra" wait: ONE overlay over the picture, a countdown, then a quiet spinner */
+  .wait { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(0,0,0,.45); color: #fff; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .wait .spin { width: 28px; height: 28px; border: 3px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
 </style>
 </head>
@@ -46,6 +50,7 @@
       <div class="arrow left hidden" id="arrow-left"></div>
       <div class="arrow right hidden" id="arrow-right"></div>
       <div class="empty" id="empty">elige una cámara y pide una copia</div>
+      <div class="wait hidden" id="wait"><span id="wait-text"></span><div class="spin hidden" id="wait-spin"></div></div>
     </div>
     <div class="controls">
       <button class="primary" id="otra">📷 otra</button>
