@@ -76,6 +76,7 @@ class DbState:
 @dataclass
 class BotState:
     failed_after_id: int = 0
+    baseline_ready: bool = False          # set by the first SUCCESSFUL db read (the failure cursor's origin)
     backlog_active: bool = False
     silent_active: bool = False
     api_down_since: datetime | None = None
@@ -281,7 +282,13 @@ class Bot:
         messages += rule_align(self.state, api)
         try:
             db = await asyncio.to_thread(read_db, cfg, self.state.failed_after_id)
-            messages += rule_failures(self.state, db)
+            if not self.state.baseline_ready:
+                # The cursor starts at the first SUCCESSFUL read: old failures are never re-announced,
+                # even when the first rounds fail (e.g. a boot that races the api's migrations).
+                self.state.failed_after_id = db.max_failed_id
+                self.state.baseline_ready = True
+            else:
+                messages += rule_failures(self.state, db)
             messages += rule_backlog(self.state, db, cfg)
             messages += rule_silent_worker(self.state, db, cfg, now)
             messages += rule_lens(self.state, db, cfg, now)
@@ -292,11 +299,8 @@ class Bot:
             await self.send(app, text)
 
     async def loop(self, app: Application) -> None:
-        # Failures announced from this boot on: remember today's highest failed id before the first round.
-        try:
-            self.state.failed_after_id = await asyncio.to_thread(lambda: read_db(load_config(), 0).max_failed_id)
-        except Exception as exc:
-            log.warning("could not read the failed-id baseline (%s): starting at 0", type(exc).__name__)
+        # Failures announced from this boot on: the baseline is taken inside round(), at the first
+        # successful db read (baseline_ready), never by a separate upfront read.
         await self.send(app, "🟢 Hola, estoy en línea. Vigilo la cola, las fallas, el lente y la ventanilla.")
         while True:
             try:
