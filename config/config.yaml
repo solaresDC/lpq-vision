@@ -30,5 +30,5 @@ sites:
       barra-1:
         source: phone              # 'phone' | 'pi'
         role: both                 # 'return' | 'outgoing' | 'both'
-        kitchen_edge: bottom
+        kitchen_edge: right
         # kitchen_edge appears ONLY once calibrated (the alignment mode writes it): absent-when-off
