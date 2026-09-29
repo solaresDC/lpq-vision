@@ -24,7 +24,7 @@ from typing import Any, AsyncIterator
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -241,4 +241,14 @@ async def get_plate(plate_id: int) -> Any:
 app.include_router(auth.router)
 app.include_router(api_routes.router)
 app.include_router(frontend_routes.router)
-app.mount("/static", StaticFiles(directory=str(frontend_routes.STATIC_DIR)), name="static")
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """/static never stale across deploys: the browser keeps its copy but revalidates it (ETag/Last-Modified)."""
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"   # the 200 and the 304 alike
+        return response
+
+
+app.mount("/static", NoCacheStaticFiles(directory=str(frontend_routes.STATIC_DIR)), name="static")
