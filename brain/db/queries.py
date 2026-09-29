@@ -409,3 +409,19 @@ WHERE site = %(site)s AND camera = %(camera)s AND capture ? 'sharpness'
 ORDER BY ts DESC, id DESC
 LIMIT %(n)s
 """
+
+
+# --------------------------------------------------------------------- the bake-off (Fase 2, T-E3): READ-ONLY
+
+# The exam's truth set: verified RETURN rows with a real dish; the human's percentages when they
+# exist, else the model's draft the human confirmed. limit NULL = every row.
+BAKEOFF_VERIFIED_ROWS = """
+SELECT id, site, photo_path, dish_verified, COALESCE(leftovers_verified, leftovers) AS truth_pct
+FROM plates
+WHERE review_status = 'verified'
+  AND record_type = 'return'
+  AND dish_verified IS NOT NULL
+  AND dish_verified <> 'desconocido'
+ORDER BY ts DESC, id DESC
+LIMIT %(limit)s
+"""
