@@ -130,18 +130,15 @@ async function otra() {
   const onScreenAge = S.lastAge, onScreenAt = S.lastFetchAt;  // the copy on screen at click time
   let ticker = null;
   try {
-    const sharp = await fetchFrame();
-    if (sharp === null || sharp === undefined) { note.textContent = ""; return; }   // no copy: fetchFrame said so
-    // Newer than the copy that was on screen? Same copy = its age grew by the elapsed time.
-    const sameAge = onScreenAge === null ? null : onScreenAge + (Date.now() - onScreenAt) / 1000;
-    if (sameAge === null || S.lastAge < sameAge - 0.5) { note.textContent = ""; return; }   // a new copy landed already
-    // (2) the same copy: ONE overlay over the picture. First the countdown alone ("siguiente foto
-    // en N…", the REAL time left plus a cushion, spinner hidden); only once the estimate has passed
-    // does the spinner appear, with "esperando la copia… (N s)" counting the seconds since the click.
-    const cadence = await cadenceS();
-    const t0 = Date.now();
-    const eta = t0 + (Math.max(0, cadence - S.lastAge) + OTRA_CUSHION_S) * 1000;
+    // (2) the overlay starts AT THE CLICK, before any network: ONE overlay over the picture, the
+    // countdown alone first ("siguiente foto en N…", estimated from what the page already knows,
+    // plus a cushion, spinner hidden); only past the estimate the spinner appears with
+    // "esperando la copia… (N s)" counting the seconds since the click. The network refines below.
     const waitText = $("#wait-text"), waitSpin = $("#wait .spin");
+    const t0 = Date.now();
+    const guessAge = S.lastAge === null ? 0 : S.lastAge + (t0 - S.lastFetchAt) / 1000;
+    const guessCadence = (S.st && S.st.cameras[S.camera] && S.st.cameras[S.camera].watching) ? PUSH_WATCHED_S : PUSH_IDLE_S;
+    let eta = t0 + (Math.max(0, guessCadence - guessAge) + OTRA_CUSHION_S) * 1000;
     const paint = () => {
       const now = Date.now();
       const left = Math.ceil((eta - now) / 1000);
@@ -151,6 +148,13 @@ async function otra() {
     paint();
     $("#wait").classList.remove("hidden");
     ticker = setInterval(paint, OTRA_TICK_MS);
+    const sharp = await fetchFrame();
+    if (sharp === null || sharp === undefined) { note.textContent = ""; return; }   // no copy: fetchFrame said so
+    // Newer than the copy that was on screen? Same copy = its age grew by the elapsed time.
+    const sameAge = onScreenAge === null ? null : onScreenAge + (Date.now() - onScreenAt) / 1000;
+    if (sameAge === null || S.lastAge < sameAge - 0.5) { note.textContent = ""; return; }   // a new copy landed already
+    // The same copy: the network only refines the estimate (the real cadence and the real age).
+    eta = t0 + (Math.max(0, (await cadenceS()) - S.lastAge) + OTRA_CUSHION_S) * 1000;
     // (3) poll until the age resets (a newer copy) or the cap; the fresh copy paints itself.
     while (Date.now() - t0 < OTRA_CAP_MS) {
       await sleep(OTRA_POLL_MS);
