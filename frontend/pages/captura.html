@@ -30,6 +30,20 @@
   .banner .count { font-size: 64px; font-weight: 800; font-variant-numeric: tabular-nums; }
   label { color: #aaa; }
   input, select { background: #262626; color: #eee; border-color: #333; }
+  /* the accident-proof exit: slide past 90 to reveal "Salir"; a tap alone does nothing */
+  .exit { display: flex; align-items: center; gap: 8px; }
+  .exit .hint { font-size: 13px; color: #aaa; white-space: nowrap; }
+  #exit-slider { -webkit-appearance: none; appearance: none; width: 140px; height: 32px; margin: 0; padding: 0; background: #262626; border: 1px solid #333; border-radius: 16px; touch-action: none; }
+  #exit-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 30px; height: 30px; border-radius: 50%; background: #eee; border: 0; }
+  #exit-slider::-moz-range-thumb { width: 30px; height: 30px; border-radius: 50%; background: #eee; border: 0; }
+  #exit-slider::-moz-range-track { background: transparent; }
+  #exit-btn { min-height: 44px; padding: 0 16px; }
+  .confirm { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+  .confirm .box { background: #1c1c1c; border: 1px solid #333; border-radius: var(--radius); padding: 22px; max-width: 360px; width: 100%; text-align: center; }
+  .confirm .q { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
+  .confirm .buttons { display: flex; gap: 12px; }
+  .confirm .buttons button { flex: 1; min-height: 56px; font-size: 18px; }
+  .confirm .auto { margin-top: 14px; color: #aaa; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -37,6 +51,11 @@
   <h1>Captura</h1>
   <span class="chip" id="role-chip">sin cámara</span>
   <div class="spacer"></div>
+  <div class="exit">
+    <span class="hint">desliza →</span>
+    <input type="range" id="exit-slider" min="0" max="100" value="0" aria-label="desliza para salir">
+    <button class="bad hidden" id="exit-btn" type="button">Salir</button>
+  </div>
   <span class="chip" id="conn-chip">detenida</span>
 </header>
 <main class="wrap">
@@ -67,6 +86,16 @@
     <div style="font-size:22px;font-weight:700">⏸ ALINEACIÓN EN CURSO</div>
     <div class="count" id="countdown">00:00</div>
     <div>la captura de esta cámara está en pausa y se reanuda sola al terminar</div>
+  </div>
+  <div class="confirm hidden" id="exit-confirm">
+    <div class="box">
+      <div class="q">¿Seguro que quieres salir de la captura?</div>
+      <div class="buttons">
+        <button class="bad" id="exit-yes" type="button">Sí, salir</button>
+        <button id="exit-no" type="button">No</button>
+      </div>
+      <div class="auto">se cancela solo en <span id="exit-count">10</span></div>
+    </div>
   </div>
 </main>
 <canvas id="sample" class="hidden"></canvas>

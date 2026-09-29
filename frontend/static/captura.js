@@ -24,6 +24,8 @@ const PUSH_WATCHDOG_MS = 45000; // no copy accepted for this long while running 
 const FULL_QUALITY = 0.92;
 const PUSH_QUALITY = 0.7;
 const LOG_MAX = 20;
+const EXIT_REVEAL_AT = 90;      // the slider must pass this to reveal "Salir"; a tap alone does nothing
+const EXIT_AUTO_CANCEL_S = 10;  // the revealed button and the confirm popup both give up after this
 const OPPOSITE = { top: "bottom", bottom: "top", left: "right", right: "left" };
 const EDGE_ES = { top: "arriba", bottom: "abajo", left: "izquierda", right: "derecha" };
 
@@ -369,4 +371,55 @@ async function setup() {
   if (st) $("#setup-note").textContent = `umbrales: ${st.capture.diff_threshold} % de cambio, ${st.capture.settle_frames} cuadros de calma, ráfaga de ${st.capture.burst_frames}`;
 }
 
+// --- the accident-proof exit (presentation only: the guard and the push loop never notice) -----
+// Slide past EXIT_REVEAL_AT to reveal "Salir"; release below it and the slider springs back. The
+// button and the confirm popup each cancel themselves after EXIT_AUTO_CANCEL_S. No request, no
+// pause: closing leaves the page exactly as it was.
+function exitControl() {
+  const slider = $("#exit-slider");
+  const btn = $("#exit-btn");
+  const popup = $("#exit-confirm");
+  const count = $("#exit-count");
+  let btnTimer = null;
+  let popupTimer = null;
+  let secondsLeft = 0;
+
+  function reset() {
+    clearTimeout(btnTimer); btnTimer = null;
+    clearInterval(popupTimer); popupTimer = null;
+    slider.value = 0;
+    btn.classList.add("hidden");
+    popup.classList.add("hidden");
+  }
+  function reveal() {
+    if (!btn.classList.contains("hidden")) return;
+    btn.classList.remove("hidden");
+    btnTimer = setTimeout(reset, EXIT_AUTO_CANCEL_S * 1000);   // untapped: spring back, hide
+  }
+  function released() {
+    if (Number(slider.value) >= EXIT_REVEAL_AT) reveal();
+    else if (btn.classList.contains("hidden")) slider.value = 0;    // a tap or a short slide: nothing
+  }
+  function openPopup() {
+    clearTimeout(btnTimer); btnTimer = null;
+    secondsLeft = EXIT_AUTO_CANCEL_S;
+    count.textContent = String(secondsLeft);
+    popup.classList.remove("hidden");
+    popupTimer = setInterval(() => {
+      secondsLeft -= 1;
+      count.textContent = String(Math.max(secondsLeft, 1));
+      if (secondsLeft <= 0) reset();                                  // no answer: closes itself
+    }, 1000);
+  }
+
+  slider.addEventListener("input", () => { if (Number(slider.value) >= EXIT_REVEAL_AT) reveal(); });
+  slider.addEventListener("change", released);
+  slider.addEventListener("pointerup", released);
+  slider.addEventListener("touchend", released);
+  btn.addEventListener("click", openPopup);
+  $("#exit-no").addEventListener("click", reset);
+  $("#exit-yes").addEventListener("click", () => { reset(); location.href = "/panel"; });
+}
+
+exitControl();
 setup();
