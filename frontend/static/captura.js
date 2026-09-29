@@ -16,8 +16,9 @@ const BURST_GAP_MS = 150;       // spacing between the frames of a burst
 const EDGE_BAND = 0.3;          // the outer 30% of each side counts as that edge
 const EDGE_MARGIN = 1.5;        // the winning edge must beat the runner-up by this factor, else dudosa
 const MOTION_FRAMES_FOR_EDGE = 2; // the first movement frames decide the entry edge
-const PUSH_IDLE_MS = 15000;     // a copy every 15 s when nobody watches (so the api can tell us when they do)
-const PUSH_WATCHED_MS = 5000;   // every 5 s while the mirilla is watching
+// The push cadence lives in api/routes.py FRAME_POLL_S, a mostrador knob in FASE 3; captura and
+// camara read it from /api/camera/state (frame_poll_s), never hardcode it. One speed, watched or not.
+let pushMs = 5000;              // placeholder until loadState() reads frame_poll_s (start needs a loaded state)
 const PUSH_ALIGN_MS = 2000;     // every 2 s during the alignment mode (live sharpness)
 const PUSH_WIDTH = 640;         // the copy's width; the api scores it on the same scale as bursts
 const PUSH_WATCHDOG_MS = 45000; // no copy accepted for this long while running = the push loop is stuck: restart it
@@ -67,6 +68,7 @@ async function loadState() {
   S.knobs = st.capture;
   S.funciones = st.funciones;
   S.cameras = st.cameras;
+  pushMs = st.frame_poll_s * 1000;                          // the ONE cadence, from its one home
   if (!S.camera || !st.cameras[S.camera]) S.camera = Object.keys(st.cameras)[0] || "";
   S.cam = st.cameras[S.camera] || null;
   paintRole();
@@ -297,7 +299,7 @@ async function pushLoop(gen) {
     } catch {
       chip("#conn-chip", "sin conexión con la ventanilla", "bad");
     }
-    await sleep(S.align.active ? PUSH_ALIGN_MS : S.watching ? PUSH_WATCHED_MS : PUSH_IDLE_MS);
+    await sleep(S.align.active ? PUSH_ALIGN_MS : pushMs);   // watching only changes the chip text
   }
 }
 

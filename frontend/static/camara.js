@@ -20,8 +20,8 @@ const OTRA_POLL_MS = 1000;
 const OTRA_CAP_MS = 25000;
 const OTRA_TICK_MS = 250;      // the countdown repaints this often; the frame poll stays at OTRA_POLL_MS
 const OTRA_CUSHION_S = 2;      // added to the estimate so the copy almost always lands before zero
-const PUSH_WATCHED_S = 5;      // captura's cadence while someone watches (mirrors captura.js)
-const PUSH_IDLE_S = 15;        // captura's idle cadence
+// The push cadence lives in api/routes.py FRAME_POLL_S, a mostrador knob in FASE 3; captura and
+// camara read it from /api/camera/state (frame_poll_s), never hardcode it.
 
 // --- picker ---------------------------------------------------------------------------
 const siteInput = el("input", { value: S.site, placeholder: "sitio" });
@@ -115,8 +115,8 @@ async function fetchFrame() {
 async function cadenceS() {
   try {
     const st = await api(`/api/camera/state?site=${encodeURIComponent(S.site)}`);
-    return st.cameras[S.camera] && st.cameras[S.camera].watching ? PUSH_WATCHED_S : PUSH_IDLE_S;
-  } catch { return PUSH_IDLE_S; }
+    return st.frame_poll_s;
+  } catch { return S.st.frame_poll_s; }                       // the state the page already loaded
 }
 
 // "otra", sealed (HQ): vista viva ON = the button is grey and idle (the view refreshes itself).
@@ -137,7 +137,7 @@ async function otra() {
     const waitText = $("#wait-text"), waitSpin = $("#wait .spin");
     const t0 = Date.now();
     const guessAge = S.lastAge === null ? 0 : S.lastAge + (t0 - S.lastFetchAt) / 1000;
-    const guessCadence = (S.st && S.st.cameras[S.camera] && S.st.cameras[S.camera].watching) ? PUSH_WATCHED_S : PUSH_IDLE_S;
+    const guessCadence = S.st.frame_poll_s;
     let eta = t0 + (Math.max(0, guessCadence - guessAge) + OTRA_CUSHION_S) * 1000;
     const paint = () => {
       const now = Date.now();
