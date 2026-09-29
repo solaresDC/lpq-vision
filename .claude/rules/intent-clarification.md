@@ -5,16 +5,22 @@ My shorthand → precise meaning:
 | "el cerebro" / "the brain" | the whole 4-service system (and the folder `brain/`) |
 | "el servidor" / "lpq-brain" | the live Hetzner VPS, reached via `ssh root@lpq-brain` |
 | "el club" | the Tailscale tailnet (lpq-brain + laptop + iphone-14) |
-| "la ventanilla" / "the API" | `api/main.py` (FastAPI) |
-| "el worker" / "el analista" | `brain/worker/loop.py` |
+| "la ventanilla" / "the API" | `api/main.py` + `api/auth.py` + `api/routes.py` (FastAPI) |
+| "el worker" / "el analista" | `brain/worker/loop.py` (analyze + presentation lanes) |
 | "la cola" / "the queue" | the `jobs` table + SKIP LOCKED claim |
 | "el validador" | `brain/validator/` (pydantic + repair path) |
 | "el adapter" | `brain/adapter/llm.py` (LiteLLM → claude-sonnet-5) |
 | "el titular" / "the teacher" | the model `claude-sonnet-5` |
+| "el express" / "el carril express" | the presentation lane (kind='presentation', priority 10) |
 | "los dos compose" | compose.mac.yaml (runs everywhere this era) + compose.universal.yaml (future ollama) |
 | "la escotilla" | Hetzner web Console emergency access (NEVER used by you) |
-| "el bot" | @LPQ_vision_bot (placeholder in Fase 1; real logic Fase 2) |
-| "la cara" / "the face" | `frontend/` (Fase 2 — forbidden now) |
+| "el bot" | @LPQ_vision_bot, `bot/main.py` (REAL since Fase 2: /id /cola /foto + alerts) |
+| "la cara" / "the face" | `frontend/` (BUILT in Fase 2: captura, panel, review, galeria, camara) |
+| "la mirilla" | `/camara`: foto-al-toque + vista viva (RAM copies, never stored) |
+| "el modo alineación" / "la cuerda" | the alignment pause on `/camara` and its mandatory timeout |
+| "el borde-cocina" | `kitchen_edge` of a `both` camera in config.yaml (the ONE config write before FASE 3) |
+| "las fotos de referencia" / "los originales" | `photos/reference/<dish>/1.jpg` (diet copy, used) and `.../original/` (sacred, parked) |
+| "el mostrador" / "el cuarto de máquinas" / "la papelera" / "el mayordomo" | the ADMIN module = FASE 3 (forbidden now: STOP and flag if asked) |
 | "la carpeta" / "the folder" | `C:\Users\danie\Downloads\LPQ_VISION` |
 
 ALWAYS show the plan before touching any files. Ask only when an instruction has
