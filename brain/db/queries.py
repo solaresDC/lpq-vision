@@ -372,3 +372,40 @@ LIMIT %(limit)s OFFSET %(offset)s
 
 # The photo stream reads the path from the ROW, never from client input (SPEC 1.3).
 SELECT_PHOTO_PATH_SCOPED = f"SELECT photo_path FROM plates WHERE id = %(id)s AND {_SCOPE}"
+
+
+# --------------------------------------------------------------------- the bot (Fase 2, T-D2): READ-ONLY
+
+# /cola: the last plate the worker finished, with its dish and how long ago.
+BOT_LAST_DONE = """
+SELECT j.plate_id, COALESCE(p.dish_verified, p.dish_predicted) AS dish,
+       EXTRACT(EPOCH FROM (now() - j.finished_at)) AS age_s
+FROM jobs j JOIN plates p ON p.id = j.plate_id
+WHERE j.status = 'done'
+ORDER BY j.finished_at DESC
+LIMIT 1
+"""
+
+COUNT_WORKING_JOBS = "SELECT COUNT(*) AS n FROM jobs WHERE status = 'working'"
+
+# The silent-worker clock: when did the worker last finish anything.
+BOT_LAST_DONE_AT = "SELECT MAX(finished_at) AS at FROM jobs WHERE status = 'done'"
+
+# Failures announced from this boot on: the bot remembers the highest failed id it has seen.
+BOT_MAX_FAILED_ID = "SELECT COALESCE(MAX(id), 0) AS id FROM jobs WHERE status = 'failed'"
+
+BOT_NEW_FAILED = """
+SELECT id, plate_id, attempts, last_error
+FROM jobs
+WHERE status = 'failed' AND id > %(after_id)s
+ORDER BY id
+"""
+
+# Dirty lens: the last n bursts of one camera and their sharpness (only rows that carry it).
+BOT_RECENT_SHARPNESS = """
+SELECT id, (capture->>'sharpness')::float AS sharpness
+FROM plates
+WHERE site = %(site)s AND camera = %(camera)s AND capture ? 'sharpness'
+ORDER BY ts DESC, id DESC
+LIMIT %(n)s
+"""
