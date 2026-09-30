@@ -2,16 +2,27 @@
 
 Config files -> typed objects (load_config, load_menu, load_prompt, load_presentation_prompt),
 the HTTP bodies (UploadRequest, LoginRequest, VerifyRequest, BulkReviewRequest,
-AlignStartRequest, CalibrationRequest) and the model's answers (LLMResponse,
-PresentationResponse). This module validates and loads; it never touches the database,
-the network or the photo bytes.
+AlignStartRequest, CalibrationRequest, and from Fase 3 every body of the two admin floors) and
+the model's answers (LLMResponse, PresentationResponse). This module validates and loads; it
+never touches the database, the network or the photo bytes.
+
+Fase 3 adds: the config shapes of the admin era (timezone, horario, the machine block, prices,
+the site layer with mantenimiento and overrides), each with a factory default so an older live
+config.yaml loads as it is; the two prompt lanes; and the ONE shared contender table (the
+bake-off and the machine room's keyless selector both read it here). Site overrides are checked
+against the knob registry (brain/validator/knobs.py) at load.
 """
 
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from pydantic import (
@@ -45,7 +56,28 @@ PhotoCondition = Literal["normal", "lampara"]
 CameraSource = Literal["phone", "pi"]
 CameraRole = Literal["return", "outgoing", "both"]
 KitchenEdge = Literal["top", "right", "bottom", "left"]
-ReviewBulkAction = Literal["verify_as_is", "not_plate", "reopen"]
+ReviewBulkAction = Literal["verify_as_is", "not_plate", "reopen", "discard"]   # 'discard' = the F3 papelera
+
+# --- Fase-3 vocabularies (SPEC 1.3, 1.6) ------------------------------------------------
+Role = Literal["admin", "manager", "machine"]
+AccountRole = Literal["admin", "manager"]              # what the users CRUD may create; 'machine' is the cuarto row
+Lane = Literal["merma", "presentacion"]
+RestartService = Literal["fastapi", "worker", "bot"]   # postgres never has a button
+
+# --- Fase-3 constants (SPEC section 4); the absent-key defaults live HERE, one source ------
+FRAME_POLL_S_DEFAULT = 5          # push cadence when capture.frame_poll_s is absent (api.routes.FRAME_POLL_S)
+RAW_LOG_AUTO_OFF_HOURS = 24       # default life of the forensic river when switched on from the mostrador
+WORKER_SCALE_MAX = 4              # the butler's `scale worker <1..4>` ceiling
+DEFAULT_TIMEZONE = "America/Mexico_City"
+MACHINE_USER = "cuarto"           # the reserved users row whose hash IS the machine floor
+RESERVED_SITE_SLUGS = ("reference", "brand")   # the photos root's reference/ folder and the brand album
+PASSWORD_MIN_CHARS = 10           # new passwords only; an existing one is checked, never length-judged
+
+SITE_SLUG_RE = re.compile(r"^[a-z][a-z0-9_-]{1,23}\Z")
+USER_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,31}\Z")
+CAMERA_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,23}\Z")
+CHAT_ID_RE = re.compile(r"^-?\d{1,20}\Z")
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d\Z")
 
 # --- presentation lane constants (SPEC section 4 / 1.7) --------------------------------
 PRESENTATION_PASS_SCORE = 80
@@ -92,6 +124,15 @@ def _bucketed_percentages(value: dict[str, int]) -> dict[str, int]:
     return cleaned
 
 
+def check_timezone(name: str) -> str:
+    """An IANA timezone name the containers' OS tzdata knows (gate D proved it ships in the base image)."""
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError(f"unknown timezone {name!r}: use an IANA name like {DEFAULT_TIMEZONE}") from None
+    return name
+
+
 # --------------------------------------------------------------------------- the prompts
 
 def prompt_version_of(path: Path) -> str:
@@ -104,14 +145,55 @@ def prompt_version_of(path: Path) -> str:
     return match.group(1)
 
 
-# The active prompt file. Its `_vN` suffix IS the prompt version string (SPEC section 4),
-# derived once here beside the loader. Choosing it becomes an admin knob in FASE 3.
+# The lanes' DEFAULT prompt files. Their `_vN` suffix IS the prompt version string (SPEC section 4).
+# From Fase 3, config's active_prompt / active_presentation_prompt may select another file of the
+# SAME lane (the mostrador's selectors); absent = these defaults.
 ACTIVE_PROMPT_FILE = PROMPTS_DIR / "prompt_sonnet_v1.txt"
 PROMPT_VERSION = prompt_version_of(ACTIVE_PROMPT_FILE)
 
 # The presentation lane's own prompt (T-E5): same naming law, same derivation, its own version.
 PRESENTATION_PROMPT_FILE = PROMPTS_DIR / "prompt_presentation_v1.txt"
 PRESENTATION_PROMPT_VERSION = prompt_version_of(PRESENTATION_PROMPT_FILE)
+
+# A lane is its file prefix; N has no leading zero, so two files of one lane can never share a
+# version string (the SPEC's duplicated-vN refusal holds by construction).
+PROMPT_LANE_PREFIX: dict[str, str] = {"merma": "prompt_sonnet_", "presentacion": "prompt_presentation_"}
+LANE_DEFAULT_FILE: dict[str, Path] = {"merma": ACTIVE_PROMPT_FILE, "presentacion": PRESENTATION_PROMPT_FILE}
+
+
+def _lane_re(lane: str) -> re.Pattern[str]:
+    return re.compile(rf"^{re.escape(PROMPT_LANE_PREFIX[lane])}v[1-9]\d*\.txt\Z")
+
+
+def lane_accepts(lane: str, filename: str) -> bool:
+    """True when `filename` is a prompt file of that lane (merma can never point at a presentation prompt)."""
+    return bool(_lane_re(lane).match(filename))
+
+
+def prompt_files(lane: str, directory: Path = PROMPTS_DIR) -> list[Path]:
+    """The prompt files of one lane that EXIST, oldest version first (exactly what a selector lists)."""
+    pattern = _lane_re(lane)
+    found = [p for p in directory.glob("*.txt") if pattern.match(p.name)]
+    return sorted(found, key=lambda p: int(prompt_version_of(p)[1:]))
+
+
+def prompt_file_for(cfg: Config, lane: str) -> Path:
+    """The SELECTED prompt of a lane: the config's choice when present, else the lane's default file."""
+    chosen = cfg.active_prompt if lane == "merma" else cfg.active_presentation_prompt
+    return PROMPTS_DIR / chosen if chosen else LANE_DEFAULT_FILE[lane]
+
+
+def prompt_version_for(cfg: Config, lane: str) -> str:
+    """The version stamped at insert (plan of record) and written by the worker (truth) for that lane."""
+    return prompt_version_of(prompt_file_for(cfg, lane))
+
+
+def _lane_prompt(lane: str, value: str | None) -> str | None:
+    if value is not None and not lane_accepts(lane, value):
+        raise ValueError(
+            f"{value!r} is not a {lane} prompt file (expected {PROMPT_LANE_PREFIX[lane]}v<N>.txt)"
+        )
+    return value
 
 
 def load_prompt(path: Path = ACTIVE_PROMPT_FILE) -> str:
@@ -137,10 +219,11 @@ class CaptureConfig(BaseModel):
     diff_threshold: int = Field(ge=1, le=100)      # % of pixels changed that counts as an arrival
     settle_frames: int = Field(ge=1)               # consecutive calm frames that confirm the landing
     burst_frames: int = Field(ge=1, le=10)         # frames per burst; the server keeps the sharpest
+    frame_poll_s: int = Field(default=FRAME_POLL_S_DEFAULT, ge=1, le=60)   # F3: seconds between mirilla copies
 
 
 class AlertsConfig(BaseModel):
-    """Thresholds of the bot's six alert families. Nothing temporal here (that is .env)."""
+    """Thresholds of the bot's alert families and vigilantes. Nothing temporal here."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -150,6 +233,9 @@ class AlertsConfig(BaseModel):
     backlog_threshold: int = Field(ge=1)
     worker_silence_min: int = Field(ge=1)
     poll_s: int = Field(ge=1)
+    black_luma_max: float = Field(default=12.0, gt=0, le=255)      # F3: mean brightness under which a frame is black
+    black_timer_s: int = Field(default=120, ge=1, le=86400)        # F3: seconds of black inside the horario
+    silent_site_min: int = Field(default=5, ge=1, le=1440)         # F3: minutes without frames inside the horario
 
 
 class VideoAlignConfig(BaseModel):
@@ -199,18 +285,106 @@ class CameraConfig(BaseModel):
         return self
 
 
+class HorarioConfig(BaseModel):
+    """Service hours, judged in the site's timezone. close <= open means the window ends the NEXT day
+    (a café closing at 00:30 just works: the midnight law, SPEC 1.8)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    open: str
+    close: str
+
+    @field_validator("open", "close", mode="before")
+    @classmethod
+    def _hhmm(cls, value: Any, info: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(
+                f"{info.field_name} arrived as {value!r}: write the time QUOTED, like \"22:00\" "
+                "(a bare 22:00 is the YAML number 1320)"
+            )
+        value = value.strip()
+        if not TIME_RE.match(value):
+            raise ValueError(f"{info.field_name} {value!r} must be HH:MM on a 24-hour clock, like \"07:00\"")
+        return value
+
+    @model_validator(mode="after")
+    def _not_equal(self) -> "HorarioConfig":
+        if self.open == self.close:
+            raise ValueError(f"horario: open and close are both {self.open}: a zero or 24-hour window is ambiguous")
+        return self
+
+
+class MachineConfig(BaseModel):
+    """The machine room's block (SPEC 1.4, edited only on the second floor). Absent = these defaults:
+    the one home of the old queue/adapter constants' values (loop.py and llm.py keep the names)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_hours: int = Field(default=720, ge=1, le=8760)
+    workers: int = Field(default=1, ge=1, le=WORKER_SCALE_MAX)   # the REMEMBERED desire: one number for the chain
+    orphan_timeout_min: int = Field(default=10, ge=2, le=120)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    llm_timeout_s: int = Field(default=120, ge=10, le=600)
+    max_tokens: int = Field(default=1024, ge=256, le=8192)
+
+    @model_validator(mode="after")
+    def _coherent(self) -> "MachineConfig":
+        # The Fase-2 anti-stupid assert, now at LOAD: a call slower than the rescue window would be
+        # double-claimed by a live worker. This message is shown verbatim on the machine room's screen.
+        if self.llm_timeout_s >= self.orphan_timeout_min * 60:
+            raise ValueError(
+                f"llm_timeout_s ({self.llm_timeout_s} s) debe ser menor que orphan_timeout_min "
+                f"({self.orphan_timeout_min} min = {self.orphan_timeout_min * 60} s): una llamada más lenta que "
+                "la ventana de rescate sería tomada dos veces por otro analista. Baja llm_timeout_s o sube "
+                "orphan_timeout_min."
+            )
+        return self
+
+
+MACHINE_DEFAULTS = MachineConfig()
+
+
+class PriceConfig(BaseModel):
+    """One model's price in USD per million tokens. Prices ship EMPTY: a human enters them after
+    verifying at the source (rule 1). An absent model shows "sin precio", never a guess."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    in_mtok: float = Field(ge=0)
+    out_mtok: float = Field(ge=0)
+    cache_write_mtok: float = Field(ge=0)
+    cache_read_mtok: float = Field(ge=0)
+
+
 class SiteConfig(BaseModel):
-    """One entry of the `sites:` block: how that site's photos arrive, its functions, its cameras."""
+    """One entry of the `sites:` block: how that site's photos arrive, its functions, its cameras, and
+    the Fase-3 site layer: mantenimiento (absent-when-off) and overrides (the knob cascade's middle
+    layer, one flat line per registry name, validated against brain.validator.knobs by Config)."""
 
     model_config = ConfigDict(extra="forbid")
 
     ingestion: Ingestion
     funciones: Funciones
     cameras: dict[str, CameraConfig] = Field(default_factory=dict)
+    mantenimiento: bool | None = None
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("mantenimiento")
+    @classmethod
+    def _mantenimiento_only_true(cls, value: bool | None) -> bool | None:
+        if value is False:
+            raise ValueError("mantenimiento: false is dead config (absent-when-off): delete the key instead")
+        return value
+
+    @field_validator("overrides", mode="before")
+    @classmethod
+    def _overrides_none_is_empty(cls, value: Any) -> Any:
+        return {} if value is None else value
 
 
 class Config(BaseModel):
-    """config/config.yaml: exact keys, absent-when-off, no other keys (extra='forbid')."""
+    """config/config.yaml: exact keys, absent-when-off, no other keys (extra='forbid').
+    Every Fase-3 key carries a factory default, so an older live file loads as it is."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -226,11 +400,75 @@ class Config(BaseModel):
     alerts: AlertsConfig
     video_align: VideoAlignConfig
     sites: dict[str, SiteConfig] = Field(min_length=1)
+    # --- Fase 3 (SPEC 1.4) ---
+    timezone: str = DEFAULT_TIMEZONE
+    horario_default: HorarioConfig = Field(default_factory=lambda: HorarioConfig(open="07:00", close="22:00"))
+    confianza_minima: Confidence = "media"
+    papelera_dias: int = Field(default=10, ge=1, le=365)
+    prices: dict[str, PriceConfig] = Field(default_factory=dict)
+    raw_logging_off_at: datetime | None = None          # absent-when-off: only while raw_logging is on
+    admin_chat_id: str | None = None                    # absent-when-off: the machine families' own chat
+    queue_paused: bool | None = None                    # absent-when-off: only `true` ever exists
+    active_prompt: str | None = None                    # absent = the merma lane's default file
+    active_presentation_prompt: str | None = None       # absent = the presentation lane's default file
+    machine: MachineConfig = Field(default_factory=MachineConfig)
 
     @field_validator("cache", "cascade", mode="before")
     @classmethod
     def _quoted_strings(cls, value: Any, info: Any) -> Any:
         return _reject_yaml_magic(info.field_name, value)
+
+    @field_validator("timezone")
+    @classmethod
+    def _zone(cls, value: str) -> str:
+        return check_timezone(value)
+
+    @field_validator("raw_logging_off_at")
+    @classmethod
+    def _aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("raw_logging_off_at needs an offset, like \"2026-10-01T09:00:00+00:00\"")
+        return value
+
+    @field_validator("admin_chat_id", mode="before")
+    @classmethod
+    def _chat_id(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("admin_chat_id must be a QUOTED Telegram chat id")
+        value = str(value).strip()
+        if not CHAT_ID_RE.match(value):
+            raise ValueError(f"admin_chat_id {value!r} must be a Telegram chat id like \"-1001234567890\"")
+        return value
+
+    @field_validator("queue_paused")
+    @classmethod
+    def _paused_only_true(cls, value: bool | None) -> bool | None:
+        if value is False:
+            raise ValueError("queue_paused: false is dead config (absent-when-off): delete the key instead")
+        return value
+
+    @field_validator("active_prompt")
+    @classmethod
+    def _merma_prompt(cls, value: str | None) -> str | None:
+        return _lane_prompt("merma", value)
+
+    @field_validator("active_presentation_prompt")
+    @classmethod
+    def _presentation_prompt(cls, value: str | None) -> str | None:
+        return _lane_prompt("presentacion", value)
+
+    @model_validator(mode="after")
+    def _fase3_coherence(self) -> "Config":
+        if self.raw_logging_off_at is not None and not self.raw_logging:
+            raise ValueError("raw_logging_off_at is set while raw_logging is false: dead config (absent-when-off)")
+        # The knob cascade's middle layer: every override must be a per-site registry knob with a value
+        # the registry accepts. Imported here, never at the top: knobs.py imports this module.
+        from brain.validator import knobs
+
+        knobs.validate_overrides(self)
+        return self
 
 
 # --------------------------------------------------------------------------- menu.yaml
@@ -402,13 +640,344 @@ class AlignStopRequest(BaseModel):
 
 
 class CalibrationRequest(BaseModel):
-    """POST /api/camera/calibration: the ONE config write before FASE 3 (kitchen_edge)."""
+    """POST /api/camera/calibration: the kitchen_edge write (through the one writer from Fase 3)."""
 
     model_config = ConfigDict(extra="forbid")
 
     site: str = Field(min_length=1)
     camera: str = Field(min_length=1)
     kitchen_edge: KitchenEdge
+
+
+# --------------------------------------------------------------------------- HTTP bodies (Fase 3)
+# Messages here are shown to the person on the mostrador or the machine room: Spanish, plain.
+
+def _account_name(value: Any) -> Any:
+    if isinstance(value, str):
+        value = value.strip()
+        if not USER_RE.match(value):
+            raise ValueError("usuario: minúsculas, números, punto, guion o guion bajo; empieza con letra (2 a 32)")
+        if value == MACHINE_USER:
+            raise ValueError(f"«{MACHINE_USER}» está reservado para el cuarto de máquinas")
+    return value
+
+
+def _site_slug(value: Any) -> Any:
+    if isinstance(value, str):
+        value = value.strip()
+        if not SITE_SLUG_RE.match(value):
+            raise ValueError("sitio: minúsculas, números, guion o guion bajo; empieza con letra (2 a 24)")
+        if value in RESERVED_SITE_SLUGS:
+            raise ValueError(f"«{value}» es un nombre reservado del sistema: elige otro")
+    return value
+
+
+def _role_site(role: str, site: str | None) -> None:
+    if role == "manager" and not site:
+        raise ValueError("un manager necesita su sitio")
+    if role == "admin" and site:
+        raise ValueError("un admin ve todos los sitios: no lleva sitio")
+
+
+def _component_list(value: list[Componente]) -> list[Componente]:
+    names = [c.nombre for c in value]
+    bad = [n for n in names if not DISH_ID_RE.match(n)]
+    if bad:
+        raise ValueError(f"componentes en minúsculas_con_guion_bajo (son las llaves del JSON del modelo): {bad}")
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        raise ValueError(f"componentes repetidos: {dupes}")
+    return value
+
+
+class _Body(BaseModel):
+    """Every Fase-3 request body: exact keys, nothing else."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SwitchRequest(_Body):
+    on: bool
+
+
+class IdsRequest(_Body):
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class PasswordRequest(_Body):
+    """A NEW password (set, reset, the cuarto's birth or change): typed by a human, hashed server-side."""
+
+    password: str = Field(min_length=PASSWORD_MIN_CHARS, max_length=200)
+
+
+class UnlockRequest(_Body):
+    """POST /api/admin/machine/unlock: an EXISTING password is checked, never length-judged."""
+
+    password: str = Field(min_length=1, max_length=200)
+
+
+class ConfirmRequest(_Body):
+    """Step 2 of every dangerous action: the pending_id step 1 returned with its diff."""
+
+    pending_id: str = Field(min_length=8, max_length=64)
+
+
+class EnrollRequest(_Body):
+    """POST /api/device/enroll: /captura presents the site's gafete once; the server sets the device cookie."""
+
+    site: str = Field(min_length=1)
+    key: str = Field(min_length=16, max_length=200)
+
+
+class KnobWriteRequest(_Body):
+    knob: str = Field(min_length=1)
+    value: Any
+    site: str | None = None       # absent = the global value; present = that site's override
+
+
+class KnobResetRequest(_Body):
+    """"Volver al global": deletes that site's override line."""
+
+    knob: str = Field(min_length=1)
+    site: str = Field(min_length=1)
+
+
+class KnobNameRequest(_Body):
+    knob: str = Field(min_length=1)
+
+
+class RawLoggingRequest(_Body):
+    on: bool
+    hours: int | None = Field(default=None, ge=1, le=720)   # absent = RAW_LOG_AUTO_OFF_HOURS
+
+
+class ChatIdRequest(_Body):
+    chat_id: str | None = None    # empty or absent = remove the chat (absent-when-off)
+
+    @field_validator("chat_id", mode="before")
+    @classmethod
+    def _chat(cls, value: Any) -> Any:
+        if value is None or isinstance(value, bool):
+            return None if value is None else value
+        value = str(value).strip()
+        if value == "":
+            return None
+        if not CHAT_ID_RE.match(value):
+            raise ValueError("el chat es un número de Telegram, como -1001234567890 (escribe /id en el grupo)")
+        return value
+
+
+class TelegramTestRequest(_Body):
+    site: str | None = None       # absent = the admin chat
+
+
+class TextoSaveRequest(_Body):
+    key: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
+class TextoKeyRequest(_Body):
+    key: str = Field(min_length=1)
+
+
+class TextoTestRequest(_Body):
+    key: str = Field(min_length=1)
+    text: str | None = None       # present = preview an unsaved edit; absent = the saved text
+    site: str | None = None       # absent = the admin chat
+
+
+class UserCreateRequest(_Body):
+    usuario: str
+    password: str = Field(min_length=PASSWORD_MIN_CHARS, max_length=200)
+    role: AccountRole
+    site: str | None = None
+
+    @field_validator("usuario", mode="before")
+    @classmethod
+    def _name(cls, value: Any) -> Any:
+        return _account_name(value)
+
+    @model_validator(mode="after")
+    def _scope(self) -> "UserCreateRequest":
+        _role_site(self.role, self.site)
+        return self
+
+
+class UserRoleRequest(_Body):
+    role: AccountRole
+    site: str | None = None
+
+    @model_validator(mode="after")
+    def _scope(self) -> "UserRoleRequest":
+        _role_site(self.role, self.site)
+        return self
+
+
+class CameraUpsertRequest(_Body):
+    name: str
+    source: CameraSource
+    role: CameraRole
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _camera_name(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            if not CAMERA_RE.match(value):
+                raise ValueError("cámara: minúsculas, números, guion o guion bajo (1 a 24), como barra-1")
+        return value
+
+
+class SiteCreateRequest(_Body):
+    """Crear restaurante, stage 0 (SPEC 1.5): site, cameras, functions, menu clone and its manager,
+    born together in one all-or-nothing write (the gafete is born inside it too)."""
+
+    site: str
+    ingestion: Ingestion = "phone_web"
+    funciones: Funciones
+    cameras: list[CameraUpsertRequest] = Field(min_length=1, max_length=8)
+    clone_menu_from: str | None = None
+    manager_usuario: str
+    manager_password: str = Field(min_length=PASSWORD_MIN_CHARS, max_length=200)
+
+    @field_validator("site", mode="before")
+    @classmethod
+    def _slug(cls, value: Any) -> Any:
+        return _site_slug(value)
+
+    @field_validator("manager_usuario", mode="before")
+    @classmethod
+    def _manager(cls, value: Any) -> Any:
+        return _account_name(value)
+
+    @field_validator("cameras")
+    @classmethod
+    def _unique_cameras(cls, value: list[CameraUpsertRequest]) -> list[CameraUpsertRequest]:
+        names = [c.name for c in value]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"cámaras repetidas: {dupes}")
+        return value
+
+
+class SiteEditRequest(_Body):
+    ingestion: Ingestion | None = None
+    active: bool | None = None
+
+    @model_validator(mode="after")
+    def _something(self) -> "SiteEditRequest":
+        if self.ingestion is None and self.active is None:
+            raise ValueError("nada que cambiar")
+        return self
+
+
+class SourceRequest(_Body):
+    """The relevo: a camera's source flips (mostrador switch or /captura's emergency road)."""
+
+    source: CameraSource
+
+
+class DishCreateRequest(_Body):
+    """CREAR PLATILLO: born at the current MAX menu_version; its photos arrive through the uploader."""
+
+    dish_id: str
+    nombre: str = Field(min_length=1, max_length=80)
+    componentes: list[Componente] = Field(min_length=1, max_length=20)
+    plate_type: str | None = None
+
+    @field_validator("dish_id", mode="before")
+    @classmethod
+    def _dish_id(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            if not DISH_ID_RE.match(value):
+                raise ValueError("dish_id en minúsculas_con_guion_bajo, como tartine_aguacate")
+        return value
+
+    @field_validator("componentes")
+    @classmethod
+    def _components(cls, value: list[Componente]) -> list[Componente]:
+        return _component_list(value)
+
+
+class DishEditRequest(_Body):
+    """The full new definition; a change in the SET of component names bumps to global MAX+1."""
+
+    nombre: str = Field(min_length=1, max_length=80)
+    componentes: list[Componente] = Field(min_length=1, max_length=20)
+    plate_type: str | None = None
+
+    @field_validator("componentes")
+    @classmethod
+    def _components(cls, value: list[Componente]) -> list[Componente]:
+        return _component_list(value)
+
+
+class RefPhotoRequest(_Body):
+    """A reference photo action: upload's form fields, replace and delete (photo_path names the row)."""
+
+    site: str = Field(min_length=1)
+    dish_id: str = Field(min_length=1)
+    photo_path: str | None = None
+    condition: PhotoCondition = "normal"
+
+
+class RetryRequest(_Body):
+    site: str | None = None       # a manager is forced to its own site server-side
+
+
+class PriceRequest(_Body):
+    model: str = Field(min_length=1, max_length=120)
+    in_mtok: float = Field(ge=0)
+    out_mtok: float = Field(ge=0)
+    cache_write_mtok: float = Field(ge=0)
+    cache_read_mtok: float = Field(ge=0)
+
+
+class ModelNameRequest(_Body):
+    model: str = Field(min_length=1, max_length=120)
+
+
+class WorkersRequest(_Body):
+    count: int = Field(ge=1, le=WORKER_SCALE_MAX)
+
+
+class RestartRequest(_Body):
+    service: RestartService
+
+
+# --------------------------------------------------------------------------- the contenders
+
+@dataclass(frozen=True)
+class Contender:
+    """One exam string of the bake-off and one selectable active_model: the lane, the LiteLLM
+    model string, and the env key that unlocks it (SPEC 1.6: this is its ONE shared home).
+
+    Rule 1: strings and prices are verified at the source the day their key exists. The two
+    Anthropic strings are verified; the four others carry the names the SPEC gives them and stay
+    unverified until their keys are pasted (without a key they are skipped and never listed).
+    """
+
+    lane: str            # 'alto' | 'bajo'
+    label: str
+    model: str
+    env_key: str
+
+
+CONTENDERS: tuple[Contender, ...] = (
+    Contender("alto", "Sonnet 5", "claude-sonnet-5", "ANTHROPIC_API_KEY"),
+    Contender("alto", "Terra", "terra", "TERRA_API_KEY"),                              # verify when its key exists
+    Contender("alto", "Gemini 3.1 Pro", "gemini/gemini-3.1-pro", "GEMINI_API_KEY"),    # verify when its key exists
+    Contender("bajo", "Haiku 4.5", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
+    Contender("bajo", "Luna", "luna", "LUNA_API_KEY"),                                 # verify when its key exists
+    Contender("bajo", "Gemini 3.6 Flash", "gemini/gemini-3.6-flash", "GEMINI_API_KEY"),  # verify when its key exists
+)
+
+
+def keyed_contenders(environ: Mapping[str, str] | None = None) -> list[Contender]:
+    """The contenders whose provider key is present and non-empty: a keyless model never appears."""
+    env = os.environ if environ is None else environ
+    return [c for c in CONTENDERS if (env.get(c.env_key) or "").strip()]
 
 
 # --------------------------------------------------------------------------- LLM answers

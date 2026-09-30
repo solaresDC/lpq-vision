@@ -9,7 +9,8 @@ key is absent from the environment are SKIPPED and printed "sin llave" (absent-w
 keys): the exam runs Anthropic-only today and completes itself the day other keys are pasted.
 It runs at ANY row count and prints the honest N, with a warning under BAKEOFF_MIN_ROWS.
 Its calls go to the structured log with kind=bakeoff. Costs come from LiteLLM's cost table when
-the model is known there, else "?".
+the model is known there, else "?". The contender table lives in brain/validator/models.py (Fase 3:
+its ONE shared home, read here and by the machine room's keyless active_model selector).
 """
 
 from __future__ import annotations
@@ -28,38 +29,13 @@ from brain.adapter import llm
 from brain.capture.backends import PHOTO_ROOT
 from brain.db import queries as q
 from brain.validator import repair
-from brain.validator.models import BUCKET_SIZE, load_config, load_prompt
+from brain.validator.models import BUCKET_SIZE, CONTENDERS, Contender, load_config, load_prompt
 from brain.worker.menu_builder import MenuReference, build_reference
 
 log = logging.getLogger("lpq.scripts.bakeoff")
 
 BAKEOFF_MIN_ROWS = 200      # below this the table is printed with an honesty warning
 UNKNOWN_DISH = repair.UNKNOWN_DISH
-
-
-@dataclass(frozen=True)
-class Contender:
-    """One exam string: the lane, the LiteLLM model string, and the env key that unlocks it.
-
-    Rule 1: strings and prices are verified at the source the day their key exists. The two
-    Anthropic strings are verified today (LiteLLM's cost table); the four others carry the names
-    the SPEC gives them and stay unverified until their keys are pasted (they are skipped anyway).
-    """
-
-    lane: str            # 'alto' | 'bajo'
-    label: str
-    model: str
-    env_key: str
-
-
-CONTENDERS: tuple[Contender, ...] = (
-    Contender("alto", "Sonnet 5", "claude-sonnet-5", "ANTHROPIC_API_KEY"),
-    Contender("alto", "Terra", "terra", "TERRA_API_KEY"),                         # verify when its key exists
-    Contender("alto", "Gemini 3.1 Pro", "gemini/gemini-3.1-pro", "GEMINI_API_KEY"),   # verify when its key exists
-    Contender("bajo", "Haiku 4.5", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-    Contender("bajo", "Luna", "luna", "LUNA_API_KEY"),                             # verify when its key exists
-    Contender("bajo", "Gemini 3.6 Flash", "gemini/gemini-3.6-flash", "GEMINI_API_KEY"),  # verify when its key exists
-)
 
 
 @dataclass

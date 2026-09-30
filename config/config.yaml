@@ -1,27 +1,49 @@
 # LPQ_VISION - config.yaml (operational knobs; exact keys, absent-when-off, nothing else)
-# YAML orthography rule of this system: any STRING value that collides with a YAML magic word
-# is quoted (bare on/off/yes/no parse as booleans, none/null as null). Real booleans stay bare.
-# Nothing TEMPORAL lives here: the era's scaffolding (chat id, account hashes) is three .env keys.
+# FROM FASE 3 THIS FILE IS OPERATOR STATE: the api's writer (api/config_writer.py) is its ONLY writer,
+# driven from the mostrador and the machine room, and a deploy never copies it. This repo copy is the
+# FACTORY TEMPLATE for a fresh install; a key missing from a live file takes its factory default from
+# code (brain/validator/models.py), so an older live file loads as it is.
+# YAML orthography rule of this system: any STRING value that collides with a YAML magic word is quoted
+# (bare on/off/yes/no parse as booleans, none/null as null, a bare 22:00 as the number 1320), and the
+# writer quotes every string it emits. Real booleans and numbers stay bare.
+# Absent-when-off keys (they exist only while on): raw_logging_off_at, admin_chat_id, queue_paused, prices,
+# active_prompt, active_presentation_prompt, and per site: mantenimiento, overrides, kitchen_edge.
+# Nothing TEMPORAL lives here.
 active_model: claude-sonnet-5
 cache: "on"                        # prompt caching mark on the stable prefix for Anthropic calls; a discount, never a dependency
-cascade: "off"                     # sealed three-position switch; Fase 1 accepts only "off"
-raw_logging: false                 # forensic river; strips image bytes if ever true
+cascade: "off"                     # the MODEL cascade (sealed; only "off"). The KNOB cascade is sites.<site>.overrides
+raw_logging: false                 # forensic river; strips image bytes if ever true (switched from the mostrador)
 brain_host: lpq-brain              # the club name; informational for tooling
-poll_seconds: 2                    # worker idle poll when the queue is empty
-capture:                           # the phone guard's knobs (T-C1); standard, adjustable, per-deployment reality
+poll_seconds: 2                    # worker idle poll when the queue is empty (frozen by design: not a knob)
+timezone: "America/Mexico_City"    # the clock every horario judgment uses; per-site overridable
+horario_default: {open: "07:00", close: "22:00"}   # service hours; a close before the open ends the NEXT day
+confianza_minima: "media"          # panel and review paint rows under this confidence; per-site overridable
+papelera_dias: 10                  # days a discarded plate waits in the papelera before the purge
+capture:                           # the phone guard's knobs (T-C1); the first three are per-site overridable
   diff_threshold: 12               # % of pixels changed between frames that counts as an arrival
   settle_frames: 4                 # consecutive calm frames that confirm the landing
   burst_frames: 3                  # frames per burst; the server keeps the sharpest
-alerts:                            # thresholds ONLY (the bot's six families); nothing temporal here
-  sharpness_min: 60.0              # Laplacian variance floor (calibrated once live)
+  frame_poll_s: 5                  # seconds between mirilla copies pushed by /captura (one global cadence)
+alerts:                            # thresholds ONLY; nothing temporal here
+  sharpness_min: 60.0              # Laplacian variance floor (calibrated on the day -1 rehearsal)
   sharpness_n: 3                   # consecutive uploads under the floor that fire the dirty-lens alert
-  sharpness_cooldown_min: 60       # minutes of silence after a dirty-lens alert
+  sharpness_cooldown_min: 60       # minutes of silence after a dirty-lens or a covered-camera alert
   backlog_threshold: 25            # pending jobs that fire the backlog alert
   worker_silence_min: 10           # minutes without a done job (while pending > 0) that fire the silent-worker alert
   poll_s: 10                       # the bot's round cadence in seconds
+  black_luma_max: 12.0             # mean brightness (0 to 255) under which a frame counts as black
+  black_timer_s: 120               # seconds of black INSIDE the horario before the covered-camera alert
+  silent_site_min: 5               # minutes without frames INSIDE the horario before the silent-site alert
 video_align:                       # the alignment mode's rope: never "forever"
-  default_s: 60                    # default rope length; per-session editable in the page
-  max_s: 3600                      # hard cap; the page cannot exceed it
+  default_s: 60                    # default rope length; per-site overridable, per-session editable in the page
+  max_s: 3600                      # hard cap; the page cannot exceed it (frozen by design: not a knob)
+machine:                           # the machine room's block: edited only on the second floor
+  session_hours: 720               # hours a login lasts before the password is asked again
+  workers: 1                       # the REMEMBERED number of analysts for the whole chain (reconverged at boot)
+  orphan_timeout_min: 10           # minutes before a stuck 'working' job is rescued
+  max_attempts: 3                  # analysis attempts per plate before 'failed'
+  llm_timeout_s: 120               # one model call's ceiling; must stay under orphan_timeout_min
+  max_tokens: 1024                 # the model's answer ceiling
 sites:
   demo:
     ingestion: phone_web

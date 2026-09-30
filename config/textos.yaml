@@ -1,0 +1,4 @@
+# LPQ_VISION - textos.yaml: MACHINE-OWNED. The api rewrites this whole file from the mostrador
+# (Textos del bot); never edit it by hand. Absent-when-off: a key present overrides that bot message,
+# a key absent uses its factory text (brain/validator/textos.py); "restaurar original" deletes the key.
+# Operator state: this file never travels in a deploy.
