@@ -10,6 +10,7 @@
 menu:
   tartine_aguacate:
     nombre: Tartine de aguacate
+    activo: false                                      # placeholder retirado: el tartine real es tartine_chipotle_club (recetario)
     componentes:
       - {nombre: pan_multigrano, porcion_g: 50}        # la rebanada de pan oscuro con semillas
       - {nombre: aguacate_preparado, porcion_g: 90}    # el untado de aguacate machacado (la cebolla morada va ADENTRO: cuenta aqui)
@@ -22,6 +23,21 @@ menu:
       - {nombre: relleno_champinones, porcion_g: 60}   # el relleno visible (champinones, pimiento y jitomate que asoman)
       - {nombre: ensalada_espinaca, porcion_g: 40}     # las hojas de espinaca con tiras de pimiento rojo
       - {nombre: pan_tostado, porcion_g: 60}           # las dos rebanadas de pan con semillas
+  tartine_chipotle_club:
+    nombre: Tartine Chipotle Club
+    componentes:
+      - {nombre: pan_trigo, porcion_g: 90}             # 1 rebanada de pan de trigo, frio, cortada en 5 triangulos (peso estimado)
+      - {nombre: pollo_escalopa, porcion_g: 90}        # escalopa de pollo en juliana, sobre todo el pan
+      - {nombre: queso_oaxaca, porcion_g: 50}          # queso Oaxaca sobre el pollo
+      - {nombre: aguacate, porcion_g: 40}              # 1/4 de aguacate en juliana (peso estimado)
+      - {nombre: arugula, porcion_g: 10}               # arugula cubriendo todo el tartine
+      - {nombre: tocino, porcion_g: 20}                # tocino frito picado, al centro de cada triangulo
+      - {nombre: jitomate, porcion_g: 10}              # jitomate en cubos
+      - {nombre: cebolleta, porcion_g: 3}              # cebolleta picada
+      - {nombre: aderezo_chipotle, porcion_g: 30}      # 30 ml: untado en el pan y una gota en cada triangulo
+      - {nombre: ensalada_tartine, porcion_g: 60}      # en el bowl mediano: lechugas, zanahoria, col morada, pepino y rabano
+      - {nombre: vinagreta_casa, porcion_g: 15}        # 15 ml de vinagreta de la casa sobre la ensalada tartine
+      - {nombre: perejil, porcion_g: 2}                # firma de perejil
 sites:
   demo:
     fotos_ref:
@@ -29,3 +45,5 @@ sites:
         - {path: reference/tartine_aguacate/1.jpg, condition: normal}
       omelette_champinones:
         - {path: reference/omelette_champinones/1.jpg, condition: normal}
+      tartine_chipotle_club:
+        - {path: reference/tartine_chipotle_club/1.jpg, condition: normal}
