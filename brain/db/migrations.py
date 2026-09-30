@@ -1,25 +1,28 @@
-"""Fase-2 schema evolution: existence-gated, ADD-only migrations, run on EVERY boot (SPEC 1.2).
+"""Schema evolution: existence-gated, ADD-only migrations, run on EVERY boot (SPEC 1.2, Fases 2 and 3).
 
-schema.sql is the sealed birth certificate and never changes. Everything the database learns
-after birth lives here as small steps: each one checks whether its column already exists and
-only then adds it, so a boot with nothing missing costs milliseconds and a brand-new database
-gets the columns right after the schema is created. init.run() calls run() inside its own
-transaction, schema present or not: the live laptop and VPS databases evolve on their first
+schema.sql is the sealed birth certificate and never changes. Everything the database learns after
+birth lives here as small steps: each one checks whether its column (or, from Fase 3, its table)
+already exists and only then adds it, so a boot with nothing missing costs milliseconds and a
+brand-new database gets everything right after the schema is created. init.run() calls run() inside
+its own transaction, schema present or not: the live laptop and VPS databases evolve on their first
 boot of the new code, with no human remembering anything.
 
-The three Fase-2 migrations:
-1. plates.leftovers_verified JSONB: the human's corrected percentages. The model's draft in
-   `leftovers` is never erased (same philosophy as dish_predicted / dish_verified). NULL = the
-   human changed nothing; readers use COALESCE(leftovers_verified, leftovers).
-2. review_status gains the value 'not_plate'. No DDL: the column is TEXT. The contract across
-   eras is 'unreviewed' | 'verified' | 'not_plate', plus 'discarded' RESERVED for the papelera
-   (FASE 3). The partial index on 'unreviewed' keeps working untouched.
-3. plates.capture JSONB: capture-time facts written ONCE at insert by upload_burst and never
-   touched by the worker (whose result write replaces `validator` wholesale). Absent-when-off:
-   this era it carries `sharpness` and, only when the entry was ambiguous, `direction_dudosa`.
-   A plain /api/upload row carries no capture value (NULL).
+Fase 2:
+1. plates.leftovers_verified JSONB: the human's corrected percentages, beside the model's draft,
+   never over it. Readers use COALESCE(leftovers_verified, leftovers).
+2. review_status gains 'not_plate' (no DDL: the column is TEXT).
+3. plates.capture JSONB: capture-time facts written ONCE at insert by upload_burst.
 
-Every step is a column ADD. Nothing here ever ALTERs or DROPs what exists.
+Fase 3 (table steps are gated on to_regclass, column steps on information_schema):
+4. users: accounts in the database; the reserved 'cuarto' row (role machine) IS the machine floor.
+5. admin_log: the internal bitácora; usuario NULL means the system acted (boot, reconvergence, auto-off).
+6. horario_extensiones: the one-night extension, written by the bot (its ONE writable table).
+7. plates.discarded_at TIMESTAMPTZ: the papelera's retention clock.
+8. jobs.usage JSONB: token counts per finished job, written inside the completion transaction.
+9. sites.device_key TEXT: the site's gafete; init births one for every site that has none.
+10. review_status gains 'discarded' (no DDL). The four-state contract is named below.
+
+Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or ADDs a missing column.
 """
 
 from __future__ import annotations
@@ -37,9 +40,8 @@ log = logging.getLogger("lpq.db.migrations")
 REVIEW_UNREVIEWED = "unreviewed"
 REVIEW_VERIFIED = "verified"
 REVIEW_NOT_PLATE = "not_plate"
-REVIEW_STATUSES = (REVIEW_UNREVIEWED, REVIEW_VERIFIED, REVIEW_NOT_PLATE)
-# 'discarded' is reserved for FASE 3's papelera: named here so nobody reuses the word, never written this era.
-REVIEW_DISCARDED_RESERVED = "discarded"
+REVIEW_DISCARDED = "discarded"      # the papelera: only the papelera lists these rows
+REVIEW_STATUSES = (REVIEW_UNREVIEWED, REVIEW_VERIFIED, REVIEW_NOT_PLATE, REVIEW_DISCARDED)
 
 
 @dataclass(frozen=True)
@@ -52,7 +54,16 @@ class ColumnMigration:
     statement: str
 
 
-MIGRATIONS: tuple[ColumnMigration, ...] = (
+@dataclass(frozen=True)
+class TableMigration:
+    """One CREATE TABLE step (Fase 3): gated on the table's absence, applied verbatim from queries.py."""
+
+    name: str
+    table: str
+    statement: str
+
+
+MIGRATIONS: tuple[ColumnMigration | TableMigration, ...] = (
     ColumnMigration(
         name="plates.leftovers_verified",
         table="plates",
@@ -65,11 +76,41 @@ MIGRATIONS: tuple[ColumnMigration, ...] = (
         column="capture",
         statement=q.ADD_PLATES_CAPTURE,
     ),
+    TableMigration(name="users", table="users", statement=q.CREATE_USERS_TABLE),
+    TableMigration(name="admin_log", table="admin_log", statement=q.CREATE_ADMIN_LOG_TABLE),
+    TableMigration(
+        name="horario_extensiones",
+        table="horario_extensiones",
+        statement=q.CREATE_HORARIO_EXTENSIONES_TABLE,
+    ),
+    ColumnMigration(
+        name="plates.discarded_at",
+        table="plates",
+        column="discarded_at",
+        statement=q.ADD_PLATES_DISCARDED_AT,
+    ),
+    ColumnMigration(
+        name="jobs.usage",
+        table="jobs",
+        column="usage",
+        statement=q.ADD_JOBS_USAGE,
+    ),
+    ColumnMigration(
+        name="sites.device_key",
+        table="sites",
+        column="device_key",
+        statement=q.ADD_SITES_DEVICE_KEY,
+    ),
 )
 
 
 def column_present(conn: psycopg.Connection, table: str, column: str) -> bool:
     row = conn.execute(q.COLUMN_PRESENT, {"table": table, "column": column}).fetchone()
+    return bool(row and row["present"])
+
+
+def table_present(conn: psycopg.Connection, table: str) -> bool:
+    row = conn.execute(q.TABLE_PRESENT, {"qualified": f"public.{table}"}).fetchone()
     return bool(row and row["present"])
 
 
@@ -80,7 +121,11 @@ def run(conn: psycopg.Connection) -> dict[str, str]:
     """
     outcome: dict[str, str] = {}
     for migration in MIGRATIONS:
-        if column_present(conn, migration.table, migration.column):
+        if isinstance(migration, TableMigration):
+            present = table_present(conn, migration.table)
+        else:
+            present = column_present(conn, migration.table, migration.column)
+        if present:
             outcome[migration.name] = "present"
             continue
         conn.execute(migration.statement)

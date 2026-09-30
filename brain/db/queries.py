@@ -3,6 +3,11 @@
 Every statement is a module constant; callers pass a dict of named parameters
 (psycopg 3 syntax: %(name)s). connect() lives here too: the one door into the database.
 Rows come back as dicts (row_factory=dict_row) so callers read columns by name.
+
+Fase 3 adds every statement of the admin era at once: the migrations' table steps, accounts,
+the bitácora, the one-night extensions, the gafete, the papelera, the usage write and the spend
+dashboard, menu editing and reference photos, and the bot's new cursors. The shared plate filter
+now leaves 'discarded' rows out of review, stats and gallery: only the papelera lists them.
 """
 
 from __future__ import annotations
@@ -53,6 +58,50 @@ ADD_PLATES_LEFTOVERS_VERIFIED = "ALTER TABLE plates ADD COLUMN leftovers_verifie
 ADD_PLATES_CAPTURE = "ALTER TABLE plates ADD COLUMN capture JSONB"
 
 
+# --------------------------------------------------------------------- migrations (Fase 3, SPEC 1.2)
+
+# The per-table existence gate: qualified is 'public.<table>'.
+TABLE_PRESENT = "SELECT to_regclass(%(qualified)s) IS NOT NULL AS present"
+
+# Accounts in the database. The reserved 'cuarto' row (role machine) IS the machine floor.
+CREATE_USERS_TABLE = """
+CREATE TABLE users (
+  usuario       TEXT PRIMARY KEY,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'machine')),
+  site          TEXT REFERENCES sites(site),
+  active        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
+# The internal bitácora. usuario NULL = the system acted; the name never reaches a public message.
+CREATE_ADMIN_LOG_TABLE = """
+CREATE TABLE admin_log (
+  id      BIGSERIAL PRIMARY KEY,
+  ts      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  usuario TEXT,
+  action  TEXT NOT NULL,
+  detail  JSONB
+)
+"""
+
+# The one-night extension (the bot's ONE writable table): until = tonight's new close.
+CREATE_HORARIO_EXTENSIONES_TABLE = """
+CREATE TABLE horario_extensiones (
+  id         BIGSERIAL PRIMARY KEY,
+  site       TEXT NOT NULL REFERENCES sites(site),
+  until      TIMESTAMPTZ NOT NULL,
+  chat_id    TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
+ADD_PLATES_DISCARDED_AT = "ALTER TABLE plates ADD COLUMN discarded_at TIMESTAMPTZ"
+ADD_JOBS_USAGE = "ALTER TABLE jobs ADD COLUMN usage JSONB"
+ADD_SITES_DEVICE_KEY = "ALTER TABLE sites ADD COLUMN device_key TEXT"
+
+
 # --------------------------------------------------------------------- seeds (idempotent)
 
 INSERT_SITE = """
@@ -73,24 +122,6 @@ VALUES (%(site)s, %(dish_id)s, %(photo_path)s, %(condition)s)
 ON CONFLICT (site, dish_id, photo_path) DO NOTHING
 """
 
-# The seeder's twin of INSERT_MENU_DISH (T-E1): an EXISTING dish whose definition changed in
-# menu.yaml is updated in place (name, components, plate_type, contable, activo); menu_version is
-# never touched here (bumping is FASE 3). Unchanged dishes match no row: a second run updates nothing.
-UPDATE_MENU_DISH_IF_CHANGED = """
-UPDATE menu_dishes SET
-  nombre      = %(nombre)s,
-  plate_type  = %(plate_type)s,
-  componentes = %(componentes)s,
-  contable    = %(contable)s,
-  activo      = %(activo)s
-WHERE dish_id = %(dish_id)s
-  AND (nombre IS DISTINCT FROM %(nombre)s
-       OR plate_type IS DISTINCT FROM %(plate_type)s
-       OR componentes IS DISTINCT FROM %(componentes)s
-       OR contable IS DISTINCT FROM %(contable)s
-       OR activo IS DISTINCT FROM %(activo)s)
-"""
-
 
 # --------------------------------------------------------------------- sites and menu reads
 
@@ -100,7 +131,8 @@ FROM sites
 WHERE site = %(site)s
 """
 
-# The plan-of-record menu_version stamped at upload (SPEC 1.3).
+# The plan-of-record menu_version stamped at upload (SPEC 1.3) and, from Fase 3, the version clock
+# menu_builder stamps: MAX over ALL dishes, never rewinding; 1 on an empty table.
 MAX_MENU_VERSION = "SELECT COALESCE(MAX(menu_version), 1) AS v FROM menu_dishes"
 
 # menu_builder reads the DATABASE, never menu.yaml (SPEC 1.5).
@@ -116,6 +148,227 @@ SELECT dish_id, photo_path, condition
 FROM site_dish_photos
 WHERE site = %(site)s
 ORDER BY dish_id, photo_path
+"""
+
+
+# --------------------------------------------------------------------- sites, destinations and the gafete (Fase 3)
+
+SELECT_SITES_ALL = "SELECT site, ingestion, telegram_chat_id, active FROM sites ORDER BY site"
+
+# The destinations map's input (api and bot): every active site with a chat.
+SELECT_SITE_CHATS = """
+SELECT site, telegram_chat_id
+FROM sites
+WHERE active AND telegram_chat_id IS NOT NULL
+ORDER BY site
+"""
+
+# /foto, /cola and /extender resolve the site from the group that asked.
+SELECT_SITES_BY_CHAT = "SELECT site FROM sites WHERE active AND telegram_chat_id = %(chat_id)s ORDER BY site"
+
+# chat_id NULL removes the destination (absent-when-off).
+SET_SITE_CHAT = "UPDATE sites SET telegram_chat_id = %(chat_id)s WHERE site = %(site)s RETURNING site"
+
+EDIT_SITE = """
+UPDATE sites SET
+  ingestion = COALESCE(%(ingestion)s::text, ingestion),
+  active    = COALESCE(%(active)s::boolean, active)
+WHERE site = %(site)s
+RETURNING site, ingestion, active
+"""
+
+# Crear restaurante: the site is born WITH its gafete, inside the same all-or-nothing transaction.
+INSERT_SITE_FULL = """
+INSERT INTO sites (site, ingestion, device_key)
+VALUES (%(site)s, %(ingestion)s, %(device_key)s)
+"""
+
+# The gafete's reads and writes. The value is compared in constant time by the caller, never logged.
+SELECT_DEVICE_KEY = "SELECT device_key FROM sites WHERE site = %(site)s AND active"
+SELECT_SITE_KEYS = "SELECT site, device_key FROM sites WHERE active AND device_key IS NOT NULL ORDER BY site"
+SELECT_SITES_WITHOUT_KEY = "SELECT site FROM sites WHERE device_key IS NULL ORDER BY site"
+SET_DEVICE_KEY = "UPDATE sites SET device_key = %(device_key)s WHERE site = %(site)s"
+
+
+# --------------------------------------------------------------------- accounts (Fase 3, SPEC 1.3)
+
+COUNT_USERS = "SELECT COUNT(*) AS n FROM users"
+
+SELECT_USER = """
+SELECT usuario, password_hash, role, site, active
+FROM users
+WHERE usuario = %(usuario)s
+"""
+
+# The users CRUD never lists the reserved machine row.
+LIST_USERS = """
+SELECT usuario, role, site, active, created_at
+FROM users
+WHERE role <> 'machine'
+ORDER BY usuario
+"""
+
+INSERT_USER = """
+INSERT INTO users (usuario, password_hash, role, site)
+VALUES (%(usuario)s, %(password_hash)s, %(role)s, %(site)s)
+"""
+
+# The mostrador's reset: never the machine row.
+RESET_USER_PASSWORD = """
+UPDATE users SET password_hash = %(password_hash)s
+WHERE usuario = %(usuario)s AND role <> 'machine'
+RETURNING usuario
+"""
+
+# set_password over ssh: writes the hash AND reactivates (the owner can always get back in).
+SET_PASSWORD_AND_REACTIVATE = """
+UPDATE users SET password_hash = %(password_hash)s, active = TRUE
+WHERE usuario = %(usuario)s
+RETURNING usuario, role
+"""
+
+# The two reserved names set_password may BIRTH (admin, cuarto): upsert, reactivated.
+UPSERT_RESERVED_USER = """
+INSERT INTO users (usuario, password_hash, role, site, active)
+VALUES (%(usuario)s, %(password_hash)s, %(role)s, NULL, TRUE)
+ON CONFLICT (usuario) DO UPDATE SET password_hash = EXCLUDED.password_hash, active = TRUE
+RETURNING usuario, role
+"""
+
+# Floor 1 may only BIRTH the cuarto row while it does not exist: no row back = it already existed.
+BIRTH_MACHINE_USER = """
+INSERT INTO users (usuario, password_hash, role, site, active)
+VALUES (%(usuario)s, %(password_hash)s, 'machine', NULL, TRUE)
+ON CONFLICT (usuario) DO NOTHING
+RETURNING usuario
+"""
+
+SET_USER_ACTIVE = """
+UPDATE users SET active = %(active)s
+WHERE usuario = %(usuario)s AND role <> 'machine'
+RETURNING usuario
+"""
+
+SET_USER_ROLE = """
+UPDATE users SET role = %(role)s, site = %(site)s
+WHERE usuario = %(usuario)s AND role <> 'machine'
+RETURNING usuario
+"""
+
+# The last active admin can never be deactivated or demoted: the caller checks this count first.
+COUNT_ACTIVE_ADMINS = "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active"
+
+
+# --------------------------------------------------------------------- the bitácora (Fase 3)
+
+INSERT_ADMIN_LOG = """
+INSERT INTO admin_log (usuario, action, detail)
+VALUES (%(usuario)s, %(action)s, %(detail)s)
+RETURNING id
+"""
+
+ADMIN_LOG_RECENT = """
+SELECT id, ts, usuario, action, detail
+FROM admin_log
+ORDER BY id DESC
+LIMIT %(limit)s
+"""
+
+# The bot's read-only cursor: the action and its detail, NEVER the name.
+ADMIN_LOG_MAX_ID = "SELECT COALESCE(MAX(id), 0) AS id FROM admin_log"
+
+ADMIN_LOG_AFTER = """
+SELECT id, ts, action, detail
+FROM admin_log
+WHERE id > %(after_id)s
+ORDER BY id
+"""
+
+
+# --------------------------------------------------------------------- the one-night extension (Fase 3)
+
+INSERT_EXTENSION = """
+INSERT INTO horario_extensiones (site, until, chat_id)
+VALUES (%(site)s, %(until)s, %(chat_id)s)
+RETURNING id
+"""
+
+# Live extensions and the ones that just ended (window: a timedelta), for the vigilantes and the
+# return-to-default announcement. An expired row is dead by comparison.
+SELECT_RECENT_EXTENSIONS = """
+SELECT id, site, until, chat_id, created_at
+FROM horario_extensiones
+WHERE until > now() - %(window)s
+ORDER BY site, until
+"""
+
+# The worker's sweep: rows long past (grace: a timedelta) leave the table.
+PURGE_OLD_EXTENSIONS = "DELETE FROM horario_extensiones WHERE until < now() - %(grace)s"
+
+
+# --------------------------------------------------------------------- menu editing and reference photos (Fase 3)
+
+SELECT_ALL_DISHES = """
+SELECT dish_id, nombre, plate_type, componentes, contable, activo, menu_version
+FROM menu_dishes
+ORDER BY dish_id
+"""
+
+SELECT_DISH = """
+SELECT dish_id, nombre, plate_type, componentes, contable, activo, menu_version
+FROM menu_dishes
+WHERE dish_id = %(dish_id)s
+"""
+
+# A definition edit; menu_version is the caller's decision (global MAX+1 only when the SET of
+# component names changed, else unchanged).
+UPDATE_DISH_DEFINITION = """
+UPDATE menu_dishes SET
+  nombre       = %(nombre)s,
+  plate_type   = %(plate_type)s,
+  componentes  = %(componentes)s,
+  menu_version = %(menu_version)s
+WHERE dish_id = %(dish_id)s
+RETURNING dish_id
+"""
+
+# A toggle never bumps the version.
+SET_DISH_ACTIVE = "UPDATE menu_dishes SET activo = %(activo)s WHERE dish_id = %(dish_id)s RETURNING dish_id"
+
+SELECT_ALL_SITE_DISH_PHOTOS = """
+SELECT site, dish_id, photo_path, condition
+FROM site_dish_photos
+ORDER BY site, dish_id, photo_path
+"""
+
+SELECT_DISH_PHOTOS_OF_SITE = """
+SELECT photo_path, condition
+FROM site_dish_photos
+WHERE site = %(site)s AND dish_id = %(dish_id)s
+ORDER BY photo_path
+"""
+
+# Delete = detach ONE site's row; the files die only when no row references them (copy-on-diverge).
+DELETE_SITE_DISH_PHOTO = """
+DELETE FROM site_dish_photos
+WHERE site = %(site)s AND dish_id = %(dish_id)s AND photo_path = %(photo_path)s
+"""
+
+# Replace = repoint ONE site's row to the new pair; a shared file is never touched.
+REPOINT_SITE_DISH_PHOTO = """
+UPDATE site_dish_photos SET photo_path = %(new_path)s, condition = %(condition)s
+WHERE site = %(site)s AND dish_id = %(dish_id)s AND photo_path = %(photo_path)s
+"""
+
+COUNT_PHOTO_REFS = "SELECT COUNT(*) AS n FROM site_dish_photos WHERE photo_path = %(photo_path)s"
+
+# Crear restaurante's menu clone: the new site's rows point at the SAME files as the closest site.
+CLONE_SITE_PHOTOS = """
+INSERT INTO site_dish_photos (site, dish_id, photo_path, condition)
+SELECT %(site)s, dish_id, photo_path, condition
+FROM site_dish_photos
+WHERE site = %(from_site)s
+ON CONFLICT DO NOTHING
 """
 
 
@@ -175,7 +428,7 @@ WHERE id = (
 RETURNING *
 """
 
-# Step 4, executed with MARK_JOB_DONE in ONE transaction: the result and the provenance
+# Step 4, executed with the completion in ONE transaction: the result and the provenance
 # ACTUALLY used are welded to the job's completion. A finished row tells the physical truth.
 WRITE_ANALYZE_RESULT = """
 UPDATE plates SET
@@ -191,7 +444,7 @@ WHERE id = %(plate_id)s
 
 # The express lane's twin (T-E5): the grade lands in its own JSONB, the dish id in dish_predicted,
 # the parse repairs/flags in validator (the worker owns validator on both lanes), all welded to
-# MARK_JOB_DONE in ONE transaction with the presentation prompt's own version.
+# the completion in ONE transaction with the presentation prompt's own version.
 WRITE_PRESENTATION_RESULT = """
 UPDATE plates SET
   dish_predicted = %(dish_predicted)s,
@@ -203,8 +456,15 @@ UPDATE plates SET
 WHERE id = %(plate_id)s
 """
 
+# The Fase-2 completion (no usage): kept byte-compatible for the Fase-2 worker path.
 MARK_JOB_DONE = """
 UPDATE jobs SET status = 'done', finished_at = now()
+WHERE id = %(job_id)s
+"""
+
+# The Fase-3 completion: the job's token usage lands in the SAME transaction as the result.
+MARK_JOB_DONE_WITH_USAGE = """
+UPDATE jobs SET status = 'done', finished_at = now(), usage = %(usage)s
 WHERE id = %(job_id)s
 """
 
@@ -221,18 +481,36 @@ UPDATE jobs SET status = 'failed', finished_at = now(), last_error = %(last_erro
 WHERE id = %(job_id)s
 """
 
+# Reintentar (Fase 3): failed -> pending with attempts reset, the whole scope at once (site NULL =
+# every site: admin only; a manager passes its own). A discarded plate is never retried.
+RETRY_FAILED = """
+UPDATE jobs AS j SET
+  status = 'pending', attempts = 0, run_after = now(), last_error = NULL,
+  started_at = NULL, finished_at = NULL
+FROM plates AS p
+WHERE p.id = j.plate_id
+  AND j.status = 'failed'
+  AND p.review_status <> 'discarded'
+  AND (%(site)s::text IS NULL OR p.site = %(site)s)
+"""
+
+# The post-reboot checklist's queue depths.
+QUEUE_DEPTHS = "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status ORDER BY status"
+
 
 # --------------------------------------------------------------------- review / stats / gallery (Fase 2, SPEC 1.3)
 
 # The shared filter clause. Every optional filter is NULL-tolerant, so ONE statement serves every
 # filter combination and no SQL is ever assembled outside this file. `site` is the SCOPED site
 # (a site account is forced to its own; admin passes what it asked or NULL = all). date_to is
-# inclusive: ts < date_to + 1 day. Casts make a Python None a typed NULL.
+# inclusive: ts < date_to + 1 day. Casts make a Python None a typed NULL. From Fase 3 a discarded
+# row is invisible to every reader of this clause: only the papelera lists it.
 _PLATE_FILTERS = """
   (%(site)s::text IS NULL OR site = %(site)s)
   AND (%(record_type)s::text IS NULL OR record_type = %(record_type)s)
   AND (%(date_from)s::date IS NULL OR ts >= %(date_from)s::date)
   AND (%(date_to)s::date IS NULL OR ts < (%(date_to)s::date + 1))
+  AND review_status <> 'discarded'
 """
 
 # The one-row scope: an id the session may touch, or nothing.
@@ -255,19 +533,20 @@ LIMIT %(limit)s OFFSET %(offset)s
 """
 
 # The one-by-one correction: the human's dish and percentages land BESIDE the model's draft
-# (leftovers stays untouched; leftovers_verified NULL = the model was right).
+# (leftovers stays untouched; leftovers_verified NULL = the model was right). A discarded row is
+# only restorable through the papelera, never through review.
 VERIFY_PLATE = f"""
 UPDATE plates SET
   dish_verified      = %(dish_verified)s,
   leftovers_verified = %(leftovers_verified)s,
   review_status      = 'verified'
-WHERE id = %(id)s AND {_SCOPE}
+WHERE id = %(id)s AND review_status <> 'discarded' AND {_SCOPE}
 RETURNING *
 """
 
 SET_REVIEW_STATUS = f"""
 UPDATE plates SET review_status = %(status)s
-WHERE id = %(id)s AND {_SCOPE}
+WHERE id = %(id)s AND review_status <> 'discarded' AND {_SCOPE}
 RETURNING *
 """
 
@@ -278,12 +557,24 @@ UPDATE plates SET
   dish_verified      = dish_predicted,
   leftovers_verified = NULL,
   review_status      = 'verified'
-WHERE id = ANY(%(ids)s) AND dish_predicted IS NOT NULL AND {_SCOPE}
+WHERE id = ANY(%(ids)s) AND dish_predicted IS NOT NULL AND review_status <> 'discarded' AND {_SCOPE}
 """
 
 BULK_SET_REVIEW_STATUS = f"""
 UPDATE plates SET review_status = %(status)s
-WHERE id = ANY(%(ids)s) AND {_SCOPE}
+WHERE id = ANY(%(ids)s) AND review_status <> 'discarded' AND {_SCOPE}
+"""
+
+# Descartar (Fase 3): into the papelera, with the retention clock started.
+DISCARD_PLATE = f"""
+UPDATE plates SET review_status = 'discarded', discarded_at = now()
+WHERE id = %(id)s AND review_status <> 'discarded' AND {_SCOPE}
+RETURNING *
+"""
+
+BULK_DISCARD = f"""
+UPDATE plates SET review_status = 'discarded', discarded_at = now()
+WHERE id = ANY(%(ids)s) AND review_status <> 'discarded' AND {_SCOPE}
 """
 
 # --- stats (panel): aggregates computed live, no rollup tables this era ---------------------
@@ -351,6 +642,18 @@ WHERE record_type = 'outgoing'
   AND {_PLATE_FILTERS}
 """
 
+# The panel's "bajo el umbral" tile (Fase 3): analyzed return rows whose confidence ranks under
+# confianza_minima (min_rank: alta 3, media 2, baja 1).
+STATS_LOW_CONFIDENCE = f"""
+SELECT COUNT(*) AS n
+FROM plates
+WHERE record_type = 'return'
+  AND review_status <> 'not_plate'
+  AND confidence IS NOT NULL
+  AND (CASE confidence WHEN 'alta' THEN 3 WHEN 'media' THEN 2 ELSE 1 END) < %(min_rank)s
+  AND {_PLATE_FILTERS}
+"""
+
 # --- gallery ---------------------------------------------------------------------------------
 
 _GALLERY_FILTERS = f"""
@@ -374,31 +677,115 @@ LIMIT %(limit)s OFFSET %(offset)s
 SELECT_PHOTO_PATH_SCOPED = f"SELECT photo_path FROM plates WHERE id = %(id)s AND {_SCOPE}"
 
 
-# --------------------------------------------------------------------- the bot (Fase 2, T-D2): READ-ONLY
+# --------------------------------------------------------------------- the papelera (Fase 3, SPEC 1.5)
 
-# /cola: the last plate the worker finished, with its dish and how long ago.
-BOT_LAST_DONE = """
-SELECT j.plate_id, COALESCE(p.dish_verified, p.dish_predicted) AS dish,
-       EXTRACT(EPOCH FROM (now() - j.finished_at)) AS age_s
-FROM jobs j JOIN plates p ON p.id = j.plate_id
-WHERE j.status = 'done'
-ORDER BY j.finished_at DESC
-LIMIT 1
+PAPELERA_COUNT = f"SELECT COUNT(*) AS n FROM plates WHERE review_status = 'discarded' AND {_SCOPE}"
+
+PAPELERA_LIST = f"""
+SELECT id, site, camera, record_type, ts, discarded_at, dish_predicted, dish_verified,
+       confidence, presentation
+FROM plates
+WHERE review_status = 'discarded' AND {_SCOPE}
+ORDER BY discarded_at DESC, id DESC
+LIMIT %(limit)s OFFSET %(offset)s
 """
+
+# Restore: back to pendientes, corrections kept, the retention clock cleared.
+PAPELERA_RESTORE = f"""
+UPDATE plates SET review_status = 'unreviewed', discarded_at = NULL
+WHERE id = ANY(%(ids)s) AND review_status = 'discarded' AND {_SCOPE}
+"""
+
+# Eliminar-ya: lock the chosen discarded rows (and read their photos) before deleting them.
+PAPELERA_LOCK_FOR_DELETE = f"""
+SELECT id, photo_path
+FROM plates
+WHERE id = ANY(%(ids)s) AND review_status = 'discarded' AND {_SCOPE}
+FOR UPDATE
+"""
+
+# The worker's retention purge (retention: a timedelta): multi-worker safe through SKIP LOCKED.
+PURGE_DUE_DISCARDED = """
+SELECT id, photo_path
+FROM plates
+WHERE review_status = 'discarded' AND discarded_at < now() - %(retention)s
+ORDER BY discarded_at, id
+LIMIT %(limit)s
+FOR UPDATE SKIP LOCKED
+"""
+
+# jobs.plate_id has no cascade and schema.sql stays sealed: the plate's jobs die FIRST.
+DELETE_JOBS_OF_PLATES = "DELETE FROM jobs WHERE plate_id = ANY(%(ids)s)"
+DELETE_PLATES_BY_IDS = "DELETE FROM plates WHERE id = ANY(%(ids)s) AND review_status = 'discarded'"
+
+
+# --------------------------------------------------------------------- spend (Fase 3, SPEC 1.5): gasto de filas vivas
+
+# One site's usage per LOCAL day (tz: the site's timezone name) and model, from `since` (timestamptz).
+SPEND_BY_DAY = """
+SELECT
+  (j.finished_at AT TIME ZONE %(tz)s)::date AS day,
+  p.model,
+  COUNT(*) AS jobs,
+  COALESCE(SUM((j.usage->>'calls')::bigint), 0) AS calls,
+  COALESCE(SUM((j.usage->>'prompt_tokens')::bigint), 0) AS prompt_tokens,
+  COALESCE(SUM((j.usage->>'completion_tokens')::bigint), 0) AS completion_tokens,
+  COALESCE(SUM((j.usage->>'cache_creation_input_tokens')::bigint), 0) AS cache_creation_input_tokens,
+  COALESCE(SUM((j.usage->>'cache_read_input_tokens')::bigint), 0) AS cache_read_input_tokens
+FROM jobs AS j
+JOIN plates AS p ON p.id = j.plate_id
+WHERE j.status = 'done' AND j.usage IS NOT NULL AND p.site = %(site)s AND j.finished_at >= %(since)s
+GROUP BY 1, 2
+ORDER BY 1 DESC, 2
+"""
+
+# The cache hit-rate beside the cache knob: the whole chain's counters since `since`.
+USAGE_TOTALS_SINCE = """
+SELECT
+  COUNT(*) AS jobs,
+  COALESCE(SUM((usage->>'prompt_tokens')::bigint), 0) AS prompt_tokens,
+  COALESCE(SUM((usage->>'cache_creation_input_tokens')::bigint), 0) AS cache_creation_input_tokens,
+  COALESCE(SUM((usage->>'cache_read_input_tokens')::bigint), 0) AS cache_read_input_tokens
+FROM jobs
+WHERE status = 'done' AND usage IS NOT NULL AND finished_at >= %(since)s
+"""
+
+
+# --------------------------------------------------------------------- the bot: READ-ONLY here (its one table is above)
 
 COUNT_WORKING_JOBS = "SELECT COUNT(*) AS n FROM jobs WHERE status = 'working'"
 
 # The silent-worker clock: when did the worker last finish anything.
 BOT_LAST_DONE_AT = "SELECT MAX(finished_at) AS at FROM jobs WHERE status = 'done'"
 
-# Failures announced from this boot on: the bot remembers the highest failed id it has seen.
-BOT_MAX_FAILED_ID = "SELECT COALESCE(MAX(id), 0) AS id FROM jobs WHERE status = 'failed'"
+# /cola, resolved to the group's site: the last plate of THAT site the worker finished.
+BOT_LAST_DONE_SITE = """
+SELECT j.plate_id, COALESCE(p.dish_verified, p.dish_predicted) AS dish,
+       EXTRACT(EPOCH FROM (now() - j.finished_at)) AS age_s
+FROM jobs AS j
+JOIN plates AS p ON p.id = j.plate_id
+WHERE j.status = 'done' AND p.site = %(site)s
+ORDER BY j.finished_at DESC
+LIMIT 1
+"""
 
-BOT_NEW_FAILED = """
-SELECT id, plate_id, attempts, last_error
+# Failures announced by finished_at (a retried job keeps its id: its second failure must not vanish).
+# The cursor is the pair (finished_at, id); the baseline is the newest failure at boot.
+BOT_FAILED_CURSOR = """
+SELECT finished_at, id
 FROM jobs
-WHERE status = 'failed' AND id > %(after_id)s
-ORDER BY id
+WHERE status = 'failed' AND finished_at IS NOT NULL
+ORDER BY finished_at DESC, id DESC
+LIMIT 1
+"""
+
+BOT_FAILED_AFTER = """
+SELECT id, plate_id, attempts, last_error, finished_at
+FROM jobs
+WHERE status = 'failed' AND finished_at IS NOT NULL
+  AND (%(after_at)s::timestamptz IS NULL
+       OR (finished_at, id) > (%(after_at)s::timestamptz, %(after_id)s::bigint))
+ORDER BY finished_at, id
 """
 
 # Dirty lens: the last n bursts of one camera and their sharpness (only rows that carry it).

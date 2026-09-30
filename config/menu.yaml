@@ -1,10 +1,12 @@
-# LPQ_VISION - menu.yaml (the sealed layered shape)
+# LPQ_VISION - menu.yaml (the sealed layered shape): the SEED and BACKUP road of the menu.
+# From Fase 3 the DATABASE is the menu's edited truth: the mostrador creates dishes (CREAR PLATILLO),
+# edits components, toggles dishes and uploads reference photos there. This file seeds a FRESH install,
+# and `python -m scripts.seed_menu` (inside the fastapi container) adds only dishes that do not exist yet,
+# with their photos; it never updates an existing dish and never re-adds a photo row the admin detached.
 # menu:  universal layer, one entry per dish_id (snake_case key) with its components and portions.
 # sites: per-site layer, reference photos per dish (paths RELATIVE to the photos root, /data/photos
-#        in every container; the files enter the volume with docker compose cp).
-# Component names are ASCII snake_case on purpose: they become the exact keys of the model's JSON
-# answer. Editing this file + running `python -m scripts.seed_menu` inside the fastapi container is
-# how the menu changes: no code changes, ever. menu_version stays 1 this era (bumping is FASE 3).
+#        in every container).
+# Component names are ASCII snake_case on purpose: they become the exact keys of the model's JSON answer.
 menu:
   tartine_aguacate:
     nombre: Tartine de aguacate

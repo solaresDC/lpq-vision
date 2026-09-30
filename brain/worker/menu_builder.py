@@ -5,6 +5,10 @@ menu_version the worker stamps is the one actually used (SPEC 1.5). Inheritance:
 without a photo for this site borrows the photos stored under BRAND_SITE, if any. The
 reference is a plain-text block (the model's universe) plus the photo bytes that travel
 with it inside the stable prefix.
+
+The version stamp (Fase 3) is MAX(menu_version) over ALL dishes, active or not: a version
+clock never rewinds, so deactivating the top-version dish can never resurrect a number that
+once meant a different menu. With every dish active (today) it equals the Fase-2 number.
 """
 
 from __future__ import annotations
@@ -95,8 +99,9 @@ def build_reference(conn: psycopg.Connection, site: str) -> MenuReference:
             if loaded is not None:
                 photos.append(loaded)
 
-    # The version of the reference ACTUALLY built: what the result transaction stamps.
-    menu_version = max((int(d["menu_version"]) for d in dishes), default=1)
+    # The version clock: MAX over ALL dishes (active or not), the same number upload stamps as the
+    # plan of record. It never rewinds (SPEC 1.5 and HQ call 35).
+    menu_version = int(conn.execute(q.MAX_MENU_VERSION).fetchone()["v"])
     universe = {d["dish_id"]: [c["nombre"] for c in d["componentes"]] for d in dishes}
 
     return MenuReference(
