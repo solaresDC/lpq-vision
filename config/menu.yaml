@@ -23,6 +23,19 @@ menu:
       - {nombre: relleno_champinones, porcion_g: 60}   # el relleno visible (champinones, pimiento y jitomate que asoman)
       - {nombre: ensalada_espinaca, porcion_g: 40}     # las hojas de espinaca con tiras de pimiento rojo
       - {nombre: pan_tostado, porcion_g: 60}           # las dos rebanadas de pan con semillas
+  ensalada_queso_cabra:
+    nombre: Ensalada de queso de cabra
+    componentes:
+      - {nombre: queso_cabra, porcion_g: 60}           # queso de cabra gratinado sobre los 3 pedazos de flauta
+      - {nombre: flauta_avellana, porcion_g: 30}       # 3 pedazos de flauta de avellana (10 g cada uno)
+      - {nombre: jitomate, porcion_g: 80}              # jitomate en cunas
+      - {nombre: espinaca, porcion_g: 60}              # la cama de espinaca
+      - {nombre: calabaza, porcion_g: 70}              # 3 laminas de calabaza
+      - {nombre: higo, porcion_g: 60}                  # las mitades de higo
+      - {nombre: vinagreta_frambuesa, porcion_g: 30}   # 30 ml de vinagreta, en el ramekin
+      - {nombre: germen_betabel, porcion_g: 3}         # firma de germen sobre el queso de cabra
+      - {nombre: hemp, porcion_g: 3}                   # espolvoreado sobre la ensalada
+      - {nombre: perejil, porcion_g: 2}                # firma de perejil al centro
   tartine_chipotle_club:
     nombre: Tartine Chipotle Club
     componentes:
@@ -45,5 +58,7 @@ sites:
         - {path: reference/tartine_aguacate/1.jpg, condition: normal}
       omelette_champinones:
         - {path: reference/omelette_champinones/1.jpg, condition: normal}
+      ensalada_queso_cabra:
+        - {path: reference/ensalada_queso_cabra/1.jpg, condition: normal}
       tartine_chipotle_club:
         - {path: reference/tartine_chipotle_club/1.jpg, condition: normal}
