@@ -8,6 +8,10 @@ carries cache_control ephemeral (5m); the plate photo travels after the mark, ne
 cached. A discount, never a dependency: below-minimum prefixes are processed at full
 price silently, and the counters are logged on every call so the evidence accumulates
 alone. The prefix is never padded to chase the discount.
+
+From Fase 3 the call's max_tokens and timeout come from the machine block per pass (the
+worker passes them); MAX_TOKENS and LLM_TIMEOUT_S keep their names as the absent-key
+defaults, whose values have ONE home: brain/validator/models.py's MachineConfig.
 """
 
 from __future__ import annotations
@@ -20,13 +24,14 @@ from typing import Any
 
 import litellm
 
+from brain.validator.models import MACHINE_DEFAULTS
 from brain.worker.menu_builder import MenuReference
 
 log = logging.getLogger("lpq.adapter.llm")
 
 # --- named constants (SPEC section 4) -------------------------------------------------
-LLM_TIMEOUT_S = 120          # one attempt may take at most this; the worker asserts it < ORPHAN_TIMEOUT
-MAX_TOKENS = 1024
+LLM_TIMEOUT_S = MACHINE_DEFAULTS.llm_timeout_s   # absent-key default; the machine block keeps it under the orphan window
+MAX_TOKENS = MACHINE_DEFAULTS.max_tokens         # absent-key default of machine.max_tokens
 # No sampling parameter is sent: claude-sonnet-5 rejects any non-default temperature/top_p/top_k
 # with a 400, so the provider default applies (temperature=0 never guaranteed identical outputs).
 CACHE_TTL = "5m"             # the ephemeral mark's TTL (provider default for ephemeral); 1h is on hold
@@ -122,14 +127,22 @@ def _usage_int(usage: Any, *paths: str) -> int:
     return 0
 
 
-def complete(model: str, messages: list[dict[str, Any]], provider: str | None) -> LLMResult:
-    """ONE call, ONE timeout. Any exception propagates: the caller fails the attempt."""
+def complete(
+    model: str,
+    messages: list[dict[str, Any]],
+    provider: str | None,
+    *,
+    max_tokens: int = MAX_TOKENS,
+    timeout_s: int = LLM_TIMEOUT_S,
+) -> LLMResult:
+    """ONE call, ONE timeout (both from the machine block per pass). Any exception propagates:
+    the caller fails the attempt."""
     started = time.monotonic()
     response = litellm.completion(
         model=model,
         messages=messages,
-        max_tokens=MAX_TOKENS,
-        timeout=LLM_TIMEOUT_S,
+        max_tokens=max_tokens,
+        timeout=timeout_s,
         num_retries=0,                      # the queue is the only retry mechanism
         custom_llm_provider=provider,
     )
@@ -150,9 +163,9 @@ def complete(model: str, messages: list[dict[str, Any]], provider: str | None) -
         latency_ms=latency_ms,
     )
     log.info(
-        "llm call model=%s provider=%s latency_ms=%d prompt_tokens=%d completion_tokens=%d "
-        "cache_creation_input_tokens=%d cache_read_input_tokens=%d",
-        model, provider, latency_ms, result.prompt_tokens, result.completion_tokens,
+        "llm call model=%s provider=%s latency_ms=%d max_tokens=%d timeout_s=%d prompt_tokens=%d "
+        "completion_tokens=%d cache_creation_input_tokens=%d cache_read_input_tokens=%d",
+        model, provider, latency_ms, max_tokens, timeout_s, result.prompt_tokens, result.completion_tokens,
         result.cache_creation_input_tokens, result.cache_read_input_tokens,
     )
     return result
