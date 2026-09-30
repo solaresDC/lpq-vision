@@ -8,6 +8,12 @@ Fase 2 mounts, without touching the three above: api/auth.py (login/logout/sessi
 api/routes.py (every other /api/* endpoint: the capture lane from 2.6, review/stats/gallery from 2.7), frontend/routes.py (the five
 pages as static files) and /static (the page assets). Ownership: this service runs
 brain.db.init at startup, BEFORE serving (SPEC 1.8). The auto docs stay switched off.
+
+Fase 3 (3.6): the admin hub is mounted (api/admin.py mounts its families from a fixed list); this
+process keeps a log file for the machine room's viewer (/data/logs/fastapi.log); the boot report and
+boot time live on app.state for the post-reboot checklist; a pure-ASGI middleware remembers when the
+bot last called; a timer switches the forensic river off at raw_logging_off_at through the one writer;
+and /api/upload stamps the SELECTED merma prompt's version as the plan of record.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
@@ -29,18 +36,21 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from api import admin, config_writer
 from api import auth
 from api import routes as api_routes
+from brain.adapter import raw_log
 from brain.capture.backends import PHOTO_ROOT
 from brain.db import init as db_init
 from brain.db import queries as q
-from brain.validator.models import PROMPT_VERSION, UploadRequest, load_config
+from brain.validator.models import CONFIG_PATH, Config, UploadRequest, load_config, prompt_version_for
 from frontend import routes as frontend_routes
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+raw_log.add_service_log_file("fastapi")   # the machine room's viewer tails /data/logs/fastapi.log
 log = logging.getLogger("lpq.api")
 
 # --- named constants (SPEC section 4) -------------------------------------------------
@@ -52,6 +62,60 @@ log = logging.getLogger("lpq.api")
 PHOTO_NS = uuid.UUID("7f2a9c1e-3b4d-4f6a-8e5c-1d2b3a4c5e6f")
 JOB_KIND_ANALYZE = "analyze"
 JOB_PRIORITY_RETURN = 100
+AUTO_OFF_POLL_S = 30               # how often the forensic river's timer looks at raw_logging_off_at
+BOT_UA_PREFIX = "lpq-bot"          # the bot's User-Agent prefix (it sends it from 3.11)
+
+# When the bot last called this api (the machine room's status reads it). One process, one dict.
+LAST_SEEN: dict[str, datetime] = {}
+_BOT_UA = BOT_UA_PREFIX.encode("ascii")
+
+
+class _LastSeen:
+    """Pure ASGI: it never wraps a response, so the log viewer's SSE stream passes untouched."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") == "http":
+            for name, value in scope.get("headers") or ():
+                if name == b"user-agent" and value.startswith(_BOT_UA):
+                    LAST_SEEN["bot"] = datetime.now(timezone.utc)
+                    break
+        await self.app(scope, receive, send)
+
+
+# --- the forensic river's timer (SPEC 1.5): raw_logging never outlives raw_logging_off_at ---------
+
+def auto_off_due(cfg: Config, now: datetime) -> bool:
+    return bool(cfg.raw_logging and cfg.raw_logging_off_at is not None and now >= cfg.raw_logging_off_at)
+
+
+async def raw_logging_auto_off_once(config_path: Path = CONFIG_PATH) -> bool:
+    """One look: when due, raw_logging goes false and raw_logging_off_at disappears in ONE write through
+    the one writer, plus a bitácora row (usuario NULL: the system acted). True when it acted."""
+    cfg = await asyncio.to_thread(load_config, config_path)
+    if not auto_off_due(cfg, datetime.now(timezone.utc)):
+        return False
+    due = cfg.raw_logging_off_at.isoformat()
+    await config_writer.write(
+        [config_writer.set_op(("raw_logging",), False), config_writer.delete_op(("raw_logging_off_at",))],
+        config_path=config_path,
+    )
+    await asyncio.to_thread(admin.log_action, None, "raw_logging.auto_off", {"due": due})
+    log.info("raw_logging switched off by its timer (due %s)", due)
+    return True
+
+
+async def _raw_logging_timer() -> None:
+    while True:
+        try:
+            await raw_logging_auto_off_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("raw_logging timer check failed; it looks again in %d s", AUTO_OFF_POLL_S)
+        await asyncio.sleep(AUTO_OFF_POLL_S)
 
 
 @asynccontextmanager
@@ -59,8 +123,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Init is existence-gated and idempotent; running it here, before the first request,
     # is what makes /api/health answer only once the tables exist.
     outcome = await asyncio.to_thread(db_init.run)
+    app.state.boot_at = datetime.now(timezone.utc)
+    app.state.init_report = dict(db_init.last_report)   # the post-reboot checklist reads it (3.15)
+    app.state.last_seen = LAST_SEEN
+    timer = asyncio.create_task(_raw_logging_timer())
+    await admin.startup(app)                            # each mounted family's own startup hook
     log.info("startup: db init %s, serving", outcome)
-    yield
+    try:
+        yield
+    finally:
+        timer.cancel()
 
 
 app = FastAPI(
@@ -70,6 +142,7 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+app.add_middleware(_LastSeen)
 
 
 def _error(status: int, reason: str) -> JSONResponse:
@@ -166,7 +239,7 @@ def _register_plate(req: UploadRequest, rel_path: str, data: bytes) -> dict[str,
                 "record_type": req.record_type,
                 "photo_path": rel_path,
                 "model": cfg.active_model,
-                "prompt_version": PROMPT_VERSION,
+                "prompt_version": prompt_version_for(cfg, "merma"),
                 "menu_version": menu_version,
             },
         ).fetchone()
@@ -239,6 +312,7 @@ async def get_plate(plate_id: int) -> Any:
 # --- Fase-2 wiring (the three endpoints above are untouched) --------------------------
 
 app.include_router(auth.router)
+admin.mount(app)                   # the admin hub + every built family (fixed list; unbuilt ones skipped)
 app.include_router(api_routes.router)
 app.include_router(frontend_routes.router)
 
