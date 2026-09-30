@@ -1,4 +1,4 @@
-"""The face's router: the five pages served as STATIC files, zero logic (SPEC 1.4).
+"""The face's router: the seven pages served as STATIC files, zero logic (SPEC 1.4).
 
 No template engine exists or ever will (jinja2 never enters this repo): every page is a plain
 HTML file that talks to /api/* with fetch. The assets (app.css, app.js, the page scripts) are
@@ -19,13 +19,16 @@ FRONTEND_DIR = Path(__file__).resolve().parent
 PAGES_DIR = FRONTEND_DIR / "pages"
 STATIC_DIR = FRONTEND_DIR / "static"
 
-# URL name -> file. Only these five exist this era (SPEC 1.4).
+# URL name -> file: the five Fase-2 pages and the two floors of Fase 3 (SPEC 1.4). A page whose file
+# is not built yet (maquinas until 3.15) answers the clear 404 below.
 PAGES: dict[str, str] = {
     "captura": "captura.html",
     "panel": "panel.html",
     "review": "review.html",
     "galeria": "galeria.html",
     "camara": "camara.html",
+    "admin": "admin.html",          # the mostrador (floor 1)
+    "maquinas": "maquinas.html",    # the machine room (floor 2)
 }
 
 router = APIRouter()
@@ -46,6 +49,7 @@ def _serve(filename: str) -> Callable:
 for _name, _filename in PAGES.items():
     # response_model=None: the handler returns Response objects, and FastAPI cannot build a
     # response model from the FileResponse | JSONResponse annotation (it fails at import).
+    # HEAD too: link checkers and the Home-Screen install probe a page before loading it (Fase-2 debt).
     router.add_api_route(
-        f"/{_name}", _serve(_filename), methods=["GET"], include_in_schema=False, response_model=None
+        f"/{_name}", _serve(_filename), methods=["GET", "HEAD"], include_in_schema=False, response_model=None
     )

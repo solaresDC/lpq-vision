@@ -81,7 +81,12 @@ export async function api(path, { method = "GET", json, form } = {}) {
   }
   const ct = res.headers.get("content-type") || "";
   const data = ct.includes("application/json") ? await res.json() : await res.text();
-  if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+  if (!res.ok) {
+    // The admin floors read err.status: 403 (grant gone), 409 (already exists), 410 (confirm expired).
+    const err = new Error((data && data.error) || ("HTTP " + res.status));
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -154,8 +159,10 @@ const NAV = [["panel", "Panel"], ["review", "Review"], ["galeria", "Galería"], 
 // and Salir. sess may be null (no session yet): the chip is simply absent.
 export function mountHeader(title, sess) {
   const current = location.pathname.replace(/^\//, "");
-  const nav = el("nav", {}, NAV.map(([path, label]) =>
-    el("a", { href: `/${path}`, class: current === path ? "current" : "", text: label })));
+  // Fase 3: a logged-in account also sees the mostrador; only the admin sees the machine room.
+  const items = NAV.concat(sess ? [["admin", "Mostrador"]] : [], sess && sess.admin ? [["maquinas", "Máquinas"]] : []);
+  const nav = el("nav", {}, items.map(([path, label]) =>
+    el("a", { href: "/" + path, class: current === path ? "current" : "", text: label })));
   const bar = el("header", { class: "topbar" }, el("h1", { text: title }), nav, el("div", { class: "spacer" }));
   if (sess) {
     bar.append(sess.admin
