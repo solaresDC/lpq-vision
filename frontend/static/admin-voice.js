@@ -1,8 +1,9 @@
 // LPQ_VISION admin-voice.js: the Voz del bot tab of the mostrador (family admin_voice; SPEC 1.5).
 // Destino Telegram: each visible site's chat (pasted from /id), its test and its mantenimiento switch; the
-// admin also sees the admin chat (machine alerts). Textos del bot (admin only): every message with its
-// fichas as chips (a click inserts one at the cursor), Guardar, Probar (example values) and Restaurar
-// original. Tests go through the api's own Telegram helper, so they work even when the bot is down.
+// admin also sees the admin chat (machine alerts). A chat field takes ONLY digits: Telegram group ids are
+// negative, so the page shows a fixed "-" and saves "-" plus the digits. Textos del bot (admin only): every
+// message with its fichas as chips (a click inserts one at the cursor), Guardar, Probar (example values)
+// and Restaurar original. Tests go through the api's own Telegram helper, so they work even with the bot down.
 
 import { api, el, toast } from "/static/app.js";
 import { busy, card } from "/static/admin-kit.js";
@@ -16,6 +17,7 @@ const FAMILIAS = {
 };
 const TEXTAREA_STYLE = "width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); "
   + "border-radius: var(--radius); background: var(--paper); margin: 6px 0;";
+const DIGITS_HINT = "Pega solo los números: el signo menos lo pone el sistema.";
 
 export async function render(ctx) {
   const voice = await api("/api/admin/voice");
@@ -43,6 +45,19 @@ function wire(button, error, fn, okText) {
   return button;
 }
 
+// chatField(current): only digits survive typing or pasting ("-1001234" keeps "1001234"); read() answers
+// "-" plus the digits, or null when empty (an empty field removes the chat: absent-when-off).
+function chatField(current) {
+  const input = el("input", { type: "text", inputmode: "numeric", autocomplete: "off", placeholder: "1001234567890" });
+  input.value = String(current || "").replace(/[^0-9]/g, "");
+  input.addEventListener("input", () => {
+    const digits = input.value.replace(/[^0-9]/g, "");
+    if (digits !== input.value) input.value = digits;
+  });
+  const node = el("span", { class: "kit-edit" }, el("span", { class: "kit-value", text: "-" }), input);
+  return { node: node, read: () => (input.value ? "-" + input.value : null) };
+}
+
 // --- Destino Telegram ----------------------------------------------------------------------
 
 function destinoCard(voice, ctx) {
@@ -50,7 +65,7 @@ function destinoCard(voice, ctx) {
     el("p", {
       class: "muted",
       text: "Escribe /id en el grupo de Telegram del sitio: el bot contesta con el número del chat. "
-        + "Pégalo aquí, pulsa Guardar y luego «Enviar prueba».",
+        + DIGITS_HINT + " Pulsa Guardar y luego «Enviar prueba».",
     }),
     ...voice.sites.map((s) => siteRow(s, ctx)),
   ];
@@ -59,15 +74,14 @@ function destinoCard(voice, ctx) {
 }
 
 function siteRow(s, ctx) {
-  const input = el("input", { type: "text", inputmode: "numeric", placeholder: "-1001234567890" });
-  input.value = s.chat_id || "";
+  const field = chatField(s.chat_id);
   const error = el("div", { class: "kit-error" });
   const save = wire(btn("Guardar", "primary"), error, async () => {
-    await api("/api/admin/voice/chat/" + encodeURIComponent(s.site), {
-      method: "POST", json: { chat_id: input.value.trim() || null },
-    });
+    const chat = field.read();
+    await api("/api/admin/voice/chat/" + encodeURIComponent(s.site), { method: "POST", json: { chat_id: chat } });
+    toast(chat ? "chat guardado" : "chat quitado", "ok");
     ctx.refresh();
-  }, input.value.trim() ? "chat guardado" : null);
+  }, null);
   const test = wire(btn("Enviar prueba"), error, async () => {
     const answer = await api("/api/admin/voice/test", { method: "POST", json: { site: s.site } });
     toast("prueba enviada: " + answer.enviado, "ok");
@@ -84,25 +98,26 @@ function siteRow(s, ctx) {
       el("span", { class: "kit-name", text: s.site }),
       el("span", { class: s.chat_id ? "chip ok" : "chip", text: s.chat_id ? "chat asignado" : "sin chat" }),
       s.mantenimiento ? el("span", { class: "chip warn", text: "en mantenimiento: sus alertas callan" }) : null),
-    el("div", { class: "kit-edit" }, input, save, test, maint),
+    el("div", { class: "kit-edit" }, field.node, save, test, maint),
     error);
 }
 
 function adminChatRow(voice, ctx) {
-  const input = el("input", { type: "text", inputmode: "numeric", placeholder: "-1001234567890" });
-  input.value = voice.admin_chat_id || "";
+  const field = chatField(voice.admin_chat_id);
   const error = el("div", { class: "kit-error" });
   const save = wire(btn("Guardar", "primary"), error, async () => {
-    await api("/api/admin/voice/admin_chat", { method: "POST", json: { chat_id: input.value.trim() || null } });
+    const chat = field.read();
+    await api("/api/admin/voice/admin_chat", { method: "POST", json: { chat_id: chat } });
+    toast(chat ? "chat de admin guardado" : "chat de admin quitado", "ok");
     ctx.refresh();
-  }, "chat de admin guardado");
+  }, null);
   const test = wire(btn("Enviar prueba"), error, async () => {
     const answer = await api("/api/admin/voice/test", { method: "POST", json: {} });
     toast("prueba enviada: " + answer.enviado, "ok");
   }, null);
   return el("div", { class: "kit-knob" },
-    el("div", { class: "muted", text: "Vacío = las alertas de máquina van a todos los chats de los sitios." }),
-    el("div", { class: "kit-edit" }, input, save, test),
+    el("div", { class: "muted", text: "Vacío = las alertas de máquina van a todos los chats de los sitios. " + DIGITS_HINT }),
+    el("div", { class: "kit-edit" }, field.node, save, test),
     voice.env_chat
       ? el("div", { class: "kit-note", text: "Mientras exista, el chat temporal de .env (TELEGRAM_CHAT_ID) es el último recurso: recibe lo que no tenga otro destino." })
       : null,

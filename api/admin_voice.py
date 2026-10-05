@@ -45,6 +45,24 @@ router = APIRouter()
 
 TEST_HEADER = "🧪 Prueba de texto «{key}» (las fichas llevan valores de ejemplo):\n"
 
+# Telegram's refusals in the words the person needs (matched on Telegram's own description, lowercase).
+TELEGRAM_REASONS: tuple[tuple[str, str], ...] = (
+    ("chat not found", "No se encontró ese chat: revisa el número (escribe /id en el grupo) y vuelve a guardarlo."),
+    ("bot was kicked", "Sacaron al bot de ese grupo: agrégalo de nuevo y vuelve a probar."),
+    ("bot is not a member", "El bot no está en ese grupo: agrégalo y vuelve a probar."),
+    ("not enough rights", "El bot no tiene permiso de escribir en ese grupo: dale permiso y vuelve a probar."),
+    ("upgraded to a supergroup", "Ese grupo cambió de número al volverse supergrupo: escribe /id otra vez y guarda el número nuevo."),
+)
+
+
+def _why(detail: str) -> str:
+    """The page's sentence for a failed send; an unknown refusal keeps Telegram's own words."""
+    low = detail.lower()
+    for needle, message in TELEGRAM_REASONS:
+        if needle in low:
+            return message
+    return "Telegram no entregó el mensaje: " + detail
+
 
 # --- helpers ----------------------------------------------------------------------------
 
@@ -169,7 +187,7 @@ async def test_destination(body: TelegramTestRequest, session: Session = Depends
     ok, detail = await _send(chat_id, textos.render("prueba_destino", {"que": que}, overrides))
     await alog(session, "destino.prueba", {"site": body.site or session.site, "ok": ok})
     if not ok:
-        raise HTTPException(status_code=502, detail="Telegram no entregó el mensaje: " + detail)
+        raise HTTPException(status_code=502, detail=_why(detail))
     return {"ok": True, "enviado": que}
 
 
@@ -227,5 +245,5 @@ async def test_texto(body: TextoTestRequest, session: Session = Depends(require_
     ok, detail = await _send(chat_id, message)
     await alog(session, "texto.prueba", {"key": body.key, "ok": ok})
     if not ok:
-        raise HTTPException(status_code=502, detail="Telegram no entregó el mensaje: " + detail)
+        raise HTTPException(status_code=502, detail=_why(detail))
     return {"ok": True, "enviado": que}
