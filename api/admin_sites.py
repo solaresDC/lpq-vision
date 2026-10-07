@@ -634,3 +634,29 @@ async def recover_user(usuario: str, session: Session = Depends(require_admin)) 
     done = await asyncio.to_thread(_tx, work)
     log.info("user recovered %s by=%s", usuario, session.user)
     return {"usuario": usuario, "uid": done["uid"], "active": True}
+
+
+PASSWORD_HISTORY_LIMIT = 100
+
+
+@router.get("/api/admin/password-history")
+async def password_history(session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Who set whose password and when, newest first (the bitácora's own rows; never a hash)."""
+    rows = await asyncio.to_thread(
+        _read, lambda c: c.execute(q.PASSWORD_HISTORY, {"limit": PASSWORD_HISTORY_LIMIT}).fetchall())
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = r["detail"] or {}
+        if r["action"] == "site.create":
+            cuenta, uid, que = d.get("manager"), d.get("manager_uid"), "creada con su contraseña inicial (restaurante nuevo)"
+        elif r["action"] == "user.create":
+            cuenta, uid, que = d.get("usuario"), d.get("uid"), "creada con su contraseña inicial"
+        elif r["action"] == "user.password":
+            cuenta, uid, que = d.get("usuario"), d.get("uid"), "cambiada por otra cuenta"
+        else:
+            cuenta, uid, que = d.get("usuario"), d.get("uid"), "cambiada por la misma cuenta"
+        out.append({
+            "ts": r["ts"].isoformat(), "cuenta": cuenta, "uid": uid, "que": que,
+            "por": r["usuario"], "por_uid": r["usuario_uid"],
+        })
+    return {"historial": out, "limite": PASSWORD_HISTORY_LIMIT}

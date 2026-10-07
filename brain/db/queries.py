@@ -335,6 +335,16 @@ VALUES (%(usuario)s, %(usuario_uid)s, %(action)s, %(detail)s)
 RETURNING id
 """
 
+# The password history (3.9.5): every bitácora row that SET a password, newest first. The hash is never here;
+# only who, whose and when. set_password over ssh writes no row (it shows in users.password_changed_*).
+PASSWORD_HISTORY = """
+SELECT ts, usuario, usuario_uid, action, detail
+FROM admin_log
+WHERE action IN ('user.create', 'site.create', 'user.password', 'user.password_self')
+ORDER BY ts DESC, id DESC
+LIMIT %(limit)s
+"""
+
 ADMIN_LOG_RECENT = """
 SELECT id, ts, usuario, action, detail
 FROM admin_log

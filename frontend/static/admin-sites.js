@@ -8,7 +8,7 @@
 // A gafete appears only after "Mostrar gafete".
 
 import { api, el, fmtDate, qs, toast } from "/static/app.js";
-import { busy, card, confirmFlow, newPassword, passwordDialog, typeToConfirm } from "/static/admin-kit.js";
+import { busy, card, confirmDialog, confirmFlow, infoDialog, newPassword, passwordDialog, typeToConfirm } from "/static/admin-kit.js";
 
 const SOURCES = [["phone", "teléfono"], ["pi", "Pi"]];
 const ROLES = [["return", "regreso"], ["outgoing", "salida"], ["both", "ambas"]];
@@ -68,6 +68,7 @@ export async function render(ctx) {
     box.append(createCard(ctx));
     box.append(await usersCard(ctx));
   }
+  box.append(myPasswordCard());
   return box;
 }
 
@@ -416,6 +417,63 @@ async function usersCard(ctx) {
   if (data.eliminadas.length) {
     parts.push(el("h3", { text: "Eliminadas: se recuperan en " + data.recovery_days + " días" }), deletedTable(data.eliminadas, ctx, error));
   }
+  parts.push(el("div", { class: "kit-edit", style: "margin-top: 10px;" }, historyButton(error)));
   parts.push(error);
   return card("Cuentas", ...parts);
+}
+
+// --- Historial de contraseñas (admin) ---------------------------------------------------------------
+
+function historyButton(error) {
+  return wire(btn("Historial de contraseñas"), error, async () => {
+    const data = await api("/api/admin/password-history");
+    const label = (name, uid) => (name || "?") + (uid ? " #" + uid : "");
+    const body = data.historial.length
+      ? el("table", {},
+        el("thead", {}, el("tr", {}, ["Fecha", "Cuenta", "Qué pasó", "Por quién"].map((h) => el("th", { text: h })))),
+        el("tbody", {}, data.historial.map((h) => el("tr", {},
+          el("td", { text: fmtDate(h.ts) }),
+          el("td", { text: label(h.cuenta, h.uid) }),
+          el("td", { text: h.que }),
+          el("td", { text: label(h.por, h.por_uid) })))))
+      : el("p", { class: "muted", text: "Todavía no hay cambios de contraseña registrados." });
+    await infoDialog({
+      title: "Historial de contraseñas",
+      body: el("div", {},
+        el("p", {
+          class: "muted",
+          text: "Los últimos " + data.limite + " cambios, del más nuevo al más viejo. Nadie puede ver una contraseña: "
+            + "aquí solo queda quién la puso y cuándo. Los cambios hechos por el servidor (set_password por ssh) solo "
+            + "aparecen en la columna Contraseña de cada cuenta.",
+        }),
+        body),
+    });
+  });
+}
+
+// --- Mi contraseña (every account) ---------------------------------------------------------------------
+
+function myPasswordCard() {
+  const error = el("div", { class: "kit-error" });
+  const change = wire(btn("Cambiar mi contraseña", "primary"), error, async () => {
+    const typed = await passwordDialog({
+      title: "Cambiar mi contraseña",
+      current: true,
+      note: "Escribe la actual y luego la nueva dos veces. Después entrarás de nuevo con la nueva.",
+    });
+    if (!typed) return;
+    const sure = await confirmDialog({
+      action: "cambiar tu contraseña",
+      diff: { resumen: "¿Seguro que quieres cambiar tu contraseña? Se cerrarán tus sesiones abiertas y entrarás de nuevo con la nueva." },
+      expires_s: 60,
+    });
+    if (!sure) return;
+    await api("/api/account/password", { method: "POST", json: { current: typed.current, password: typed.password } });
+    toast("contraseña cambiada: entra con la nueva", "ok");
+    setTimeout(() => location.reload(), 1200);
+  });
+  return card("Mi contraseña",
+    el("p", { class: "muted", text: "Cambia tu propia contraseña: primero la actual, luego la nueva dos veces. Nadie más puede verla." }),
+    el("div", { class: "kit-edit" }, change),
+    error);
 }

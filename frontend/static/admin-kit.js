@@ -442,3 +442,28 @@ export function passwordDialog({ title, current = false, note = "", minChars = 1
     (now || first).focus();
   });
 }
+
+// --- a read-only window ------------------------------------------------------------------------------
+
+// infoDialog({title, body}): a window that only shows something (a table, a list) and closes with Cerrar or
+// Escape. Resolves when closed.
+export function infoDialog({ title, body }) {
+  return new Promise((resolve) => {
+    const close = el("button", { class: "primary", type: "button", text: "Cerrar" });
+    const overlay = el("div", { class: "overlay kit-dialog", role: "dialog", "aria-modal": "true" },
+      el("div", { class: "card", style: "max-height: 85vh; overflow: auto;" },
+        el("h2", { text: title }),
+        body,
+        el("div", { class: "kit-actions" }, close)));
+    const onKey = (ev) => { if (ev.key === "Escape") done(); };
+    function done() {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve();
+    }
+    close.addEventListener("click", done);
+    document.addEventListener("keydown", onKey);
+    document.body.append(overlay);
+    close.focus();
+  });
+}
