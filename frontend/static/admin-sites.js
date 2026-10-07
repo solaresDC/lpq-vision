@@ -294,21 +294,30 @@ function roleEditor(role, site, siteNames) {
   };
 }
 
-function userRow(u, siteNames, ctx, error, recoveryDays) {
+function userRow(u, siteNames, ctx, error, recoveryDays, activeAdmins) {
   const self = u.usuario === ctx.sess.user;
-  const editor = roleEditor(u.role, u.site, siteNames);
-  const saveRole = wire(btn("Guardar rol"), error, async () => {
-    await api("/api/admin/users/" + enc(u.usuario) + "/role", { method: "POST", json: editor.read() });
-    toast("rol guardado: sus sesiones se cerraron", "ok");
-    ctx.refresh();
-  });
-  const toggle = wire(btn(u.active ? "Desactivar" : "Activar", u.active ? "bad" : "ok"), error, async () => {
+  const lastAdmin = u.role === "admin" && u.active && activeAdmins <= 1;
+  // Your own row and the only active admin's row offer nothing the server would refuse.
+  const locked = self || lastAdmin;
+  let roleCell;
+  if (locked) {
+    roleCell = el("span", { class: "muted", text: "admin (todos los sitios)" });
+  } else {
+    const editor = roleEditor(u.role, u.site, siteNames);
+    const saveRole = wire(btn("Guardar rol"), error, async () => {
+      await api("/api/admin/users/" + enc(u.usuario) + "/role", { method: "POST", json: editor.read() });
+      toast("rol guardado: sus sesiones se cerraron", "ok");
+      ctx.refresh();
+    });
+    roleCell = el("span", { class: "kit-edit" }, editor.node, saveRole);
+  }
+  const toggle = locked ? null : wire(btn(u.active ? "Desactivar" : "Activar", u.active ? "bad" : "ok"), error, async () => {
     await api("/api/admin/users/" + enc(u.usuario) + "/active", { method: "POST", json: { on: !u.active } });
     toast(u.active ? "cuenta desactivada" : "cuenta activada", "ok");
     ctx.refresh();
   });
-  // Delete: never your own account. Gate 1 = type the exact name; gate 2 = the server's double confirm.
-  const remove = self ? null : wire(btn("Eliminar", "bad"), error, async () => {
+  // Delete: gate 1 = type the exact name; gate 2 = the server's double confirm.
+  const remove = locked ? null : wire(btn("Eliminar", "bad"), error, async () => {
     const typed = await typeToConfirm({
       title: "Eliminar la cuenta " + u.usuario + " (#" + u.uid + ")",
       name: u.usuario,
@@ -323,7 +332,7 @@ function userRow(u, siteNames, ctx, error, recoveryDays) {
       ctx.refresh();
     }
   });
-  const pass = newPassword();
+  const pass = newPassword({ repeat: false });
   const setPass = wire(btn("Cambiar"), error, async () => {
     const password = pass.read();
     await api("/api/admin/users/" + enc(u.usuario) + "/password", { method: "POST", json: { password: password } });
@@ -334,8 +343,9 @@ function userRow(u, siteNames, ctx, error, recoveryDays) {
   return el("tr", {},
     el("td", {},
       el("span", { class: "kit-name", text: u.usuario }),
-      el("span", { class: "muted", text: " #" + u.uid + (self ? " (tú)" : "") })),
-    el("td", {}, el("span", { class: "kit-edit" }, editor.node, saveRole)),
+      el("span", { class: "muted", text: " #" + u.uid + (self ? " (tú)" : "") }),
+      lastAdmin && !self ? el("span", { class: "chip warn", text: "único admin activo" }) : null),
+    el("td", {}, roleCell),
     el("td", {}, el("span", { class: "kit-edit" },
       el("span", { class: u.active ? "chip ok" : "chip bad", text: u.active ? "activa" : "desactivada" }), toggle, remove)),
     el("td", {}, el("span", { class: "kit-edit" }, pass.node, setPass)));
@@ -377,6 +387,7 @@ async function usersCard(ctx) {
   const data = await api("/api/admin/users");
   const error = el("div", { class: "kit-error" });
   const siteNames = ctx.overview.sites.map((s) => s.site);
+  const activeAdmins = data.users.filter((u) => u.role === "admin" && u.active).length;
   const parts = [
     el("p", {
       class: "muted",
@@ -386,7 +397,7 @@ async function usersCard(ctx) {
     }),
     el("table", {},
       el("thead", {}, el("tr", {}, ["Usuario", "Rol y sitio", "Estado", "Nueva contraseña"].map((h) => el("th", { text: h })))),
-      el("tbody", {}, data.users.map((u) => userRow(u, siteNames, ctx, error, data.recovery_days)))),
+      el("tbody", {}, data.users.map((u) => userRow(u, siteNames, ctx, error, data.recovery_days, activeAdmins)))),
     newUserForm(siteNames, ctx, error),
   ];
   if (data.eliminadas.length) {

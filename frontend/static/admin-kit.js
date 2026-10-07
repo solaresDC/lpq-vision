@@ -308,40 +308,37 @@ export async function confirmFlow(stepOne) {
 
 // --- a NEW password --------------------------------------------------------------------------
 
-// newPassword(minChars): a new password typed TWICE by a human. Each field has a "ver" button that shows
-// what was typed; copy, cut, paste and drop are blocked in both, so the password can be read but never
-// copied, and the second field is really typed again. read() returns the password or throws an Error to
-// show (too short, or the two fields differ); clear() empties both and hides them again. The server keeps
-// its own rule (PASSWORD_MIN_CHARS): this widget only saves a round trip.
-export function newPassword(minChars = 10) {
-  const fields = [];
+// newPassword({repeat, minChars}): a password typed by a human. repeat (default true) is for a NEW account:
+// a second field that must match. A password change on an existing account passes {repeat: false}: one
+// field. ONE "ver" button shows or hides every field together. Copy, cut, paste and drop are blocked, so
+// the password can be read but never copied, and the second field is really typed again. read() returns
+// the password or throws an Error to show; clear() empties and hides. The server keeps its own rule
+// (PASSWORD_MIN_CHARS): this widget only saves a round trip.
+export function newPassword({ repeat = true, minChars = 10 } = {}) {
   const make = (placeholder) => {
     const input = el("input", { type: "password", autocomplete: "new-password", placeholder: placeholder, style: "width: auto;" });
     for (const name of ["copy", "cut", "paste", "drop"]) input.addEventListener(name, (ev) => ev.preventDefault());
-    const eye = el("button", { type: "button", class: "kit-copy", text: "ver" });
-    eye.addEventListener("click", () => {
-      const show = input.type === "password";
-      input.type = show ? "text" : "password";
-      eye.textContent = show ? "ocultar" : "ver";
-    });
-    fields.push({ input: input, eye: eye });
-    return el("span", { class: "kit-edit" }, input, eye);
+    return input;
   };
-  const node = el("span", { class: "kit-edit" }, make("contraseña (mínimo " + minChars + ")"), make("repítela"));
+  const inputs = [make("contraseña (mínimo " + minChars + ")")];
+  if (repeat) inputs.push(make("repítela"));
+  const eye = el("button", { type: "button", class: "kit-copy", text: "ver" });
+  const setShown = (show) => {
+    for (const input of inputs) input.type = show ? "text" : "password";
+    eye.textContent = show ? "ocultar" : "ver";
+  };
+  eye.addEventListener("click", () => setShown(inputs[0].type === "password"));
   return {
-    node: node,
+    node: el("span", { class: "kit-edit" }, ...inputs, eye),
     read: () => {
-      const first = fields[0].input.value;
+      const first = inputs[0].value;
       if (first.length < minChars) throw new Error("La contraseña necesita al menos " + minChars + " caracteres.");
-      if (first !== fields[1].input.value) throw new Error("Las dos contraseñas no coinciden: escríbela igual en los dos campos.");
+      if (repeat && first !== inputs[1].value) throw new Error("Las dos contraseñas no coinciden: escríbela igual en los dos campos.");
       return first;
     },
     clear: () => {
-      for (const f of fields) {
-        f.input.value = "";
-        f.input.type = "password";
-        f.eye.textContent = "ver";
-      }
+      for (const input of inputs) input.value = "";
+      setShown(false);
     },
   };
 }
