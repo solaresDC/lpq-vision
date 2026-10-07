@@ -2,11 +2,12 @@
 // Each visible site: the auditor (do the cameras' roles add up to the functions?), its two functions, its
 // cameras (add, change role, relevo, remove) and, for the admin, its gafete and its active switch. The admin
 // also gets Crear restaurante (site, cameras, functions, gafete, menu photos and manager: all or nothing)
-// and Cuentas (create, new password, activate, role and site). Passwords are typed into password fields and
-// sent once: the page never shows, stores or logs them. A gafete appears only after "Mostrar gafete".
+// and Cuentas (create, new password, activate, role and site). Every NEW password goes through admin-kit's
+// newPassword(): typed twice, viewable with "ver", never copyable; the page never stores or logs it.
+// A gafete appears only after "Mostrar gafete".
 
 import { api, el, qs, toast } from "/static/app.js";
-import { busy, card, confirmFlow } from "/static/admin-kit.js";
+import { busy, card, confirmFlow, newPassword } from "/static/admin-kit.js";
 
 const SOURCES = [["phone", "teléfono"], ["pi", "Pi"]];
 const ROLES = [["return", "regreso"], ["outgoing", "salida"], ["both", "ambas"]];
@@ -238,8 +239,9 @@ function createCard(ctx) {
     el("option", { value: "", text: "No clonar (empieza sin fotos de referencia)" }),
     ctx.overview.sites.map((s) => el("option", { value: s.site, text: "Clonar las fotos de referencia de " + s.site })));
   const user = el("input", { type: "text", autocomplete: "off", placeholder: "gerente.roma" });
-  const pass = el("input", { type: "password", autocomplete: "new-password", placeholder: "mínimo 10 caracteres" });
+  const pass = newPassword();
   const create = wire(btn("Crear restaurante", "primary"), error, async () => {
+    const password = pass.read();
     const answer = await api("/api/admin/sites", {
       method: "POST",
       json: {
@@ -248,10 +250,10 @@ function createCard(ctx) {
         cameras: cams.map((c) => c.read()).filter((c) => c.name),
         clone_menu_from: clone.value || null,
         manager_usuario: user.value.trim(),
-        manager_password: pass.value,
+        manager_password: password,
       },
     });
-    pass.value = "";
+    pass.clear();
     toast("restaurante " + answer.site + " creado (" + answer.fotos_clonadas + " fotos clonadas)", "ok");
     await ctx.refreshOverview();
     ctx.refresh();
@@ -267,7 +269,7 @@ function createCard(ctx) {
     el("h3", { text: "Cámaras" }), camBox, el("div", { class: "kit-edit" }, more),
     field("Menú", clone),
     field("Usuario del gerente", user),
-    field("Contraseña del gerente", pass),
+    field("Contraseña del gerente (escríbela dos veces)", pass.node),
     el("div", { class: "kit-edit" }, create),
     error);
 }
@@ -305,10 +307,11 @@ function userRow(u, siteNames, ctx, error) {
     toast(u.active ? "cuenta desactivada" : "cuenta activada", "ok");
     ctx.refresh();
   });
-  const pass = el("input", { type: "password", autocomplete: "new-password", placeholder: "nueva (mínimo 10)", style: INLINE });
+  const pass = newPassword();
   const setPass = wire(btn("Cambiar"), error, async () => {
-    await api("/api/admin/users/" + enc(u.usuario) + "/password", { method: "POST", json: { password: pass.value } });
-    pass.value = "";
+    const password = pass.read();
+    await api("/api/admin/users/" + enc(u.usuario) + "/password", { method: "POST", json: { password: password } });
+    pass.clear();
     toast("contraseña cambiada: sus sesiones se cerraron", "ok");
     if (self) location.reload();
   });
@@ -317,23 +320,24 @@ function userRow(u, siteNames, ctx, error) {
     el("td", {}, el("span", { class: "kit-edit" }, editor.node, saveRole)),
     el("td", {}, el("span", { class: "kit-edit" },
       el("span", { class: u.active ? "chip ok" : "chip bad", text: u.active ? "activa" : "desactivada" }), toggle)),
-    el("td", {}, el("span", { class: "kit-edit" }, pass, setPass)));
+    el("td", {}, el("span", { class: "kit-edit" }, pass.node, setPass)));
 }
 
 function newUserForm(siteNames, ctx, error) {
   const name = el("input", { type: "text", autocomplete: "off", placeholder: "gerente.roma", style: INLINE });
-  const pass = el("input", { type: "password", autocomplete: "new-password", placeholder: "mínimo 10 caracteres", style: INLINE });
+  const pass = newPassword();
   const editor = roleEditor("manager", siteNames[0] || "", siteNames);
   const create = wire(btn("Crear cuenta", "primary"), error, async () => {
+    const password = pass.read();
     await api("/api/admin/users", {
       method: "POST",
-      json: Object.assign({ usuario: name.value.trim(), password: pass.value }, editor.read()),
+      json: Object.assign({ usuario: name.value.trim(), password: password }, editor.read()),
     });
-    pass.value = "";
+    pass.clear();
     toast("cuenta creada", "ok");
     ctx.refresh();
   });
-  return el("div", {}, el("h3", { text: "Nueva cuenta" }), el("div", { class: "kit-edit" }, name, pass, editor.node, create));
+  return el("div", {}, el("h3", { text: "Nueva cuenta" }), el("div", { class: "kit-edit" }, name, pass.node, editor.node, create));
 }
 
 async function usersCard(ctx) {
@@ -346,7 +350,7 @@ async function usersCard(ctx) {
       text: "Una cuenta nunca se borra: se desactiva. Cambiar su contraseña, su rol o desactivarla cierra sus sesiones abiertas.",
     }),
     el("table", {},
-      el("thead", {}, el("tr", {}, ["Usuario", "Rol y sitio", "Estado", "Contraseña"].map((h) => el("th", { text: h })))),
+      el("thead", {}, el("tr", {}, ["Usuario", "Rol y sitio", "Estado", "Nueva contraseña"].map((h) => el("th", { text: h })))),
       el("tbody", {}, data.users.map((u) => userRow(u, siteNames, ctx, error)))),
     newUserForm(siteNames, ctx, error),
     error);

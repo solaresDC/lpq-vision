@@ -305,3 +305,43 @@ export async function confirmFlow(stepOne) {
   const answer = await api("/api/admin/confirm", { method: "POST", json: { pending_id: pending.pending_id } });
   return answer.result;
 }
+
+// --- a NEW password --------------------------------------------------------------------------
+
+// newPassword(minChars): a new password typed TWICE by a human. Each field has a "ver" button that shows
+// what was typed; copy, cut, paste and drop are blocked in both, so the password can be read but never
+// copied, and the second field is really typed again. read() returns the password or throws an Error to
+// show (too short, or the two fields differ); clear() empties both and hides them again. The server keeps
+// its own rule (PASSWORD_MIN_CHARS): this widget only saves a round trip.
+export function newPassword(minChars = 10) {
+  const fields = [];
+  const make = (placeholder) => {
+    const input = el("input", { type: "password", autocomplete: "new-password", placeholder: placeholder, style: "width: auto;" });
+    for (const name of ["copy", "cut", "paste", "drop"]) input.addEventListener(name, (ev) => ev.preventDefault());
+    const eye = el("button", { type: "button", class: "kit-copy", text: "ver" });
+    eye.addEventListener("click", () => {
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      eye.textContent = show ? "ocultar" : "ver";
+    });
+    fields.push({ input: input, eye: eye });
+    return el("span", { class: "kit-edit" }, input, eye);
+  };
+  const node = el("span", { class: "kit-edit" }, make("contraseña (mínimo " + minChars + ")"), make("repítela"));
+  return {
+    node: node,
+    read: () => {
+      const first = fields[0].input.value;
+      if (first.length < minChars) throw new Error("La contraseña necesita al menos " + minChars + " caracteres.");
+      if (first !== fields[1].input.value) throw new Error("Las dos contraseñas no coinciden: escríbela igual en los dos campos.");
+      return first;
+    },
+    clear: () => {
+      for (const f of fields) {
+        f.input.value = "";
+        f.input.type = "password";
+        f.eye.textContent = "ver";
+      }
+    },
+  };
+}
