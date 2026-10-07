@@ -105,6 +105,31 @@ export async function logout() {
   location.reload();
 }
 
+// Mi cuenta: a person changes its OWN password (the current one first). The window and the "¿seguro?" come
+// from admin-kit.js, loaded only when needed. Every session of the account closes: the person logs in again.
+async function changeOwnPassword() {
+  const kit = await import("/static/admin-kit.js");
+  const typed = await kit.passwordDialog({
+    title: "Cambiar mi contraseña",
+    current: true,
+    note: "Escribe la actual y luego la nueva dos veces. Después entrarás de nuevo con la nueva.",
+  });
+  if (!typed) return;
+  const sure = await kit.confirmDialog({
+    action: "cambiar tu contraseña",
+    diff: { resumen: "¿Seguro que quieres cambiar tu contraseña? Se cerrarán tus sesiones abiertas y entrarás de nuevo con la nueva." },
+    expires_s: 60,
+  });
+  if (!sure) return;
+  try {
+    await api("/api/account/password", { method: "POST", json: { current: typed.current, password: typed.password } });
+    toast("contraseña cambiada: entra con la nueva", "ok");
+    setTimeout(() => location.reload(), 1200);
+  } catch (err) {
+    toast(err.message, "bad");
+  }
+}
+
 // --- login overlay -------------------------------------------------------------------
 
 let loginPromise = null;
@@ -168,6 +193,7 @@ export function mountHeader(title, sess) {
     bar.append(sess.admin
       ? el("span", { class: "chip", text: "admin · todos los sitios" })
       : el("span", { class: "chip locked", text: `🔒 sitio: ${sess.site}` }));
+    bar.append(el("button", { text: "Mi cuenta", onclick: changeOwnPassword }));
     bar.append(el("button", { text: "Salir", onclick: logout }));
   }
   document.body.prepend(bar);

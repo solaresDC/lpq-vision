@@ -24,6 +24,8 @@ Fase 3 (table steps are gated on to_regclass, column steps on information_schema
 11. users.uid BIGSERIAL UNIQUE: the permanent account number, never reused (owner ruling 3.9.2).
 12. users.deleted_at and users.erase_warned_at: the recoverable delete and its one warning.
 13. admin_log.usuario_uid: the acting account's number beside its name.
+14. users.password_changed_at and users.password_changed_by: when a password last changed, and who changed it
+    (nobody can SEE a password: only its hash exists).
 
 Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or ADDs a missing column.
 """
@@ -111,6 +113,14 @@ MIGRATIONS: tuple[ColumnMigration | TableMigration, ...] = (
     ),
     ColumnMigration(
         name="admin_log.usuario_uid", table="admin_log", column="usuario_uid", statement=q.ADD_ADMIN_LOG_USUARIO_UID,
+    ),
+    ColumnMigration(
+        name="users.password_changed_at", table="users", column="password_changed_at",
+        statement=q.ADD_USERS_PASSWORD_CHANGED_AT,
+    ),
+    ColumnMigration(
+        name="users.password_changed_by", table="users", column="password_changed_by",
+        statement=q.ADD_USERS_PASSWORD_CHANGED_BY,
     ),
 )
 

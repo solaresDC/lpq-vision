@@ -450,7 +450,9 @@ async def list_users(session: Session = Depends(require_admin)) -> dict[str, Any
     return {
         "users": [
             {"usuario": r["usuario"], "uid": r["uid"], "role": r["role"], "site": r["site"],
-             "active": bool(r["active"]), "created_at": r["created_at"].isoformat()}
+             "active": bool(r["active"]), "created_at": r["created_at"].isoformat(),
+             "password_changed_at": r["password_changed_at"].isoformat() if r["password_changed_at"] else None,
+             "password_changed_by": r["password_changed_by"]}
             for r in rows
         ],
         "eliminadas": [
@@ -490,17 +492,34 @@ async def create_user(body: UserCreateRequest, session: Session = Depends(requir
 
 @router.post("/api/admin/users/{usuario}/password")
 async def reset_password(usuario: str, body: PasswordRequest, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """The admin changes an account's password, step 1 of the double confirm. Nobody can SEE a password: the
+    admin reads it only while typing it. Step 2 writes the hash, records who and when, and closes its sessions."""
+    row = await asyncio.to_thread(_read, lambda c: _person_row(c, usuario))
     digest = await asyncio.to_thread(make_hash, body.password)
+    label = f"{usuario} (#{row['uid']})"
 
-    def work(conn: psycopg.Connection) -> None:
-        row = _person_row(conn, usuario)
-        conn.execute(q.RESET_USER_PASSWORD, {"usuario": usuario, "password_hash": digest})
-        _bitacora(conn, session, "user.password", {"usuario": usuario, "uid": row["uid"]})
+    async def run() -> dict[str, Any]:
+        def work(conn: psycopg.Connection) -> None:
+            again = _person_row(conn, usuario)
+            conn.execute(q.RESET_USER_PASSWORD, {"usuario": usuario, "password_hash": digest, "changed_by": session.user})
+            _bitacora(conn, session, "user.password", {"usuario": usuario, "uid": again["uid"]})
 
-    await asyncio.to_thread(_tx, work)
-    dropped = drop_sessions_of(usuario)
-    log.info("user password reset %s by=%s", usuario, session.user)
-    return {"usuario": usuario, "sesiones_cerradas": dropped}
+        await asyncio.to_thread(_tx, work)
+        dropped = drop_sessions_of(usuario)
+        log.info("user password changed %s by=%s", usuario, session.user)
+        return {"usuario": usuario, "sesiones_cerradas": dropped}
+
+    return propose(
+        session,
+        action="cambiar la contraseña de " + label,
+        diff={
+            "resumen": (
+                f"¿Seguro que quieres cambiar la contraseña de {label}? Sus sesiones abiertas se cerrarán y tendrá "
+                "que entrar con la nueva."
+            ),
+        },
+        run=run,
+    )
 
 
 @router.post("/api/admin/users/{usuario}/active")

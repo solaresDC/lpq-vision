@@ -108,6 +108,10 @@ ADD_USERS_DELETED_AT = "ALTER TABLE users ADD COLUMN deleted_at TIMESTAMPTZ"
 ADD_USERS_ERASE_WARNED_AT = "ALTER TABLE users ADD COLUMN erase_warned_at TIMESTAMPTZ"
 ADD_ADMIN_LOG_USUARIO_UID = "ALTER TABLE admin_log ADD COLUMN usuario_uid BIGINT"
 
+# 3.9.4: nobody can SEE a password (only its hash exists); the admin sees WHEN it last changed and WHO changed it.
+ADD_USERS_PASSWORD_CHANGED_AT = "ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMPTZ"
+ADD_USERS_PASSWORD_CHANGED_BY = "ALTER TABLE users ADD COLUMN password_changed_by TEXT"
+
 
 # --------------------------------------------------------------------- seeds (idempotent)
 
@@ -209,7 +213,7 @@ WHERE usuario = %(usuario)s
 
 # The users CRUD never lists the reserved machine row, nor the deleted accounts (they have their own list).
 LIST_USERS = """
-SELECT usuario, uid, role, site, active, created_at
+SELECT usuario, uid, role, site, active, created_at, password_changed_at, password_changed_by
 FROM users
 WHERE role <> 'machine' AND deleted_at IS NULL
 ORDER BY usuario
@@ -231,14 +235,22 @@ RETURNING uid
 
 # The mostrador's reset: never the machine row.
 RESET_USER_PASSWORD = """
-UPDATE users SET password_hash = %(password_hash)s
+UPDATE users SET password_hash = %(password_hash)s, password_changed_at = now(), password_changed_by = %(changed_by)s
 WHERE usuario = %(usuario)s AND role <> 'machine'
 RETURNING usuario
 """
 
+# Mi cuenta: a person changes its OWN password (the api checked the current one first).
+SET_OWN_PASSWORD = """
+UPDATE users SET password_hash = %(password_hash)s, password_changed_at = now(), password_changed_by = %(usuario)s
+WHERE usuario = %(usuario)s AND active AND deleted_at IS NULL AND role <> 'machine'
+RETURNING uid
+"""
+
 # set_password over ssh: writes the hash AND reactivates (the owner can always get back in).
 SET_PASSWORD_AND_REACTIVATE = """
-UPDATE users SET password_hash = %(password_hash)s, active = TRUE, deleted_at = NULL, erase_warned_at = NULL
+UPDATE users SET password_hash = %(password_hash)s, active = TRUE, deleted_at = NULL, erase_warned_at = NULL,
+  password_changed_at = now(), password_changed_by = 'set_password'
 WHERE usuario = %(usuario)s
 RETURNING usuario, role
 """
@@ -247,7 +259,8 @@ RETURNING usuario, role
 UPSERT_RESERVED_USER = """
 INSERT INTO users (usuario, password_hash, role, site, active)
 VALUES (%(usuario)s, %(password_hash)s, %(role)s, NULL, TRUE)
-ON CONFLICT (usuario) DO UPDATE SET password_hash = EXCLUDED.password_hash, active = TRUE, deleted_at = NULL, erase_warned_at = NULL
+ON CONFLICT (usuario) DO UPDATE SET password_hash = EXCLUDED.password_hash, active = TRUE, deleted_at = NULL,
+  erase_warned_at = NULL, password_changed_at = now(), password_changed_by = 'set_password'
 RETURNING usuario, role
 """
 

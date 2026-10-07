@@ -2,12 +2,13 @@
 // Each visible site: the auditor (do the cameras' roles add up to the functions?), its two functions, its
 // cameras (add, change role, relevo, remove) and, for the admin, its gafete and its active switch. The admin
 // also gets Crear restaurante (site, cameras, functions, gafete, menu photos and manager: all or nothing)
-// and Cuentas (create, new password, activate, role and site, delete with the typed name, recover). Every NEW password goes through admin-kit's
-// newPassword(): typed twice, viewable with "ver", never copyable; the page never stores or logs it.
+// and Cuentas (create; password change through a window and a "¿seguro?"; activate; role and site; delete
+// with the typed name; recover). New passwords go through admin-kit's newPassword() or passwordDialog():
+// viewable with "ver" while typed, never copyable. Nobody can SEE a stored password; the page never keeps one.
 // A gafete appears only after "Mostrar gafete".
 
 import { api, el, fmtDate, qs, toast } from "/static/app.js";
-import { busy, card, confirmFlow, newPassword, typeToConfirm } from "/static/admin-kit.js";
+import { busy, card, confirmFlow, newPassword, passwordDialog, typeToConfirm } from "/static/admin-kit.js";
 
 const SOURCES = [["phone", "teléfono"], ["pi", "Pi"]];
 const ROLES = [["return", "regreso"], ["outgoing", "salida"], ["both", "ambas"]];
@@ -332,14 +333,26 @@ function userRow(u, siteNames, ctx, error, recoveryDays, activeAdmins) {
       ctx.refresh();
     }
   });
-  const pass = newPassword({ repeat: false });
-  const setPass = wire(btn("Cambiar"), error, async () => {
-    const password = pass.read();
-    await api("/api/admin/users/" + enc(u.usuario) + "/password", { method: "POST", json: { password: password } });
-    pass.clear();
-    toast("contraseña cambiada: sus sesiones se cerraron", "ok");
-    if (self) location.reload();
+  // Nobody SEES a password: the admin changes one through a window, then the server's "¿seguro?".
+  const setPass = wire(btn("Cambiar contraseña"), error, async () => {
+    const typed = await passwordDialog({
+      title: "Nueva contraseña para " + u.usuario + " (#" + u.uid + ")",
+      note: "Escríbela dos veces. Con «ver» puedes leerla para dársela a la persona; después nadie podrá verla.",
+    });
+    if (!typed) return;
+    const result = await confirmFlow(() =>
+      api("/api/admin/users/" + enc(u.usuario) + "/password", { method: "POST", json: { password: typed.password } }));
+    if (result) {
+      toast("contraseña cambiada: sus sesiones se cerraron", "ok");
+      if (self) location.reload();
+      else ctx.refresh();
+    }
   });
+  const by = u.password_changed_by;
+  const changed = u.password_changed_at
+    ? "cambiada el " + fmtDate(u.password_changed_at) + " por "
+      + (by === u.usuario ? "la misma cuenta" : by === "set_password" ? "el servidor (set_password)" : by)
+    : "sin cambios desde que se creó";
   return el("tr", {},
     el("td", {},
       el("span", { class: "kit-name", text: u.usuario }),
@@ -348,7 +361,7 @@ function userRow(u, siteNames, ctx, error, recoveryDays, activeAdmins) {
     el("td", {}, roleCell),
     el("td", {}, el("span", { class: "kit-edit" },
       el("span", { class: u.active ? "chip ok" : "chip bad", text: u.active ? "activa" : "desactivada" }), toggle, remove)),
-    el("td", {}, el("span", { class: "kit-edit" }, pass.node, setPass)));
+    el("td", {}, el("div", { class: "muted", text: changed }), setPass));
 }
 
 function newUserForm(siteNames, ctx, error) {
@@ -393,10 +406,10 @@ async function usersCard(ctx) {
       class: "muted",
       text: "Cambiar la contraseña, el rol o desactivar una cuenta cierra sus sesiones abiertas. Eliminar la cierra "
         + "de inmediato y la borra para siempre en " + data.recovery_days + " días; hasta entonces se recupera abajo. "
-        + "El número (#) de cada cuenta es permanente y nunca se repite.",
+        + "El número (#) de cada cuenta es permanente y nunca se repite. Nadie puede ver una contraseña: solo cambiarla.",
     }),
     el("table", {},
-      el("thead", {}, el("tr", {}, ["Usuario", "Rol y sitio", "Estado", "Nueva contraseña"].map((h) => el("th", { text: h })))),
+      el("thead", {}, el("tr", {}, ["Usuario", "Rol y sitio", "Estado", "Contraseña"].map((h) => el("th", { text: h })))),
       el("tbody", {}, data.users.map((u) => userRow(u, siteNames, ctx, error, data.recovery_days, activeAdmins)))),
     newUserForm(siteNames, ctx, error),
   ];

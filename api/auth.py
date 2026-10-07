@@ -39,9 +39,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from psycopg.types.json import Jsonb
 
 from brain.db import queries as q
-from brain.validator.models import MACHINE_DEFAULTS, MACHINE_USER, EnrollRequest, LoginRequest, load_config
+from brain.validator.models import MACHINE_DEFAULTS, MACHINE_USER, EnrollRequest, LoginRequest, OwnPasswordRequest, load_config
 
 log = logging.getLogger("lpq.api.auth")
 
@@ -349,3 +350,35 @@ async def forget(response: Response) -> dict:
     """Clear this device's enrollment (a regenerated gafete means enrolling again)."""
     response.delete_cookie(DEVICE_COOKIE, path="/")
     return {"enrolled": False}
+
+
+@router.post("/api/account/password")
+async def change_own_password(body: OwnPasswordRequest, request: Request, response: Response) -> dict:
+    """Mi cuenta: a person changes its OWN password. The current one is checked first (one PBKDF2 round, the
+    same constant-time road as login); then every session of the account closes, this one included. Nobody can
+    SEE a password: only its hash is stored. Nothing here is logged beyond the user name."""
+    session = await asyncio.to_thread(require_session, request)
+    if await asyncio.to_thread(_check_login, session.user, body.current) is None:
+        log.info("own password change refused user=%s", session.user)
+        raise HTTPException(status_code=403, detail="La contraseña actual no es correcta.")
+    digest = await asyncio.to_thread(make_hash, body.password)
+
+    def work() -> int | None:
+        with q.connect() as conn, conn.transaction():
+            done = conn.execute(q.SET_OWN_PASSWORD, {"usuario": session.user, "password_hash": digest}).fetchone()
+            if done is None:
+                return None
+            conn.execute(q.INSERT_ADMIN_LOG_BY, {
+                "usuario": session.user,
+                "usuario_uid": session.uid,
+                "action": "user.password_self",
+                "detail": Jsonb({"usuario": session.user, "uid": done["uid"]}),
+            })
+            return int(done["uid"])
+
+    if await asyncio.to_thread(work) is None:
+        raise HTTPException(status_code=409, detail="Esta cuenta no puede cambiar su contraseña desde aquí.")
+    dropped = drop_sessions_of(session.user)
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    log.info("own password changed user=%s", session.user)
+    return {"ok": True, "sesiones_cerradas": dropped}

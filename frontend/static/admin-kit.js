@@ -376,3 +376,69 @@ export function typeToConfirm({ title, name, warning }) {
     input.focus();
   });
 }
+
+// --- the password window -----------------------------------------------------------------------
+
+// passwordDialog({title, current, note, minChars}): a small window for a NEW password, typed twice. With
+// current: true (Mi cuenta) it first asks for the CURRENT one. ONE "ver" shows or hides every field; copy,
+// cut, paste and drop are blocked in the new-password fields. Resolves {current, password} after a local
+// check (length, match), or null on Cancelar or Escape. The caller's "¿seguro?" step follows.
+export function passwordDialog({ title, current = false, note = "", minChars = 10 }) {
+  return new Promise((resolve) => {
+    const make = (placeholder, guarded) => {
+      const input = el("input", {
+        type: "password",
+        autocomplete: guarded ? "new-password" : "current-password",
+        placeholder: placeholder,
+      });
+      if (guarded) for (const name of ["copy", "cut", "paste", "drop"]) input.addEventListener(name, (ev) => ev.preventDefault());
+      return input;
+    };
+    const now = current ? make("contraseña actual", false) : null;
+    const first = make("contraseña nueva (mínimo " + minChars + ")", true);
+    const second = make("repítela", true);
+    const fields = [now, first, second].filter(Boolean);
+    const eye = el("button", { type: "button", class: "kit-copy", text: "ver" });
+    eye.addEventListener("click", () => {
+      const show = first.type === "password";
+      for (const f of fields) f.type = show ? "text" : "password";
+      eye.textContent = show ? "ocultar" : "ver";
+    });
+    const error = el("div", { class: "kit-error" });
+    const ok = el("button", { class: "primary", type: "button", text: "Continuar" });
+    const cancel = el("button", { type: "button", text: "Cancelar" });
+    const overlay = el("div", { class: "overlay kit-dialog", role: "dialog", "aria-modal": "true" },
+      el("div", { class: "card" },
+        el("h2", { text: title }),
+        note ? el("p", { class: "muted", text: note }) : null,
+        ...fields.map((f) => el("div", { style: "margin: 6px 0;" }, f)),
+        el("div", { class: "kit-edit" }, eye),
+        error,
+        el("div", { class: "kit-actions" }, cancel, ok)));
+    const onKey = (ev) => { if (ev.key === "Escape") done(null); };
+    function done(answer) {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve(answer);
+    }
+    ok.addEventListener("click", () => {
+      if (now && !now.value) {
+        error.textContent = "Escribe tu contraseña actual.";
+        return;
+      }
+      if (first.value.length < minChars) {
+        error.textContent = "La contraseña nueva necesita al menos " + minChars + " caracteres.";
+        return;
+      }
+      if (first.value !== second.value) {
+        error.textContent = "Las dos contraseñas nuevas no coinciden: escríbela igual en los dos campos.";
+        return;
+      }
+      done({ current: now ? now.value : null, password: first.value });
+    });
+    cancel.addEventListener("click", () => done(null));
+    document.addEventListener("keydown", onKey);
+    document.body.append(overlay);
+    (now || first).focus();
+  });
+}

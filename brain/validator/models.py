@@ -730,6 +730,13 @@ class ConfirmNameRequest(_Body):
     name: str = Field(min_length=1, max_length=64)
 
 
+class OwnPasswordRequest(_Body):
+    """Mi cuenta: the CURRENT password (checked, never length-judged) and the new one (typed twice on the page)."""
+
+    current: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=PASSWORD_MIN_CHARS, max_length=200)
+
+
 class EnrollRequest(_Body):
     """POST /api/device/enroll: /captura presents the site's gafete once; the server sets the device cookie."""
 
