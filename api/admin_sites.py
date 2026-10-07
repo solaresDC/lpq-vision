@@ -639,11 +639,7 @@ async def recover_user(usuario: str, session: Session = Depends(require_admin)) 
 PASSWORD_HISTORY_LIMIT = 100
 
 
-@router.get("/api/admin/password-history")
-async def password_history(session: Session = Depends(require_admin)) -> dict[str, Any]:
-    """Who set whose password and when, newest first (the bitácora's own rows; never a hash)."""
-    rows = await asyncio.to_thread(
-        _read, lambda c: c.execute(q.PASSWORD_HISTORY, {"limit": PASSWORD_HISTORY_LIMIT}).fetchall())
+def _history_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for r in rows:
         d = r["detail"] or {}
@@ -659,4 +655,21 @@ async def password_history(session: Session = Depends(require_admin)) -> dict[st
             "ts": r["ts"].isoformat(), "cuenta": cuenta, "uid": uid, "que": que,
             "por": r["usuario"], "por_uid": r["usuario_uid"],
         })
-    return {"historial": out, "limite": PASSWORD_HISTORY_LIMIT}
+    return out
+
+
+@router.get("/api/admin/password-history")
+async def password_history(
+    uid: int | None = None,
+    limit: int = PASSWORD_HISTORY_LIMIT,
+    session: Session = Depends(require_admin),
+) -> dict[str, Any]:
+    """Who set whose password and when, newest first (the bitácora's own rows; never a hash). limit is clamped
+    to 1..PASSWORD_HISTORY_LIMIT; uid narrows it to one account (its permanent number)."""
+    limit = max(1, min(limit, PASSWORD_HISTORY_LIMIT))
+    if uid is None:
+        rows = await asyncio.to_thread(_read, lambda c: c.execute(q.PASSWORD_HISTORY, {"limit": limit}).fetchall())
+    else:
+        rows = await asyncio.to_thread(
+            _read, lambda c: c.execute(q.PASSWORD_HISTORY_OF, {"uid": str(uid), "limit": limit}).fetchall())
+    return {"historial": _history_rows(rows), "limite": limit, "uid": uid}

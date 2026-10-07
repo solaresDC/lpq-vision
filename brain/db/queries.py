@@ -345,6 +345,16 @@ ORDER BY ts DESC, id DESC
 LIMIT %(limit)s
 """
 
+# One account's password history, by its permanent number (compared as text: detail is JSONB).
+PASSWORD_HISTORY_OF = """
+SELECT ts, usuario, usuario_uid, action, detail
+FROM admin_log
+WHERE (action IN ('user.create', 'user.password', 'user.password_self') AND detail->>'uid' = %(uid)s)
+   OR (action = 'site.create' AND detail->>'manager_uid' = %(uid)s)
+ORDER BY ts DESC, id DESC
+LIMIT %(limit)s
+"""
+
 ADMIN_LOG_RECENT = """
 SELECT id, ts, usuario, action, detail
 FROM admin_log

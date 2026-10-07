@@ -68,7 +68,7 @@ export async function render(ctx) {
     box.append(createCard(ctx));
     box.append(await usersCard(ctx));
   }
-  box.append(myPasswordCard());
+  if (!ctx.sess.admin) box.append(myPasswordCard());   // the admin changes its own from its row in Cuentas
   return box;
 }
 
@@ -349,6 +349,8 @@ function userRow(u, siteNames, ctx, error, recoveryDays, activeAdmins) {
       else ctx.refresh();
     }
   });
+  const history = wire(el("button", { class: "kit-copy", type: "button", text: "historial" }), error,
+    () => openHistory("Historial de " + u.usuario + " #" + u.uid, { uid: u.uid }));
   const by = u.password_changed_by;
   const changed = u.password_changed_at
     ? "cambiada el " + fmtDate(u.password_changed_at) + " por "
@@ -362,7 +364,7 @@ function userRow(u, siteNames, ctx, error, recoveryDays, activeAdmins) {
     el("td", {}, roleCell),
     el("td", {}, el("span", { class: "kit-edit" },
       el("span", { class: u.active ? "chip ok" : "chip bad", text: u.active ? "activa" : "desactivada" }), toggle, remove)),
-    el("td", {}, el("div", { class: "muted", text: changed }), setPass));
+    el("td", {}, el("div", { class: "muted", text: changed }), el("span", { class: "kit-edit" }, setPass, history)));
 }
 
 function newUserForm(siteNames, ctx, error) {
@@ -417,37 +419,42 @@ async function usersCard(ctx) {
   if (data.eliminadas.length) {
     parts.push(el("h3", { text: "Eliminadas: se recuperan en " + data.recovery_days + " días" }), deletedTable(data.eliminadas, ctx, error));
   }
-  parts.push(el("div", { class: "kit-edit", style: "margin-top: 10px;" }, historyButton(error)));
+  const recent = await api("/api/admin/password-history" + qs({ limit: HISTORY_PREVIEW }));
+  parts.push(
+    el("h3", { text: "Últimos cambios de contraseña" }),
+    historyTable(recent.historial, "Todavía no hay cambios de contraseña registrados."),
+    el("div", { class: "kit-edit", style: "margin-top: 8px;" },
+      wire(btn("Ver historial completo"), error, () => openHistory("Historial de contraseñas", {}))));
   parts.push(error);
   return card("Cuentas", ...parts);
 }
 
 // --- Historial de contraseñas (admin) ---------------------------------------------------------------
 
-function historyButton(error) {
-  return wire(btn("Historial de contraseñas"), error, async () => {
-    const data = await api("/api/admin/password-history");
-    const label = (name, uid) => (name || "?") + (uid ? " #" + uid : "");
-    const body = data.historial.length
-      ? el("table", {},
-        el("thead", {}, el("tr", {}, ["Fecha", "Cuenta", "Qué pasó", "Por quién"].map((h) => el("th", { text: h })))),
-        el("tbody", {}, data.historial.map((h) => el("tr", {},
-          el("td", { text: fmtDate(h.ts) }),
-          el("td", { text: label(h.cuenta, h.uid) }),
-          el("td", { text: h.que }),
-          el("td", { text: label(h.por, h.por_uid) })))))
-      : el("p", { class: "muted", text: "Todavía no hay cambios de contraseña registrados." });
-    await infoDialog({
-      title: "Historial de contraseñas",
-      body: el("div", {},
-        el("p", {
-          class: "muted",
-          text: "Los últimos " + data.limite + " cambios, del más nuevo al más viejo. Nadie puede ver una contraseña: "
-            + "aquí solo queda quién la puso y cuándo. Los cambios hechos por el servidor (set_password por ssh) solo "
-            + "aparecen en la columna Contraseña de cada cuenta.",
-        }),
-        body),
-    });
+const HISTORY_PREVIEW = 5;
+const HISTORY_NOTE = "Del más nuevo al más viejo. Nadie puede ver una contraseña: aquí solo queda quién la puso y "
+  + "cuándo. Los cambios hechos por el servidor (set_password por ssh) solo aparecen en la columna Contraseña.";
+
+function historyTable(rows, emptyText) {
+  if (!rows.length) return el("p", { class: "muted", text: emptyText });
+  const label = (name, uid) => (name || "?") + (uid ? " #" + uid : "");
+  return el("table", {},
+    el("thead", {}, el("tr", {}, ["Fecha", "Cuenta", "Qué pasó", "Por quién"].map((h) => el("th", { text: h })))),
+    el("tbody", {}, rows.map((h) => el("tr", {},
+      el("td", { text: fmtDate(h.ts) }),
+      el("td", { text: label(h.cuenta, h.uid) }),
+      el("td", { text: h.que }),
+      el("td", { text: label(h.por, h.por_uid) })))));
+}
+
+// openHistory(title, params): the full history ({}) or one account's ({uid}), in a read-only window.
+async function openHistory(title, params) {
+  const data = await api("/api/admin/password-history" + qs(params));
+  await infoDialog({
+    title: title,
+    body: el("div", {},
+      el("p", { class: "muted", text: "Hasta " + data.limite + " cambios. " + HISTORY_NOTE }),
+      historyTable(data.historial, "Sin cambios de contraseña registrados.")),
   });
 }
 
