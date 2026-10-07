@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from psycopg.types.json import Jsonb
+from psycopg import errors as pg_errors
 from pydantic import ValidationError
 
 from brain.adapter import llm, raw_log
@@ -45,6 +46,8 @@ from brain.db import queries as q
 from brain.validator import repair
 from brain.validator.models import (
     MACHINE_DEFAULTS,
+    USER_ERASE_WARN_DAYS,
+    USER_RECOVERY_DAYS,
     Config,
     PresentationResponse,
     load_config,
@@ -461,15 +464,44 @@ def purge_extensions() -> int:
         return conn.execute(q.PURGE_OLD_EXTENSIONS, {"grace": EXTENSION_GRACE}).rowcount
 
 
+def warn_and_erase_users() -> tuple[int, int]:
+    """Deleted accounts (owner ruling 3.9.2). USER_ERASE_WARN_DAYS before the erase: ONE 'user.erase_soon'
+    bitácora row per account (the bot turns it into the admin chat's notice), marked with erase_warned_at.
+    At USER_RECOVERY_DAYS the row leaves users for good, with a 'user.erase' row; its number is never reused.
+    Returns (warned, erased). A database the api has not migrated yet this boot is skipped quietly."""
+    retention = timedelta(days=USER_RECOVERY_DAYS)
+    warn_after = timedelta(days=USER_RECOVERY_DAYS - USER_ERASE_WARN_DAYS)
+    try:
+        with q.connect() as conn, conn.transaction():
+            due = conn.execute(q.USERS_TO_WARN, {"warn_after": warn_after, "retention": retention}).fetchall()
+            for row in due:
+                conn.execute(q.MARK_USER_WARNED, {"usuario": row["usuario"]})
+                conn.execute(q.INSERT_ADMIN_LOG, {"usuario": None, "action": "user.erase_soon", "detail": Jsonb({
+                    "usuario": row["usuario"], "uid": row["uid"],
+                    "borra": (row["deleted_at"] + retention).isoformat(),
+                })})
+            erased = conn.execute(q.ERASE_DELETED_USERS, {"retention": retention}).fetchall()
+            for row in erased:
+                conn.execute(q.INSERT_ADMIN_LOG, {"usuario": None, "action": "user.erase", "detail": Jsonb({
+                    "usuario": row["usuario"], "uid": row["uid"],
+                })})
+    except pg_errors.UndefinedColumn:
+        log.info("account sweep skipped: the api has not run this boot's migrations yet")
+        return 0, 0
+    return len(due), len(erased)
+
+
 def sweep(cfg: Config, own_log: Path | None) -> None:
     """The hourly duties. An error here never stops the queue: it is logged and retried next hour."""
     try:
         purged = purge_papelera(cfg)
         ended = purge_extensions()
-        if purged or ended:
+        warned, erased = warn_and_erase_users()
+        if purged or ended or warned or erased:
             log.info(
-                "sweep: papelera purged %d plate(s) (retention %d days), %d old extension(s) removed",
-                purged, cfg.papelera_dias, ended,
+                "sweep: papelera purged %d plate(s) (retention %d days), %d old extension(s) removed, "
+                "%d deleted account(s) warned, %d erased",
+                purged, cfg.papelera_dias, ended, warned, erased,
             )
     except Exception:
         log.exception("sweep failed; retried next hour")

@@ -182,17 +182,25 @@ async def confirm(body: ConfirmRequest, session: Session = Depends(require_mostr
 
 # --- the bitácora ---------------------------------------------------------------------
 
-def log_action(usuario: str | None, action: str, detail: dict[str, Any] | None = None) -> int:
-    """One admin_log row (usuario None = the system acted). Sync: from async code use alog()."""
+def log_action(usuario: str | None, action: str, detail: dict[str, Any] | None = None, uid: int | None = None) -> int:
+    """One admin_log row: usuario None = the system acted; uid = the actor's permanent account number.
+    Sync: from async code use alog()."""
     with q.connect() as conn:
         row = conn.execute(
-            q.INSERT_ADMIN_LOG, {"usuario": usuario, "action": action, "detail": Jsonb(detail or {})}
+            q.INSERT_ADMIN_LOG_BY,
+            {"usuario": usuario, "usuario_uid": uid, "action": action, "detail": Jsonb(detail or {})},
         ).fetchone()
     return int(row["id"])
 
 
 async def alog(session: Session | None, action: str, detail: dict[str, Any] | None = None) -> int:
-    return await asyncio.to_thread(log_action, session.user if session else None, action, detail)
+    return await asyncio.to_thread(
+        log_action,
+        session.user if session else None,
+        action,
+        detail,
+        session.uid if session else None,
+    )
 
 
 # --- the api's own voice --------------------------------------------------------------

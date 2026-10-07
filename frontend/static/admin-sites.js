@@ -2,12 +2,12 @@
 // Each visible site: the auditor (do the cameras' roles add up to the functions?), its two functions, its
 // cameras (add, change role, relevo, remove) and, for the admin, its gafete and its active switch. The admin
 // also gets Crear restaurante (site, cameras, functions, gafete, menu photos and manager: all or nothing)
-// and Cuentas (create, new password, activate, role and site). Every NEW password goes through admin-kit's
+// and Cuentas (create, new password, activate, role and site, delete with the typed name, recover). Every NEW password goes through admin-kit's
 // newPassword(): typed twice, viewable with "ver", never copyable; the page never stores or logs it.
 // A gafete appears only after "Mostrar gafete".
 
-import { api, el, qs, toast } from "/static/app.js";
-import { busy, card, confirmFlow, newPassword } from "/static/admin-kit.js";
+import { api, el, fmtDate, qs, toast } from "/static/app.js";
+import { busy, card, confirmFlow, newPassword, typeToConfirm } from "/static/admin-kit.js";
 
 const SOURCES = [["phone", "teléfono"], ["pi", "Pi"]];
 const ROLES = [["return", "regreso"], ["outgoing", "salida"], ["both", "ambas"]];
@@ -294,7 +294,7 @@ function roleEditor(role, site, siteNames) {
   };
 }
 
-function userRow(u, siteNames, ctx, error) {
+function userRow(u, siteNames, ctx, error, recoveryDays) {
   const self = u.usuario === ctx.sess.user;
   const editor = roleEditor(u.role, u.site, siteNames);
   const saveRole = wire(btn("Guardar rol"), error, async () => {
@@ -307,6 +307,22 @@ function userRow(u, siteNames, ctx, error) {
     toast(u.active ? "cuenta desactivada" : "cuenta activada", "ok");
     ctx.refresh();
   });
+  // Delete: never your own account. Gate 1 = type the exact name; gate 2 = the server's double confirm.
+  const remove = self ? null : wire(btn("Eliminar", "bad"), error, async () => {
+    const typed = await typeToConfirm({
+      title: "Eliminar la cuenta " + u.usuario + " (#" + u.uid + ")",
+      name: u.usuario,
+      warning: "La cuenta se cierra de inmediato y se borra para siempre en " + recoveryDays
+        + " días. Hasta entonces se puede recuperar en «Eliminadas».",
+    });
+    if (!typed) return;
+    const result = await confirmFlow(() =>
+      api("/api/admin/users/" + enc(u.usuario) + "/delete", { method: "POST", json: { name: u.usuario } }));
+    if (result) {
+      toast("cuenta eliminada: se puede recuperar hasta el " + fmtDate(result.borra), "ok");
+      ctx.refresh();
+    }
+  });
   const pass = newPassword();
   const setPass = wire(btn("Cambiar"), error, async () => {
     const password = pass.read();
@@ -316,10 +332,12 @@ function userRow(u, siteNames, ctx, error) {
     if (self) location.reload();
   });
   return el("tr", {},
-    el("td", {}, el("span", { class: "kit-name", text: u.usuario }), self ? el("span", { class: "muted", text: " (tú)" }) : null),
+    el("td", {},
+      el("span", { class: "kit-name", text: u.usuario }),
+      el("span", { class: "muted", text: " #" + u.uid + (self ? " (tú)" : "") })),
     el("td", {}, el("span", { class: "kit-edit" }, editor.node, saveRole)),
     el("td", {}, el("span", { class: "kit-edit" },
-      el("span", { class: u.active ? "chip ok" : "chip bad", text: u.active ? "activa" : "desactivada" }), toggle)),
+      el("span", { class: u.active ? "chip ok" : "chip bad", text: u.active ? "activa" : "desactivada" }), toggle, remove)),
     el("td", {}, el("span", { class: "kit-edit" }, pass.node, setPass)));
 }
 
@@ -340,18 +358,40 @@ function newUserForm(siteNames, ctx, error) {
   return el("div", {}, el("h3", { text: "Nueva cuenta" }), el("div", { class: "kit-edit" }, name, pass.node, editor.node, create));
 }
 
+function deletedTable(rows, ctx, error) {
+  return el("table", {},
+    el("thead", {}, el("tr", {}, ["Usuario", "Rol y sitio", "Eliminada", "Se borra", ""].map((h) => el("th", { text: h })))),
+    el("tbody", {}, rows.map((u) => el("tr", {},
+      el("td", {}, el("span", { class: "kit-name", text: u.usuario }), el("span", { class: "muted", text: " #" + u.uid })),
+      el("td", { text: u.role + (u.site ? ", " + u.site : "") }),
+      el("td", { text: fmtDate(u.deleted_at) }),
+      el("td", { text: fmtDate(u.borra) }),
+      el("td", {}, wire(btn("Recuperar", "ok"), error, async () => {
+        await api("/api/admin/users/" + enc(u.usuario) + "/recover", { method: "POST" });
+        toast("cuenta recuperada y activa", "ok");
+        ctx.refresh();
+      }))))));
+}
+
 async function usersCard(ctx) {
   const data = await api("/api/admin/users");
   const error = el("div", { class: "kit-error" });
   const siteNames = ctx.overview.sites.map((s) => s.site);
-  return card("Cuentas",
+  const parts = [
     el("p", {
       class: "muted",
-      text: "Una cuenta nunca se borra: se desactiva. Cambiar su contraseña, su rol o desactivarla cierra sus sesiones abiertas.",
+      text: "Cambiar la contraseña, el rol o desactivar una cuenta cierra sus sesiones abiertas. Eliminar la cierra "
+        + "de inmediato y la borra para siempre en " + data.recovery_days + " días; hasta entonces se recupera abajo. "
+        + "El número (#) de cada cuenta es permanente y nunca se repite.",
     }),
     el("table", {},
       el("thead", {}, el("tr", {}, ["Usuario", "Rol y sitio", "Estado", "Nueva contraseña"].map((h) => el("th", { text: h })))),
-      el("tbody", {}, data.users.map((u) => userRow(u, siteNames, ctx, error)))),
+      el("tbody", {}, data.users.map((u) => userRow(u, siteNames, ctx, error, data.recovery_days)))),
     newUserForm(siteNames, ctx, error),
-    error);
+  ];
+  if (data.eliminadas.length) {
+    parts.push(el("h3", { text: "Eliminadas: se recuperan en " + data.recovery_days + " días" }), deletedTable(data.eliminadas, ctx, error));
+  }
+  parts.push(error);
+  return card("Cuentas", ...parts);
 }

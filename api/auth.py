@@ -68,6 +68,7 @@ class Session:
     role: str                 # 'admin' | 'manager' (a machine row never logs in)
     site: str | None          # None = admin: every site
     created: float            # wall-clock seconds; machine.session_hours counts from here
+    uid: int | None = None    # the permanent account number (owner ruling 3.9.2)
 
     @property
     def is_admin(self) -> bool:
@@ -280,6 +281,7 @@ def _whoami(session: Session) -> dict[str, Any]:
         "site": session.site,
         "admin": session.is_admin,
         "role": session.role,
+        "uid": session.uid,
         "machine_grant_s": machine_grant_left(session),
     }
 
@@ -299,6 +301,7 @@ async def login(body: LoginRequest, response: Response) -> dict:
         role=role,
         site=None if role == ROLE_ADMIN else row["site"],
         created=time.time(),
+        uid=row.get("uid"),
     )
     with _LOCK:
         _SESSIONS[sid] = session

@@ -99,6 +99,10 @@ CATALOG: tuple[Texto, ...] = (
        "📝 El registro forense se apagó solo al vencer su plazo."),
     _t("analistas_ajustados", "machine", "Cuando la ventanilla ajusta sola el número de analistas tras un arranque.",
        "⚙️ Ajusté los analistas a {deseados} (había {corriendo}) después del arranque.", deseados="2", corriendo="1"),
+    _t("cuenta_por_borrarse", "machine", "Cinco días antes de borrar para siempre una cuenta eliminada.",
+       "⚠️ La cuenta {usuario} (#{numero}) se borra para siempre en {dias} días ({fecha}). Si fue un error, "
+       "recupérala en el mostrador: Sitios y cuentas → Eliminadas.",
+       usuario="gerente.roma", numero="7", dias="5", fecha="12 nov 2026"),
     # --- site families ---
     _t("lente_sucio", "site", "Cuando las últimas fotos de una cámara salen borrosas.",
        "🧽 Lente sucio en {sitio}/{camara}: las últimas {n} fotos salieron borrosas (nitidez {valores}, piso {piso}). Limpien el vidrio de la cámara.",

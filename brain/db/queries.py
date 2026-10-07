@@ -101,6 +101,13 @@ ADD_PLATES_DISCARDED_AT = "ALTER TABLE plates ADD COLUMN discarded_at TIMESTAMPT
 ADD_JOBS_USAGE = "ALTER TABLE jobs ADD COLUMN usage JSONB"
 ADD_SITES_DEVICE_KEY = "ALTER TABLE sites ADD COLUMN device_key TEXT"
 
+# Owner ruling 3.9.2: accounts can be deleted, recoverable for USER_RECOVERY_DAYS. uid is the permanent
+# account number: born with the row (existing rows get theirs at this migration), never reused.
+ADD_USERS_UID = "ALTER TABLE users ADD COLUMN uid BIGSERIAL UNIQUE"
+ADD_USERS_DELETED_AT = "ALTER TABLE users ADD COLUMN deleted_at TIMESTAMPTZ"
+ADD_USERS_ERASE_WARNED_AT = "ALTER TABLE users ADD COLUMN erase_warned_at TIMESTAMPTZ"
+ADD_ADMIN_LOG_USUARIO_UID = "ALTER TABLE admin_log ADD COLUMN usuario_uid BIGINT"
+
 
 # --------------------------------------------------------------------- seeds (idempotent)
 
@@ -195,22 +202,31 @@ SET_DEVICE_KEY = "UPDATE sites SET device_key = %(device_key)s WHERE site = %(si
 COUNT_USERS = "SELECT COUNT(*) AS n FROM users"
 
 SELECT_USER = """
-SELECT usuario, password_hash, role, site, active
+SELECT usuario, password_hash, role, site, active, uid, deleted_at
 FROM users
 WHERE usuario = %(usuario)s
 """
 
-# The users CRUD never lists the reserved machine row.
+# The users CRUD never lists the reserved machine row, nor the deleted accounts (they have their own list).
 LIST_USERS = """
-SELECT usuario, role, site, active, created_at
+SELECT usuario, uid, role, site, active, created_at
 FROM users
-WHERE role <> 'machine'
+WHERE role <> 'machine' AND deleted_at IS NULL
 ORDER BY usuario
+"""
+
+# "Eliminadas": recoverable until deleted_at + USER_RECOVERY_DAYS.
+LIST_DELETED_USERS = """
+SELECT usuario, uid, role, site, deleted_at
+FROM users
+WHERE role <> 'machine' AND deleted_at IS NOT NULL
+ORDER BY deleted_at
 """
 
 INSERT_USER = """
 INSERT INTO users (usuario, password_hash, role, site)
 VALUES (%(usuario)s, %(password_hash)s, %(role)s, %(site)s)
+RETURNING uid
 """
 
 # The mostrador's reset: never the machine row.
@@ -222,7 +238,7 @@ RETURNING usuario
 
 # set_password over ssh: writes the hash AND reactivates (the owner can always get back in).
 SET_PASSWORD_AND_REACTIVATE = """
-UPDATE users SET password_hash = %(password_hash)s, active = TRUE
+UPDATE users SET password_hash = %(password_hash)s, active = TRUE, deleted_at = NULL, erase_warned_at = NULL
 WHERE usuario = %(usuario)s
 RETURNING usuario, role
 """
@@ -231,7 +247,7 @@ RETURNING usuario, role
 UPSERT_RESERVED_USER = """
 INSERT INTO users (usuario, password_hash, role, site, active)
 VALUES (%(usuario)s, %(password_hash)s, %(role)s, NULL, TRUE)
-ON CONFLICT (usuario) DO UPDATE SET password_hash = EXCLUDED.password_hash, active = TRUE
+ON CONFLICT (usuario) DO UPDATE SET password_hash = EXCLUDED.password_hash, active = TRUE, deleted_at = NULL, erase_warned_at = NULL
 RETURNING usuario, role
 """
 
@@ -258,12 +274,51 @@ RETURNING usuario
 # The last active admin can never be deactivated or demoted: the caller checks this count first.
 COUNT_ACTIVE_ADMINS = "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active"
 
+# Delete: the account closes at once (a deleted account is inactive, so login and the admin count skip it).
+SOFT_DELETE_USER = """
+UPDATE users SET deleted_at = now(), active = FALSE, erase_warned_at = NULL
+WHERE usuario = %(usuario)s AND role <> 'machine' AND deleted_at IS NULL
+RETURNING usuario, uid, deleted_at
+"""
+
+# Recuperar: back to an active account.
+RECOVER_USER = """
+UPDATE users SET deleted_at = NULL, erase_warned_at = NULL, active = TRUE
+WHERE usuario = %(usuario)s AND role <> 'machine' AND deleted_at IS NOT NULL
+RETURNING usuario, uid
+"""
+
+# The worker's sweep. warn_after and retention are timedeltas; SKIP LOCKED keeps replicas off the same rows.
+USERS_TO_WARN = """
+SELECT usuario, uid, deleted_at
+FROM users
+WHERE deleted_at IS NOT NULL AND erase_warned_at IS NULL AND role <> 'machine'
+  AND deleted_at < now() - %(warn_after)s AND deleted_at >= now() - %(retention)s
+ORDER BY deleted_at
+FOR UPDATE SKIP LOCKED
+"""
+
+MARK_USER_WARNED = "UPDATE users SET erase_warned_at = now() WHERE usuario = %(usuario)s"
+
+ERASE_DELETED_USERS = """
+DELETE FROM users
+WHERE deleted_at IS NOT NULL AND deleted_at < now() - %(retention)s AND role <> 'machine'
+RETURNING usuario, uid
+"""
+
 
 # --------------------------------------------------------------------- the bitácora (Fase 3)
 
 INSERT_ADMIN_LOG = """
 INSERT INTO admin_log (usuario, action, detail)
 VALUES (%(usuario)s, %(action)s, %(detail)s)
+RETURNING id
+"""
+
+# A person's action: the name AND the permanent account number (system rows keep INSERT_ADMIN_LOG).
+INSERT_ADMIN_LOG_BY = """
+INSERT INTO admin_log (usuario, usuario_uid, action, detail)
+VALUES (%(usuario)s, %(usuario_uid)s, %(action)s, %(detail)s)
 RETURNING id
 """
 

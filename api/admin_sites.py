@@ -9,18 +9,21 @@ POST /api/admin/sites/{site}/cameras/{camera}/delete remove one camera (double c
 POST /api/admin/sites/{site}/cameras/{camera}/source the relevo, the mostrador's road
 POST /api/admin/sites/{site}/gafete/reveal           show the site's gafete to enroll a device (admin)
 POST /api/admin/sites/{site}/gafete/regenerate       a new gafete; every enrolled device enrolls again (admin, double confirm)
-GET  /api/admin/users                                the accounts (admin; the machine row is never listed)
+GET  /api/admin/users                                the accounts and the "Eliminadas" (admin; never the machine row)
 POST /api/admin/users                                create an account (admin)
 POST /api/admin/users/{usuario}/password|active|role new password, activate or deactivate, role and site (admin)
+POST /api/admin/users/{usuario}/delete               delete: typed name + double confirm; recoverable (admin)
+POST /api/admin/users/{usuario}/recover              Recuperar a deleted account (admin)
 
 A manager sees and edits ONLY its own site's functions and cameras (and its relevo); the gafete, the active
-switch, Crear restaurante and the accounts are the admin's. Every write leaves a bitácora row. A write that
-spans the database and config.yaml is all or nothing (_db_and_config): under the writer's lock, the database
-work and the config write share ONE transaction; a config bounce rolls the database back, and a failed commit
-puts the previous config text back. An account is never deleted (it is deactivated); the last active admin can
-never be deactivated or demoted, nobody can do that to themselves, and any change to an account drops its open
-sessions at once. A gafete is never logged and never written to the bitácora: it reaches only the admin's
-screen, on request.
+switch, Crear restaurante and the accounts are the admin's. Every write leaves a bitácora row carrying the
+actor's name AND permanent account number (users.uid, never reused). A write that spans the database and
+config.yaml is all or nothing (_db_and_config). Accounts (owner ruling 3.9.2, amending SPEC §3): deleting
+one asks for its exact name, then the double confirm; it closes at once, stays recoverable for
+USER_RECOVERY_DAYS with its name reserved, and the worker's sweep erases it after warning the admin chat.
+Never yourself, never the last active admin, never the machine row; a deleted account can't be edited until
+it is recovered; any change to an account drops its open sessions. A gafete is never logged and never
+written to the bitácora: it reaches only the admin's screen, on request.
 """
 
 from __future__ import annotations
@@ -29,7 +32,9 @@ import asyncio
 import logging
 import secrets
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException
@@ -37,13 +42,16 @@ from psycopg import errors as pg_errors
 from psycopg.types.json import Jsonb
 
 from api import config_writer as cw
-from api.admin import alog, log_action, propose, require_admin, require_mostrador, write_scope
+from api.admin import log_action, propose, require_admin, require_mostrador, write_scope
 from api.auth import ROLE_MACHINE, Session, drop_sessions_of, make_hash
 from brain.db import queries as q
 from brain.db.init import DEVICE_KEY_BYTES
 from brain.validator.models import (
+    DEFAULT_TIMEZONE,
+    USER_RECOVERY_DAYS,
     CameraUpsertRequest,
     Config,
+    ConfirmNameRequest,
     Funciones,
     PasswordRequest,
     SiteConfig,
@@ -62,6 +70,7 @@ router = APIRouter()
 
 SOURCE_WORDS = {"phone": "teléfono", "pi": "Pi"}
 ROLE_WORDS = {"return": "regreso", "outgoing": "salida", "both": "ambas"}
+MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -87,9 +96,15 @@ def _tx(fn: Callable[[psycopg.Connection], Any]) -> Any:
         return fn(conn)
 
 
-def _bitacora(conn: psycopg.Connection, usuario: str | None, action: str, detail: dict[str, Any]) -> None:
-    """A bitácora row INSIDE the caller's transaction: it lands only if the action lands."""
-    conn.execute(q.INSERT_ADMIN_LOG, {"usuario": usuario, "action": action, "detail": Jsonb(detail)})
+def _bitacora(conn: psycopg.Connection, actor: Session | None, action: str, detail: dict[str, Any]) -> None:
+    """A bitácora row INSIDE the caller's transaction (it lands only if the action lands), with the actor's
+    name and permanent account number."""
+    conn.execute(q.INSERT_ADMIN_LOG_BY, {
+        "usuario": actor.user if actor else None,
+        "usuario_uid": actor.uid if actor else None,
+        "action": action,
+        "detail": Jsonb(detail),
+    })
 
 
 async def _write(ops: list[cw.Op]) -> None:
@@ -121,6 +136,15 @@ async def _db_and_config(db_work: Callable[[psycopg.Connection], Any], ops: list
             raise HTTPException(status_code=400, detail=str(exc)) from None
         except pg_errors.UniqueViolation:
             raise HTTPException(status_code=409, detail="Ya existe un sitio o una cuenta con ese nombre.") from None
+
+
+def _erase_at(deleted_at: datetime) -> datetime:
+    return deleted_at + timedelta(days=USER_RECOVERY_DAYS)
+
+
+def _human_date(moment: datetime) -> str:
+    local = moment.astimezone(ZoneInfo(DEFAULT_TIMEZONE))
+    return f"{local.day} {MESES[local.month - 1]} {local.year}"
 
 
 # --- the auditor and the site view -----------------------------------------------------------
@@ -206,15 +230,16 @@ async def create_site(body: SiteCreateRequest, session: Session = Depends(requir
         if body.clone_menu_from and conn.execute(q.SELECT_SITE, {"site": body.clone_menu_from}).fetchone() is None:
             raise HTTPException(status_code=400, detail=f"No existe el sitio {body.clone_menu_from} para clonar su menú.")
         conn.execute(q.INSERT_SITE_FULL, {"site": body.site, "ingestion": body.ingestion, "device_key": key})
-        conn.execute(q.INSERT_USER, {
+        manager_uid = conn.execute(q.INSERT_USER, {
             "usuario": body.manager_usuario, "password_hash": digest, "role": "manager", "site": body.site,
-        })
+        }).fetchone()["uid"]
         cloned = 0
         if body.clone_menu_from:
             cloned = conn.execute(q.CLONE_SITE_PHOTOS, {"site": body.site, "from_site": body.clone_menu_from}).rowcount
-        _bitacora(conn, session.user, "site.create", {
-            "site": body.site, "manager": body.manager_usuario, "cameras": [c.name for c in body.cameras],
-            "funciones": body.funciones.model_dump(), "menu_de": body.clone_menu_from, "fotos": cloned,
+        _bitacora(conn, session, "site.create", {
+            "site": body.site, "manager": body.manager_usuario, "manager_uid": manager_uid,
+            "cameras": [c.name for c in body.cameras], "funciones": body.funciones.model_dump(),
+            "menu_de": body.clone_menu_from, "fotos": cloned,
         })
         return cloned
 
@@ -236,7 +261,7 @@ async def edit_site(site: str, body: SiteEditRequest, session: Session = Depends
     async def apply() -> dict[str, Any]:
         def db_work(conn: psycopg.Connection) -> None:
             conn.execute(q.EDIT_SITE, {"site": site, "ingestion": body.ingestion, "active": body.active})
-            _bitacora(conn, session.user, "site.edit", {"site": site, "ingestion": body.ingestion, "active": body.active})
+            _bitacora(conn, session, "site.edit", {"site": site, "ingestion": body.ingestion, "active": body.active})
 
         ops = [cw.set_op(("sites", site, "ingestion"), body.ingestion)] if body.ingestion and site in cfg.sites else []
         await _db_and_config(db_work, ops)
@@ -266,7 +291,7 @@ async def set_funciones(site: str, body: Funciones, session: Session = Depends(r
     target = write_scope(session, site)
     _site_cfg(await _config(), target)
     await _write([cw.set_op(("sites", target, "funciones"), cw.Flow(body.model_dump()))])
-    await alog(session, "site.funciones", {"site": target, **body.model_dump()})
+    await asyncio.to_thread(log_action, session.user, "site.funciones", {"site": target, **body.model_dump()}, session.uid)
     return await _view_of(target)
 
 
@@ -286,7 +311,9 @@ async def upsert_camera(site: str, body: CameraUpsertRequest, session: Session =
             ops.append(cw.delete_op(base + ("kitchen_edge",)))
         action = "camera.edit"
     await _write(ops)
-    await alog(session, action, {"site": target, "camera": body.name, "source": body.source, "role": body.role})
+    await asyncio.to_thread(log_action, session.user, action, {
+        "site": target, "camera": body.name, "source": body.source, "role": body.role,
+    }, session.uid)
     return await _view_of(target)
 
 
@@ -302,7 +329,7 @@ async def delete_camera(site: str, camera: str, session: Session = Depends(requi
 
     async def run() -> dict[str, Any]:
         await _write([cw.delete_op(("sites", target, "cameras", camera))])
-        await alog(session, "camera.delete", {"site": target, "camera": camera})
+        await asyncio.to_thread(log_action, session.user, "camera.delete", {"site": target, "camera": camera}, session.uid)
         return await _view_of(target)
 
     return propose(
@@ -320,10 +347,10 @@ async def delete_camera(site: str, camera: str, session: Session = Depends(requi
     )
 
 
-async def relevo(site: str, camera: str, source: str, usuario: str | None, road: str) -> dict[str, Any]:
-    """The ONE relevo, shared by both roads (the mostrador's switch here; /captura's emergency road from 3.13).
-    The camera's source flips, and its kitchen_edge goes with the old device (calibrate again). One write,
-    one bitácora row; the bot announces the relevo from that row."""
+async def relevo(site: str, camera: str, source: str, actor: Session | None, road: str) -> dict[str, Any]:
+    """The ONE relevo, shared by both roads (the mostrador's switch here; /captura's emergency road from 3.13,
+    which passes actor None). The camera's source flips, and its kitchen_edge goes with the old device
+    (calibrate again). One write, one bitácora row; the bot announces the relevo from that row."""
     site_cfg = _site_cfg(await _config(), site)
     cam = site_cfg.cameras.get(camera)
     if cam is None:
@@ -335,10 +362,10 @@ async def relevo(site: str, camera: str, source: str, usuario: str | None, road:
     if cam.kitchen_edge is not None:
         ops.append(cw.delete_op(base + ("kitchen_edge",)))
     await _write(ops)
-    await asyncio.to_thread(log_action, usuario, "relevo", {
+    await asyncio.to_thread(log_action, actor.user if actor else None, "relevo", {
         "site": site, "camera": camera, "source": source, "road": road,
         "calibracion_borrada": cam.kitchen_edge is not None,
-    })
+    }, actor.uid if actor else None)
     log.info("relevo %s/%s -> %s road=%s", site, camera, source, road)
     return {"site": site, "camera": camera, "source": source, "changed": True}
 
@@ -346,7 +373,7 @@ async def relevo(site: str, camera: str, source: str, usuario: str | None, road:
 @router.post("/api/admin/sites/{site}/cameras/{camera}/source")
 async def camera_source(site: str, camera: str, body: SourceRequest, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
     target = write_scope(session, site)
-    return await relevo(target, camera, body.source, session.user, "mostrador")
+    return await relevo(target, camera, body.source, session, "mostrador")
 
 
 # --- the gafete (admin) ------------------------------------------------------------------------
@@ -356,7 +383,7 @@ async def reveal_gafete(site: str, session: Session = Depends(require_admin)) ->
     row = await asyncio.to_thread(_read, lambda c: c.execute(q.SELECT_DEVICE_KEY, {"site": site}).fetchone())
     if row is None or not row["device_key"]:
         raise HTTPException(status_code=404, detail=f"El sitio {site} no existe, está inactivo o no tiene gafete.")
-    await alog(session, "gafete.reveal", {"site": site})
+    await asyncio.to_thread(log_action, session.user, "gafete.reveal", {"site": site}, session.uid)
     log.info("gafete revealed site=%s user=%s", site, session.user)
     return {"site": site, "gafete": row["device_key"]}
 
@@ -372,7 +399,7 @@ async def regenerate_gafete(site: str, session: Session = Depends(require_admin)
 
         def work(conn: psycopg.Connection) -> None:
             conn.execute(q.SET_DEVICE_KEY, {"site": site, "device_key": key})
-            _bitacora(conn, session.user, "gafete.regenerate", {"site": site})
+            _bitacora(conn, session, "gafete.regenerate", {"site": site})
 
         await asyncio.to_thread(_tx, work)
         log.info("gafete regenerated site=%s user=%s", site, session.user)
@@ -394,11 +421,14 @@ async def regenerate_gafete(site: str, session: Session = Depends(require_admin)
 
 # --- accounts (admin) ----------------------------------------------------------------------------
 
-def _person_row(conn: psycopg.Connection, usuario: str) -> dict[str, Any]:
-    """An account a person uses; the machine row answers 404 here, exactly like a missing name."""
+def _person_row(conn: psycopg.Connection, usuario: str, *, allow_deleted: bool = False) -> dict[str, Any]:
+    """An account a person uses. The machine row answers 404 exactly like a missing name; a deleted account
+    answers 409 (recover it first) unless the caller handles deleted rows itself."""
     row = conn.execute(q.SELECT_USER, {"usuario": usuario}).fetchone()
     if row is None or row["role"] == ROLE_MACHINE:
         raise HTTPException(status_code=404, detail=f"No existe la cuenta {usuario}.")
+    if row["deleted_at"] is not None and not allow_deleted:
+        raise HTTPException(status_code=409, detail=f"La cuenta {usuario} está eliminada: recupérala primero.")
     return row
 
 
@@ -413,29 +443,49 @@ def _last_admin(conn: psycopg.Connection, row: dict[str, Any]) -> bool:
 
 @router.get("/api/admin/users")
 async def list_users(session: Session = Depends(require_admin)) -> dict[str, Any]:
-    rows = await asyncio.to_thread(_read, lambda c: c.execute(q.LIST_USERS).fetchall())
-    return {"users": [
-        {"usuario": r["usuario"], "role": r["role"], "site": r["site"], "active": bool(r["active"]),
-         "created_at": r["created_at"].isoformat()}
-        for r in rows
-    ]}
+    def work(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        return conn.execute(q.LIST_USERS).fetchall(), conn.execute(q.LIST_DELETED_USERS).fetchall()
+
+    rows, gone = await asyncio.to_thread(_read, work)
+    return {
+        "users": [
+            {"usuario": r["usuario"], "uid": r["uid"], "role": r["role"], "site": r["site"],
+             "active": bool(r["active"]), "created_at": r["created_at"].isoformat()}
+            for r in rows
+        ],
+        "eliminadas": [
+            {"usuario": r["usuario"], "uid": r["uid"], "role": r["role"], "site": r["site"],
+             "deleted_at": r["deleted_at"].isoformat(), "borra": _erase_at(r["deleted_at"]).isoformat()}
+            for r in gone
+        ],
+        "recovery_days": USER_RECOVERY_DAYS,
+    }
 
 
 @router.post("/api/admin/users")
 async def create_user(body: UserCreateRequest, session: Session = Depends(require_admin)) -> dict[str, Any]:
     digest = await asyncio.to_thread(make_hash, body.password)
 
-    def work(conn: psycopg.Connection) -> None:
+    def work(conn: psycopg.Connection) -> int:
         _site_exists(conn, body.site)
-        conn.execute(q.INSERT_USER, {"usuario": body.usuario, "password_hash": digest, "role": body.role, "site": body.site})
-        _bitacora(conn, session.user, "user.create", {"usuario": body.usuario, "role": body.role, "site": body.site})
+        uid = conn.execute(q.INSERT_USER, {
+            "usuario": body.usuario, "password_hash": digest, "role": body.role, "site": body.site,
+        }).fetchone()["uid"]
+        _bitacora(conn, session, "user.create", {"usuario": body.usuario, "uid": uid, "role": body.role, "site": body.site})
+        return uid
 
     try:
-        await asyncio.to_thread(_tx, work)
+        uid = await asyncio.to_thread(_tx, work)
     except pg_errors.UniqueViolation:
+        row = await asyncio.to_thread(_read, lambda c: c.execute(q.SELECT_USER, {"usuario": body.usuario}).fetchone())
+        if row is not None and row["deleted_at"] is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Ese nombre es de una cuenta eliminada: se libera el {_human_date(_erase_at(row['deleted_at']))}.",
+            ) from None
         raise HTTPException(status_code=409, detail=f"Ya existe una cuenta {body.usuario}.") from None
     log.info("user created %s role=%s by=%s", body.usuario, body.role, session.user)
-    return {"usuario": body.usuario, "role": body.role, "site": body.site, "active": True}
+    return {"usuario": body.usuario, "uid": uid, "role": body.role, "site": body.site, "active": True}
 
 
 @router.post("/api/admin/users/{usuario}/password")
@@ -443,9 +493,9 @@ async def reset_password(usuario: str, body: PasswordRequest, session: Session =
     digest = await asyncio.to_thread(make_hash, body.password)
 
     def work(conn: psycopg.Connection) -> None:
-        _person_row(conn, usuario)
+        row = _person_row(conn, usuario)
         conn.execute(q.RESET_USER_PASSWORD, {"usuario": usuario, "password_hash": digest})
-        _bitacora(conn, session.user, "user.password", {"usuario": usuario})
+        _bitacora(conn, session, "user.password", {"usuario": usuario, "uid": row["uid"]})
 
     await asyncio.to_thread(_tx, work)
     dropped = drop_sessions_of(usuario)
@@ -463,7 +513,7 @@ async def set_active(usuario: str, body: SwitchRequest, session: Session = Depen
         if not body.on and _last_admin(conn, row):
             raise HTTPException(status_code=409, detail=f"{usuario} es el último admin activo: no se puede desactivar.")
         conn.execute(q.SET_USER_ACTIVE, {"usuario": usuario, "active": body.on})
-        _bitacora(conn, session.user, "user.activate" if body.on else "user.deactivate", {"usuario": usuario})
+        _bitacora(conn, session, "user.activate" if body.on else "user.deactivate", {"usuario": usuario, "uid": row["uid"]})
 
     await asyncio.to_thread(_tx, work)
     dropped = 0 if body.on else drop_sessions_of(usuario)
@@ -482,8 +532,9 @@ async def set_role(usuario: str, body: UserRoleRequest, session: Session = Depen
         if body.role != "admin" and _last_admin(conn, row):
             raise HTTPException(status_code=409, detail=f"{usuario} es el último admin activo: no se puede cambiar su rol.")
         conn.execute(q.SET_USER_ROLE, {"usuario": usuario, "role": body.role, "site": body.site})
-        _bitacora(conn, session.user, "user.role", {
+        _bitacora(conn, session, "user.role", {
             "usuario": usuario,
+            "uid": row["uid"],
             "antes": {"role": row["role"], "site": row["site"]},
             "despues": {"role": body.role, "site": body.site},
         })
@@ -492,3 +543,75 @@ async def set_role(usuario: str, body: UserRoleRequest, session: Session = Depen
     dropped = drop_sessions_of(usuario)
     log.info("user role %s -> %s by=%s", usuario, body.role, session.user)
     return {"usuario": usuario, "role": body.role, "site": body.site, "sesiones_cerradas": dropped}
+
+
+@router.post("/api/admin/users/{usuario}/delete")
+async def delete_user(usuario: str, body: ConfirmNameRequest, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Delete, step 1: the typed name must match, then the double confirm (its diff says it is permanent and
+    names the erase date). Step 2 closes the account at once; it stays recoverable until the erase."""
+    if body.name.strip() != usuario:
+        raise HTTPException(status_code=400, detail="El nombre escrito no coincide con la cuenta: no se eliminó nada.")
+    if usuario == session.user:
+        raise HTTPException(status_code=409, detail="No puedes eliminar tu propia cuenta.")
+
+    def check(conn: psycopg.Connection) -> dict[str, Any]:
+        row = _person_row(conn, usuario)
+        if _last_admin(conn, row):
+            raise HTTPException(status_code=409, detail=f"{usuario} es el último admin activo: no se puede eliminar.")
+        return row
+
+    row = await asyncio.to_thread(_read, check)
+    label = f"{usuario} (#{row['uid']})"
+    erase_day = _human_date(_erase_at(datetime.now(timezone.utc)))
+
+    async def run() -> dict[str, Any]:
+        def work(conn: psycopg.Connection) -> dict[str, Any]:
+            again = _person_row(conn, usuario)
+            if _last_admin(conn, again):
+                raise HTTPException(status_code=409, detail=f"{usuario} es el último admin activo: no se puede eliminar.")
+            done = conn.execute(q.SOFT_DELETE_USER, {"usuario": usuario}).fetchone()
+            _bitacora(conn, session, "user.delete", {
+                "usuario": usuario, "uid": done["uid"], "borra": _erase_at(done["deleted_at"]).isoformat(),
+            })
+            return done
+
+        done = await asyncio.to_thread(_tx, work)
+        dropped = drop_sessions_of(usuario)
+        log.info("user deleted %s by=%s (recoverable %d days)", usuario, session.user, USER_RECOVERY_DAYS)
+        return {
+            "usuario": usuario, "uid": done["uid"],
+            "borra": _erase_at(done["deleted_at"]).isoformat(), "sesiones_cerradas": dropped,
+        }
+
+    return propose(
+        session,
+        action="eliminar la cuenta " + label,
+        diff={
+            "resumen": (
+                f"Esta acción es permanente: la cuenta {label} se cierra ahora (no puede entrar y sus sesiones "
+                f"terminan) y el {erase_day} se borra para siempre. Hasta entonces puedes recuperarla en «Eliminadas»."
+            ),
+            "cambios": [{
+                "que": "cuenta " + label,
+                "antes": "activa" if row["active"] else "desactivada",
+                "despues": "eliminada (se borra el " + erase_day + ")",
+            }],
+        },
+        run=run,
+    )
+
+
+@router.post("/api/admin/users/{usuario}/recover")
+async def recover_user(usuario: str, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Recuperar: the deleted account comes back active, with its same number."""
+
+    def work(conn: psycopg.Connection) -> dict[str, Any]:
+        done = conn.execute(q.RECOVER_USER, {"usuario": usuario}).fetchone()
+        if done is None:
+            raise HTTPException(status_code=404, detail=f"La cuenta {usuario} no está en Eliminadas.")
+        _bitacora(conn, session, "user.recover", {"usuario": usuario, "uid": done["uid"]})
+        return done
+
+    done = await asyncio.to_thread(_tx, work)
+    log.info("user recovered %s by=%s", usuario, session.user)
+    return {"usuario": usuario, "uid": done["uid"], "active": True}

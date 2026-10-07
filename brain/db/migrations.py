@@ -21,6 +21,9 @@ Fase 3 (table steps are gated on to_regclass, column steps on information_schema
 8. jobs.usage JSONB: token counts per finished job, written inside the completion transaction.
 9. sites.device_key TEXT: the site's gafete; init births one for every site that has none.
 10. review_status gains 'discarded' (no DDL). The four-state contract is named below.
+11. users.uid BIGSERIAL UNIQUE: the permanent account number, never reused (owner ruling 3.9.2).
+12. users.deleted_at and users.erase_warned_at: the recoverable delete and its one warning.
+13. admin_log.usuario_uid: the acting account's number beside its name.
 
 Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or ADDs a missing column.
 """
@@ -100,6 +103,14 @@ MIGRATIONS: tuple[ColumnMigration | TableMigration, ...] = (
         table="sites",
         column="device_key",
         statement=q.ADD_SITES_DEVICE_KEY,
+    ),
+    ColumnMigration(name="users.uid", table="users", column="uid", statement=q.ADD_USERS_UID),
+    ColumnMigration(name="users.deleted_at", table="users", column="deleted_at", statement=q.ADD_USERS_DELETED_AT),
+    ColumnMigration(
+        name="users.erase_warned_at", table="users", column="erase_warned_at", statement=q.ADD_USERS_ERASE_WARNED_AT,
+    ),
+    ColumnMigration(
+        name="admin_log.usuario_uid", table="admin_log", column="usuario_uid", statement=q.ADD_ADMIN_LOG_USUARIO_UID,
     ),
 )
 

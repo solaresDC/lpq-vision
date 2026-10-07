@@ -345,3 +345,37 @@ export function newPassword(minChars = 10) {
     },
   };
 }
+
+// --- type the name to confirm --------------------------------------------------------------------
+
+// typeToConfirm({title, name, warning}): the person must TYPE `name` exactly (paste and drop blocked)
+// before "Continuar" enables. Resolves true (Continuar) or false (Cancelar, Escape). It is the FIRST gate:
+// the server's double confirm (the diff dialog) still follows, and the server checks the name too.
+export function typeToConfirm({ title, name, warning }) {
+  return new Promise((resolve) => {
+    const input = el("input", { type: "text", autocomplete: "off", placeholder: "escribe el nombre aquí" });
+    for (const ev of ["paste", "drop"]) input.addEventListener(ev, (e) => e.preventDefault());
+    const ok = el("button", { class: "bad", type: "button", text: "Continuar" });
+    const cancel = el("button", { type: "button", text: "Cancelar" });
+    ok.disabled = true;
+    input.addEventListener("input", () => { ok.disabled = input.value !== name; });
+    const overlay = el("div", { class: "overlay kit-dialog", role: "dialog", "aria-modal": "true" },
+      el("div", { class: "card" },
+        el("h2", { text: title }),
+        warning ? el("p", { text: warning }) : null,
+        el("p", {}, el("span", { text: "Para seguir, escribe exactamente: " }), el("code", { text: name })),
+        input,
+        el("div", { class: "kit-actions" }, cancel, ok)));
+    const onKey = (ev) => { if (ev.key === "Escape") done(false); };
+    function done(answer) {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve(answer);
+    }
+    ok.addEventListener("click", () => { if (input.value === name) done(true); });
+    cancel.addEventListener("click", () => done(false));
+    document.addEventListener("keydown", onKey);
+    document.body.append(overlay);
+    input.focus();
+  });
+}

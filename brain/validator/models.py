@@ -72,6 +72,8 @@ DEFAULT_TIMEZONE = "America/Mexico_City"
 MACHINE_USER = "cuarto"           # the reserved users row whose hash IS the machine floor
 RESERVED_SITE_SLUGS = ("reference", "brand")   # the photos root's reference/ folder and the brand album
 PASSWORD_MIN_CHARS = 10           # new passwords only; an existing one is checked, never length-judged
+USER_RECOVERY_DAYS = 30           # a deleted account stays recoverable this long, then the worker erases it (owner ruling 3.9.2)
+USER_ERASE_WARN_DAYS = 5          # the admin chat hears about the erase this many days before it happens
 
 SITE_SLUG_RE = re.compile(r"^[a-z][a-z0-9_-]{1,23}\Z")
 USER_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,31}\Z")
@@ -720,6 +722,12 @@ class ConfirmRequest(_Body):
     """Step 2 of every dangerous action: the pending_id step 1 returned with its diff."""
 
     pending_id: str = Field(min_length=8, max_length=64)
+
+
+class ConfirmNameRequest(_Body):
+    """Deleting an account: the exact name the person typed (the page checks it, and so does the server)."""
+
+    name: str = Field(min_length=1, max_length=64)
 
 
 class EnrollRequest(_Body):
