@@ -93,9 +93,12 @@ laptop Docker 27.1.1 + Compose v2.29.1-desktop.1; server Docker 29.8.0 + Compose
     bitácora row. The admin's name never appears in a public message.
 16. The three temporal .env keys (TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH, DEMO_PASSWORD_HASH) die at
     the ceremony in the SPEC's exact order; config.yaml carries ZERO temporal keys.
-17. Reference originals are sacred: never read, never overwritten; a hand-placed original is NEVER
-    deleted; an uploader original+diet pair shares one stem and dies together, only when no row
-    references it.
+17. Reference photos (owner ruling 3.10.1): two levels, UNIVERSAL (brand: admin only, every site current
+    and future; table brand_dish_photos) and LOCAL (per site; wins over the universal for that site).
+    Every upload is a PAIR with one stem: the ORIGINAL at full resolution (shown in the panels; never
+    modified, never sent to the model) and a LIGHT copy (long side 1568: what the model reads; never
+    shown). Delete or replace removes the pair once no row of either level references it. Plate photos
+    are ONE light file (from 3.13).
 18. ONE poller per token: the laptop's bot stays stopped while the server's runs; local bot tests
     bracket a listed stop/start of the server's bot.
 19. config.yaml and textos.yaml are OPERATOR STATE from Fase 3: they never travel in a deploy; the

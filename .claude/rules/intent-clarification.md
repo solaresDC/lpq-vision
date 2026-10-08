@@ -19,7 +19,7 @@ My shorthand → precise meaning (FASE 3 era: the admin module is THE CURRENT WO
 | "la mirilla" | `/camara`: foto-al-toque + vista viva (RAM copies, never stored) |
 | "el modo alineación" / "la cuerda" | the alignment pause on `/camara` and its mandatory timeout |
 | "el borde-cocina" | `kitchen_edge` of a `both` camera in config.yaml |
-| "las fotos de referencia" / "los originales" | diet copies under `photos/reference/<dish>/` and the sacred originals under `.../original/` |
+| "las fotos de referencia" / "los originales" | universal (brand, `brand_dish_photos`) and local (per site) photos; each a PAIR: the original under `.../original/` (what the panels show) and the light copy under `photos/reference/<dish>/` (what the model reads) |
 | "el mostrador" / "el primer piso" | `/admin`: the business knobs; admin + managers (a manager is forced to its site) |
 | "el cuarto de máquinas" / "el segundo piso" | `/maquinas`: role admin + the `cuarto` password grant (15 min) |
 | "el hub" / "las familias" | `api/admin.py` + `api/admin_knobs.py`, `admin_voice.py`, `admin_sites.py`, `admin_menu.py`, `admin_ops.py`, `admin_machine.py` |

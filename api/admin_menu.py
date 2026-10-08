@@ -1,28 +1,33 @@
-"""LPQ_VISION api/admin_menu.py: the menu in the mostrador (SPEC 1.5; a family of the admin hub).
+"""LPQ_VISION api/admin_menu.py: the menu in the mostrador (SPEC 1.5; owner ruling 3.10.1; a family of the admin hub).
 
-GET  /api/admin/menu?site=                   the dishes (the DATABASE is the menu's edited truth) and, for a site,
-                                             its reference photos
-GET  /api/admin/menu/photo?path=             one reference photo's DIET copy (never an original)
+GET  /api/admin/menu?site=                   the dishes (the DATABASE is the menu's edited truth), each with its
+                                             UNIVERSAL photos and, for a site, its LOCAL photos and which set the
+                                             model uses
+GET  /api/admin/menu/photo?path=             a reference photo's ORIGINAL at full resolution, for the panels (its
+                                             light copy only when no original exists)
 POST /api/admin/menu/dishes                  CREAR PLATILLO (admin): born switched on at the current MAX version
 POST /api/admin/menu/dishes/{dish_id}/edit   the full definition (admin); a new SET of component names moves the
                                              dish to global MAX+1, behind the double confirm
 POST /api/admin/menu/dishes/{dish_id}/active on/off (admin; off asks for the double confirm); never bumps
-POST /api/admin/menu/photos                  the AMO-Y-SOMBRA uploader (multipart); with `replace`, ONE site's row
-                                             moves to the new pair
-POST /api/admin/menu/photos/delete           detach one site's photo row (double confirm)
+POST /api/admin/menu/photos                  upload a PAIR (multipart); site=brand is the UNIVERSAL level (admin
+                                             only); with `replace`, that one row moves to the new pair
+POST /api/admin/menu/photos/delete           detach one photo row of either level (double confirm)
 
 menu.yaml is only the seed and the backup road now: the worker reads the database every job, so a change here
 is live on the next plate. The version clock is MAX(menu_version) over every dish: CREAR PLATILLO is born at the
 current MAX (no bump), a toggle or a photo never bumps, and only a change in the SET of a dish's component names
 moves it to global MAX+1 (each plate's menu_version then tells which universe judged it).
 
-The AMO-Y-SOMBRA law: the uploader writes a PAIR sharing one stem. The original, exactly as received, goes under
-reference/<dish>/original/ (sacred: written once, never read again); the diet copy (long side REF_DIET_MAX_SIDE,
-JPEG REF_DIET_QUALITY) goes under reference/<dish>/, and it is what rows point to and the model reads. Rows are
-per site and files may be shared (Crear restaurante clones rows that point at the same files). Copy-on-diverge:
-a site that wants a different photo uploads its own pair and repoints ITS row; a shared file is never modified.
-GC: after a detach or a repoint, an uploader pair (stem 'up-...') that no row references dies together; a
-hand-placed photo is never deleted. A manager reads the definitions and handles ONLY its own site's photos.
+Reference photos (owner ruling 3.10.1): two levels. UNIVERSAL photos (table brand_dish_photos; the api calls the
+level "brand", a reserved slug no site can carry) belong to the admin and serve every site, current and future,
+that has no LOCAL photo of the dish. LOCAL photos (site_dish_photos) belong to their site and win over the
+universal ones. Every upload writes a PAIR sharing one stem: the ORIGINAL, exactly as received, under
+reference/<dish>/original/ (shown in the panels, never modified, never sent to the model) and the LIGHT copy
+(long side REF_DIET_MAX_SIDE, JPEG REF_DIET_QUALITY) under reference/<dish>/, which rows point to and the model
+reads (never shown). Copy-on-diverge: replacing repoints ONE row to a new pair; a file another row still uses is
+never touched. GC: after a detach or a repoint, a pair that no row of either level references dies together,
+whoever placed it. A manager reads the definitions and the universal photos, and handles ONLY its own site's
+local photos.
 """
 
 from __future__ import annotations
@@ -48,6 +53,7 @@ from api.auth import Session, scoped_site
 from brain.capture.backends import PHOTO_ROOT
 from brain.db import queries as q
 from brain.validator.models import DishCreateRequest, DishEditRequest, RefPhotoRequest, SwitchRequest
+from brain.worker.menu_builder import BRAND_SITE
 
 log = logging.getLogger("lpq.api.admin_menu")
 
@@ -56,8 +62,8 @@ router = APIRouter()
 # --- named constants (SPEC section 4) -------------------------------------------------
 REFERENCE_DIR = "reference"
 ORIGINAL_DIR = "original"
-UPLOAD_PREFIX = "up-"              # the uploader's stems; anything else under reference/ is hand-placed (never deleted)
-REF_DIET_MAX_SIDE = 1568           # the model's copy: Anthropic scales any longer side down to about this anyway
+UPLOAD_PREFIX = "up-"              # the stems the uploader writes (a hand-placed pair carries any other stem)
+REF_DIET_MAX_SIDE = 1568           # the model's light copy: Anthropic scales any longer side down to about this anyway
 REF_DIET_QUALITY = 85
 REF_UPLOAD_MAX_MB = 15
 CONDITIONS = ("normal", "lampara")
@@ -100,12 +106,28 @@ def _names(componentes: list[Any]) -> list[str]:
 
 
 def _safe_diet(path: str) -> PurePosixPath | None:
-    """A diet copy's relative path is exactly reference/<dish>/<file>: an original (one level deeper), an absolute
-    path or a climb out of the photos root is refused by shape."""
+    """A light copy's relative path is exactly reference/<dish>/<file>: an original (one level deeper), an
+    absolute path or a climb out of the photos root is refused by shape."""
     p = PurePosixPath(path)
     if p.is_absolute() or ".." in p.parts or len(p.parts) != 3 or p.parts[0] != REFERENCE_DIR:
         return None
     return p
+
+
+def _original_of(diet_rel: str) -> Path | None:
+    """The ORIGINAL of a light copy: the file with the same stem under original/ (found by name, never opened here)."""
+    p = PurePosixPath(diet_rel)
+    matches = sorted((PHOTO_ROOT / str(p.parent) / ORIGINAL_DIR).glob(p.stem + ".*"))
+    return matches[0] if matches else None
+
+
+def _photo_item(path: str, condition: str, shared: list[str]) -> dict[str, Any]:
+    return {
+        "photo_path": path,
+        "condition": condition,
+        "compartida_con": shared,
+        "original": _original_of(path) is not None,
+    }
 
 
 # --- the menu, read -------------------------------------------------------------------------
@@ -114,44 +136,45 @@ def _safe_diet(path: str) -> PurePosixPath | None:
 async def menu(site: str | None = None, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
     scope = scoped_site(session, site)            # a manager is forced to its own site; the admin may choose none
 
-    def work(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
+    def work(conn: psycopg.Connection) -> dict[str, Any]:
         if scope:
             _site_or_404(conn, scope)
         dishes = conn.execute(q.SELECT_ALL_DISHES).fetchall()
         version = int(conn.execute(q.MAX_MENU_VERSION).fetchone()["v"])
-        photos = conn.execute(q.SELECT_ALL_SITE_DISH_PHOTOS).fetchall()
-        return dishes, version, photos
+        local = conn.execute(q.SELECT_ALL_SITE_DISH_PHOTOS).fetchall()
+        brand = conn.execute(q.SELECT_BRAND_DISH_PHOTOS).fetchall()
+        users_of: dict[str, list[str]] = {}
+        for p in local:
+            users_of.setdefault(p["photo_path"], []).append(p["site"])
+        out: list[dict[str, Any]] = []
+        for d in dishes:
+            item: dict[str, Any] = {
+                "dish_id": d["dish_id"],
+                "nombre": d["nombre"],
+                "plate_type": d["plate_type"],
+                "componentes": [{"nombre": c["nombre"], "porcion_g": c["porcion_g"]} for c in d["componentes"]],
+                "activo": bool(d["activo"]),
+                "menu_version": int(d["menu_version"]),
+                "universales": [
+                    _photo_item(b["photo_path"], b["condition"], []) for b in brand if b["dish_id"] == d["dish_id"]
+                ],
+            }
+            if scope:
+                mine = [p for p in local if p["site"] == scope and p["dish_id"] == d["dish_id"]]
+                item["locales"] = [
+                    _photo_item(p["photo_path"], p["condition"], [s for s in users_of.get(p["photo_path"], []) if s != scope])
+                    for p in mine
+                ]
+                item["usa"] = "local" if mine else ("universal" if item["universales"] else "ninguna")
+            out.append(item)
+        return {"menu_version": version, "dishes": out}
 
-    dishes, version, photos = await asyncio.to_thread(_read, work)
-    users_of: dict[str, list[str]] = {}
-    for p in photos:
-        users_of.setdefault(p["photo_path"], []).append(p["site"])
-    out: list[dict[str, Any]] = []
-    for d in dishes:
-        item: dict[str, Any] = {
-            "dish_id": d["dish_id"],
-            "nombre": d["nombre"],
-            "plate_type": d["plate_type"],
-            "componentes": [{"nombre": c["nombre"], "porcion_g": c["porcion_g"]} for c in d["componentes"]],
-            "activo": bool(d["activo"]),
-            "menu_version": int(d["menu_version"]),
-        }
-        if scope:
-            item["photos"] = [
-                {
-                    "photo_path": p["photo_path"],
-                    "condition": p["condition"],
-                    "compartida_con": [s for s in users_of.get(p["photo_path"], []) if s != scope],
-                    "subida": PurePosixPath(p["photo_path"]).name.startswith(UPLOAD_PREFIX),
-                }
-                for p in photos
-                if p["site"] == scope and p["dish_id"] == d["dish_id"]
-            ]
-        out.append(item)
+    body = await asyncio.to_thread(_read, work)
     return {
         "site": scope,
-        "menu_version": version,
-        "dishes": out,
+        "brand": BRAND_SITE,
+        "menu_version": body["menu_version"],
+        "dishes": body["dishes"],
         "conditions": list(CONDITIONS),
         "diet_max_side": REF_DIET_MAX_SIDE,
         "upload_max_mb": REF_UPLOAD_MAX_MB,
@@ -160,28 +183,36 @@ async def menu(site: str | None = None, session: Session = Depends(require_mostr
 
 @router.get("/api/admin/menu/photo")
 async def ref_photo(path: str, session: Session = Depends(require_mostrador)) -> FileResponse:
-    """A reference photo's DIET copy, only when some row points to it (and, for a manager, a row of its own site).
-    The path comes from a row the page was given, never invented: anything else is 404. Originals: never."""
+    """What the panels show: the photo's ORIGINAL at full resolution (the light copy only when no original exists).
+    `path` is a light copy a row points to: anything else is 404. A universal photo is visible to every account;
+    a local one to the admin and to its own site's manager."""
     safe = _safe_diet(path)
     if safe is None:
         raise HTTPException(status_code=404, detail="foto de referencia no encontrada")
-    rows = await asyncio.to_thread(_read, lambda c: c.execute(q.SELECT_ALL_SITE_DISH_PHOTOS).fetchall())
-    sites = [r["site"] for r in rows if r["photo_path"] == path]
-    if not sites:
+
+    def work(conn: psycopg.Connection) -> tuple[list[str], bool]:
+        local = [r["site"] for r in conn.execute(q.SELECT_ALL_SITE_DISH_PHOTOS).fetchall() if r["photo_path"] == path]
+        brand = any(r["photo_path"] == path for r in conn.execute(q.SELECT_BRAND_DISH_PHOTOS).fetchall())
+        return local, brand
+
+    sites, in_brand = await asyncio.to_thread(_read, work)
+    if not sites and not in_brand:
         raise HTTPException(status_code=404, detail="foto de referencia no encontrada")
-    if not session.is_admin and session.site not in sites:
+    if not session.is_admin and not in_brand and session.site not in sites:
         raise HTTPException(status_code=403, detail="esa foto no es de tu sitio")
-    file = PHOTO_ROOT / str(safe)
+    original = await asyncio.to_thread(_original_of, path)
+    file = original if original is not None else PHOTO_ROOT / str(safe)
     if not file.is_file():
         raise HTTPException(status_code=404, detail="la foto falta en el disco")
-    return FileResponse(file, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+    media = "image/png" if file.suffix.lower() == ".png" else "image/jpeg"
+    return FileResponse(file, media_type=media, headers={"Cache-Control": "private, max-age=300"})
 
 
 # --- definitions (admin) -------------------------------------------------------------------------
 
 @router.post("/api/admin/menu/dishes")
 async def create_dish(body: DishCreateRequest, session: Session = Depends(require_admin)) -> dict[str, Any]:
-    """CREAR PLATILLO: born switched on at the current MAX version (no bump); its photos come later, per site."""
+    """CREAR PLATILLO: born switched on at the current MAX version (no bump); its photos come later."""
     def work(conn: psycopg.Connection) -> int:
         born = int(conn.execute(q.MAX_MENU_VERSION).fetchone()["v"])
         cur = conn.execute(q.INSERT_MENU_DISH, {
@@ -295,7 +326,7 @@ async def set_dish_active(dish_id: str, body: SwitchRequest, session: Session = 
     return await apply()
 
 
-# --- reference photos (own site for a manager) -------------------------------------------------
+# --- reference photos: universal (site=brand, admin) and local (own site for a manager) ---------
 
 def _decode(data: bytes) -> tuple[str, np.ndarray]:
     if data.startswith(JPEG_MAGIC):
@@ -317,7 +348,7 @@ def _diet(img: np.ndarray) -> bytes:
         img = cv2.resize(img, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, REF_DIET_QUALITY])
     if not ok:
-        raise RuntimeError("diet encode failed")
+        raise RuntimeError("light copy encode failed")
     return buf.tobytes()
 
 
@@ -329,20 +360,22 @@ def _atomic(path: Path, data: bytes) -> None:
 
 
 def _write_pair(dish_id: str, ext: str, original: bytes, diet: bytes) -> tuple[str, list[Path]]:
-    """The AMO-Y-SOMBRA pair under one stem. Returns the diet's relative path and both files written."""
+    """The pair under one stem: the original exactly as received, and the light copy. Returns the light copy's
+    relative path and both files written."""
     stem = UPLOAD_PREFIX + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(3)
     diet_rel = f"{REFERENCE_DIR}/{dish_id}/{stem}.jpg"
     original_path = PHOTO_ROOT / REFERENCE_DIR / dish_id / ORIGINAL_DIR / f"{stem}.{ext}"
     diet_path = PHOTO_ROOT / diet_rel
-    _atomic(original_path, original)        # the sacred original: exactly as received, written once, never read
+    _atomic(original_path, original)        # the original: exactly as received, never modified afterwards
     _atomic(diet_path, diet)
     return diet_rel, [diet_path, original_path]
 
 
 def _gc_pair(conn: psycopg.Connection, diet_rel: str) -> list[str]:
-    """An uploader pair that no row references dies together. A hand-placed photo is never deleted."""
+    """A pair that no row of EITHER level references dies together (its light copy and its original), whoever
+    placed it (owner ruling 3.10.1). A file some row still uses is never touched."""
     p = PurePosixPath(diet_rel)
-    if _safe_diet(diet_rel) is None or not p.name.startswith(UPLOAD_PREFIX):
+    if _safe_diet(diet_rel) is None:
         return []
     if int(conn.execute(q.COUNT_PHOTO_REFS, {"photo_path": diet_rel}).fetchone()["n"]) > 0:
         return []
@@ -366,9 +399,13 @@ async def upload_photo(
     replace: str | None = Form(None),
     session: Session = Depends(require_mostrador),
 ) -> dict[str, Any]:
-    """The AMO-Y-SOMBRA uploader. Without `replace`: a new row for this site. With `replace` (a diet path this site
-    uses): THIS site's row moves to the new pair (copy-on-diverge) and the old pair is collected if nobody uses it."""
+    """Upload a pair. site=brand: the UNIVERSAL level (write_scope refuses it to a manager). Without `replace`: a
+    new row of that level. With `replace` (a light path that level uses): that ONE row moves to the new pair
+    (copy-on-diverge), and the old pair is collected once nobody uses it."""
     target = write_scope(session, site)
+    if not target:
+        raise HTTPException(status_code=400, detail="falta el sitio (o brand para las fotos universales)")
+    universal = target == BRAND_SITE
     if condition not in CONDITIONS:
         raise HTTPException(status_code=400, detail="condición: normal o lampara")
     data = await photo.read(REF_UPLOAD_MAX_MB * 1024 * 1024 + 1)
@@ -378,7 +415,8 @@ async def upload_photo(
         raise HTTPException(status_code=413, detail=f"La foto pesa más de {REF_UPLOAD_MAX_MB} MB.")
 
     def check(conn: psycopg.Connection) -> None:
-        _site_or_404(conn, target)
+        if not universal:
+            _site_or_404(conn, target)
         _dish_or_404(conn, dish_id)
 
     await asyncio.to_thread(_read, check)
@@ -388,17 +426,23 @@ async def upload_photo(
 
     def work(conn: psycopg.Connection) -> None:
         if replace:
-            cur = conn.execute(q.REPOINT_SITE_DISH_PHOTO, {
-                "site": target, "dish_id": dish_id, "photo_path": replace, "new_path": diet_rel, "condition": condition,
-            })
+            params: dict[str, Any] = {"dish_id": dish_id, "photo_path": replace, "new_path": diet_rel, "condition": condition}
+            if universal:
+                cur = conn.execute(q.REPOINT_BRAND_DISH_PHOTO, params)
+            else:
+                cur = conn.execute(q.REPOINT_SITE_DISH_PHOTO, {**params, "site": target})
             if cur.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Esa foto ya no está en este sitio: recarga la página.")
+                raise HTTPException(status_code=404, detail="Esa foto ya no está ahí: recarga la página.")
+        elif universal:
+            conn.execute(q.INSERT_BRAND_DISH_PHOTO, {"dish_id": dish_id, "photo_path": diet_rel, "condition": condition})
         else:
             conn.execute(q.INSERT_SITE_DISH_PHOTO, {
                 "site": target, "dish_id": dish_id, "photo_path": diet_rel, "condition": condition,
             })
         _bitacora(conn, session, "photo.replace" if replace else "photo.add", {
-            "site": target, "dish_id": dish_id, "photo_path": diet_rel, "antes": replace, "condition": condition,
+            "nivel": "universal" if universal else "local",
+            "site": None if universal else target,
+            "dish_id": dish_id, "photo_path": diet_rel, "antes": replace, "condition": condition,
         })
 
     try:
@@ -408,57 +452,83 @@ async def upload_photo(
             path.unlink(missing_ok=True)
         raise
     removed = await asyncio.to_thread(_read, lambda c: _gc_pair(c, replace)) if replace else []
-    log.info("reference photo %s %s/%s -> %s by=%s", "replaced" if replace else "added", target, dish_id, diet_rel, session.user)
+    log.info("reference photo %s %s/%s -> %s by=%s", "replaced" if replace else "added",
+             "universal" if universal else target, dish_id, diet_rel, session.user)
     return {
-        "site": target, "dish_id": dish_id, "photo_path": diet_rel, "condition": condition,
+        "nivel": "universal" if universal else "local",
+        "site": None if universal else target,
+        "dish_id": dish_id, "photo_path": diet_rel, "condition": condition,
         "reemplazo": replace, "borrados": removed,
     }
 
 
 @router.post("/api/admin/menu/photos/delete")
 async def delete_photo(body: RefPhotoRequest, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
-    """Detach ONE site's row (double confirm). The files die only if they are an uploader pair nobody uses."""
+    """Detach ONE row of either level (site=brand: universal, admin only), behind the double confirm. Its pair
+    dies once no row of either level references it."""
     target = write_scope(session, body.site)
+    if not target:
+        raise HTTPException(status_code=400, detail="falta el sitio (o brand para las fotos universales)")
+    universal = target == BRAND_SITE
     if not body.photo_path:
         raise HTTPException(status_code=400, detail="falta la foto a quitar")
     path = body.photo_path
 
-    def look(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], list[str]]:
-        mine = conn.execute(q.SELECT_DISH_PHOTOS_OF_SITE, {"site": target, "dish_id": body.dish_id}).fetchall()
-        everyone = conn.execute(q.SELECT_ALL_SITE_DISH_PHOTOS).fetchall()
-        return mine, [r["site"] for r in everyone if r["photo_path"] == path and r["site"] != target]
+    def look(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], list[str], bool, bool]:
+        local_all = conn.execute(q.SELECT_ALL_SITE_DISH_PHOTOS).fetchall()
+        brand_all = conn.execute(q.SELECT_BRAND_DISH_PHOTOS).fetchall()
+        if universal:
+            mine = [r for r in brand_all if r["dish_id"] == body.dish_id]
+        else:
+            mine = [r for r in local_all if r["site"] == target and r["dish_id"] == body.dish_id]
+        others = [r["site"] for r in local_all if r["photo_path"] == path and (universal or r["site"] != target)]
+        also_brand = (not universal) and any(r["photo_path"] == path for r in brand_all)
+        dish_has_brand = any(r["dish_id"] == body.dish_id for r in brand_all)
+        return mine, others, also_brand, dish_has_brand
 
-    mine, others = await asyncio.to_thread(_read, look)
+    mine, others, also_brand, dish_has_brand = await asyncio.to_thread(_read, look)
     if not any(r["photo_path"] == path for r in mine):
-        raise HTTPException(status_code=404, detail="Esa foto no está en este sitio.")
+        raise HTTPException(status_code=404, detail="Esa foto no está ahí.")
     lista = []
-    if others:
-        lista.append("Otros sitios la usan (" + ", ".join(others) + "): el archivo se queda.")
-    elif PurePosixPath(path).name.startswith(UPLOAD_PREFIX):
-        lista.append("Nadie más la usa: se borran su copia y su original.")
+    if others or also_brand:
+        quienes = list(others) + (["las universales"] if also_brand else [])
+        lista.append("Otros la usan (" + ", ".join(quienes) + "): el archivo se queda.")
     else:
-        lista.append("Es una foto colocada a mano: el archivo se queda en el disco.")
+        lista.append("Nadie más la usa: se borran su original y su copia ligera.")
     if len(mine) == 1:
-        lista.append("Era la última foto de este platillo en el sitio: el modelo trabajará solo con la definición.")
+        if universal:
+            lista.append("Era la última foto universal de este platillo: las sucursales sin foto local se quedan sin referencia.")
+        elif dish_has_brand:
+            lista.append("Era la última foto local: este sitio vuelve a usar las fotos universales.")
+        else:
+            lista.append("Era la última foto de este platillo en el sitio: el modelo trabajará solo con la definición.")
 
     async def run() -> dict[str, Any]:
         def work(conn: psycopg.Connection) -> None:
-            cur = conn.execute(q.DELETE_SITE_DISH_PHOTO, {"site": target, "dish_id": body.dish_id, "photo_path": path})
+            if universal:
+                cur = conn.execute(q.DELETE_BRAND_DISH_PHOTO, {"dish_id": body.dish_id, "photo_path": path})
+            else:
+                cur = conn.execute(q.DELETE_SITE_DISH_PHOTO, {"site": target, "dish_id": body.dish_id, "photo_path": path})
             if cur.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Esa foto ya no está en este sitio.")
-            _bitacora(conn, session, "photo.delete", {"site": target, "dish_id": body.dish_id, "photo_path": path})
+                raise HTTPException(status_code=404, detail="Esa foto ya no está ahí.")
+            _bitacora(conn, session, "photo.delete", {
+                "nivel": "universal" if universal else "local",
+                "site": None if universal else target,
+                "dish_id": body.dish_id, "photo_path": path,
+            })
 
         await asyncio.to_thread(_tx, work)
         removed = await asyncio.to_thread(_read, lambda c: _gc_pair(c, path))
-        log.info("reference photo detached %s/%s %s by=%s", target, body.dish_id, path, session.user)
-        return {"site": target, "dish_id": body.dish_id, "photo_path": path, "borrados": removed}
+        log.info("reference photo detached %s/%s %s by=%s", "universal" if universal else target, body.dish_id, path, session.user)
+        return {"nivel": "universal" if universal else "local", "dish_id": body.dish_id, "photo_path": path, "borrados": removed}
 
+    where = "universal de " + body.dish_id if universal else "local de " + body.dish_id + " en " + target
     return propose(
         session,
-        action="quitar una foto de " + body.dish_id + " en " + target,
+        action="quitar una foto " + where,
         diff={
-            "resumen": f"La foto deja de ser referencia de {body.dish_id} en {target}.",
-            "cambios": [{"que": path, "antes": "en " + target, "despues": "(quitada)"}],
+            "resumen": "La foto deja de ser referencia " + ("universal" if universal else "de " + target) + " de " + body.dish_id + ".",
+            "cambios": [{"que": path, "antes": "universal" if universal else "local de " + target, "despues": "(quitada)"}],
             "lista": lista,
         },
         run=run,

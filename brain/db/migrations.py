@@ -26,6 +26,8 @@ Fase 3 (table steps are gated on to_regclass, column steps on information_schema
 13. admin_log.usuario_uid: the acting account's number beside its name.
 14. users.password_changed_at and users.password_changed_by: when a password last changed, and who changed it
     (nobody can SEE a password: only its hash exists).
+15. brand_dish_photos: the UNIVERSAL reference photos of each dish (owner ruling 3.10.1), valid for every site
+    that has no local photo of that dish; site_dish_photos keeps the LOCAL ones.
 
 Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or ADDs a missing column.
 """
@@ -122,6 +124,7 @@ MIGRATIONS: tuple[ColumnMigration | TableMigration, ...] = (
         name="users.password_changed_by", table="users", column="password_changed_by",
         statement=q.ADD_USERS_PASSWORD_CHANGED_BY,
     ),
+    TableMigration(name="brand_dish_photos", table="brand_dish_photos", statement=q.CREATE_BRAND_DISH_PHOTOS_TABLE),
 )
 
 

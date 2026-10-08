@@ -112,6 +112,17 @@ ADD_ADMIN_LOG_USUARIO_UID = "ALTER TABLE admin_log ADD COLUMN usuario_uid BIGINT
 ADD_USERS_PASSWORD_CHANGED_AT = "ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMPTZ"
 ADD_USERS_PASSWORD_CHANGED_BY = "ALTER TABLE users ADD COLUMN password_changed_by TEXT"
 
+# 3.10.1 (owner ruling): the UNIVERSAL reference photos, one set per dish for every site without local ones.
+CREATE_BRAND_DISH_PHOTOS_TABLE = """
+CREATE TABLE brand_dish_photos (
+  dish_id    TEXT NOT NULL REFERENCES menu_dishes(dish_id),
+  photo_path TEXT NOT NULL,
+  condition  TEXT NOT NULL DEFAULT 'normal',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (dish_id, photo_path)
+)
+"""
+
 
 # --------------------------------------------------------------------- seeds (idempotent)
 
@@ -158,6 +169,13 @@ SELECT_SITE_DISH_PHOTOS = """
 SELECT dish_id, photo_path, condition
 FROM site_dish_photos
 WHERE site = %(site)s
+ORDER BY dish_id, photo_path
+"""
+
+# The universal level (menu_builder's fallback and the mostrador's list): every dish's brand photos.
+SELECT_BRAND_DISH_PHOTOS = """
+SELECT dish_id, photo_path, condition
+FROM brand_dish_photos
 ORDER BY dish_id, photo_path
 """
 
@@ -448,7 +466,11 @@ UPDATE site_dish_photos SET photo_path = %(new_path)s, condition = %(condition)s
 WHERE site = %(site)s AND dish_id = %(dish_id)s AND photo_path = %(photo_path)s
 """
 
-COUNT_PHOTO_REFS = "SELECT COUNT(*) AS n FROM site_dish_photos WHERE photo_path = %(photo_path)s"
+# A light copy's references across BOTH levels: its pair dies only when this is 0.
+COUNT_PHOTO_REFS = """
+SELECT (SELECT COUNT(*) FROM site_dish_photos WHERE photo_path = %(photo_path)s)
+     + (SELECT COUNT(*) FROM brand_dish_photos WHERE photo_path = %(photo_path)s) AS n
+"""
 
 # Crear restaurante's menu clone: the new site's rows point at the SAME files as the closest site.
 CLONE_SITE_PHOTOS = """
@@ -457,6 +479,19 @@ SELECT %(site)s, dish_id, photo_path, condition
 FROM site_dish_photos
 WHERE site = %(from_site)s
 ON CONFLICT DO NOTHING
+"""
+
+INSERT_BRAND_DISH_PHOTO = """
+INSERT INTO brand_dish_photos (dish_id, photo_path, condition)
+VALUES (%(dish_id)s, %(photo_path)s, %(condition)s)
+ON CONFLICT (dish_id, photo_path) DO NOTHING
+"""
+
+DELETE_BRAND_DISH_PHOTO = "DELETE FROM brand_dish_photos WHERE dish_id = %(dish_id)s AND photo_path = %(photo_path)s"
+
+REPOINT_BRAND_DISH_PHOTO = """
+UPDATE brand_dish_photos SET photo_path = %(new_path)s, condition = %(condition)s
+WHERE dish_id = %(dish_id)s AND photo_path = %(photo_path)s
 """
 
 

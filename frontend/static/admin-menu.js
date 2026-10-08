@@ -1,10 +1,11 @@
-// LPQ_VISION admin-menu.js: the Menú tab of the mostrador (family admin_menu; SPEC 1.5).
+// LPQ_VISION admin-menu.js: the Menú tab of the mostrador (family admin_menu; SPEC 1.5; owner ruling 3.10.1).
 // The dishes are the DATABASE's menu (menu.yaml is only the seed). Their definitions apply to every site and
 // belong to the admin: Crear platillo, edit (a change in the SET of component names bumps the menu version
-// behind the double confirm), on/off (off behind the double confirm). The reference photos belong to each site:
-// with a site chosen (a manager always has its own), every dish shows its diet copies with Subir, Reemplazar
-// and Quitar. The uploader keeps the original untouched and gives the model a light copy; a photo shared with
-// another site is never modified (copy-on-diverge). A manager reads the definitions without editing them.
+// behind the double confirm), on/off (off behind the double confirm). Reference photos come in two levels:
+// UNIVERSAL (the brand's, for every site current and future; the admin's) and LOCAL (each site's own; they win
+// over the universal ones for that site). Every photo shown here is its ORIGINAL at full resolution; the model
+// receives a light copy of the same photo, which nobody sees. A manager sees the universal photos and manages
+// only its own site's local ones; the server enforces that too.
 
 import { api, el, qs, toast } from "/static/app.js";
 import { busy, card, confirmDialog, confirmFlow } from "/static/admin-kit.js";
@@ -12,6 +13,11 @@ import { busy, card, confirmDialog, confirmFlow } from "/static/admin-kit.js";
 const INLINE = "width: auto;";
 const enc = encodeURIComponent;
 const CONDITION_WORDS = { normal: "luz normal", lampara: "con lámpara" };
+const USA_WORDS = {
+  local: "El modelo usa las fotos locales de este sitio.",
+  universal: "Este sitio no tiene fotos locales de este platillo: el modelo usa las universales.",
+  ninguna: "Sin fotos: el modelo trabaja solo con la definición.",
+};
 
 function btn(text, cls) {
   return el("button", { class: cls || "", type: "button", text: text });
@@ -41,13 +47,18 @@ async function finish(answer) {
 export async function render(ctx) {
   const data = await api("/api/admin/menu" + qs({ site: ctx.site }));
   const where = data.site
-    ? "Estás viendo las fotos de " + data.site + "."
-    : "Elige un sitio arriba para ver y subir sus fotos.";
+    ? "Estás viendo las fotos universales y las locales de " + data.site + "."
+    : "Estás viendo las fotos universales; elige un sitio arriba para ver también sus fotos locales.";
   const box = el("div", {}, card("Menú (versión " + data.menu_version + ")",
     el("p", {
       class: "muted",
-      text: "Las definiciones valen para todos los sitios; las fotos de referencia son de cada sitio. " + where
-        + " Un cambio aquí cuenta desde el siguiente plato analizado.",
+      text: "Las definiciones y las fotos universales valen para todas las sucursales, actuales y futuras. Si una "
+        + "sucursal sube fotos locales de un platillo, el modelo usa esas; si no, usa las universales. " + where,
+    }),
+    el("p", {
+      class: "muted",
+      text: "Aquí ves cada foto completa (tócala para abrirla en grande). El modelo recibe una copia ligera de la "
+        + "misma foto, que nadie ve. Un cambio aquí cuenta desde el siguiente plato analizado.",
     })));
   if (ctx.sess.admin) box.append(createDishCard(ctx));
   for (const d of data.dishes) box.append(dishCard(d, data, ctx));
@@ -99,7 +110,8 @@ function createDishCard(ctx) {
   return card("Crear platillo",
     el("p", {
       class: "muted",
-      text: "Nace prendido y en la versión actual del menú (no la sube). Sus fotos de referencia se suben después, sitio por sitio.",
+      text: "Nace prendido y en la versión actual del menú (no la sube). Sus fotos se suben después: universales aquí, "
+        + "locales en cada sucursal.",
     }),
     el("div", { class: "kit-edit" },
       el("span", { class: "muted", text: "Clave:" }), id,
@@ -156,88 +168,109 @@ function activeRow(d, ctx, error) {
   return el("div", { class: "kit-edit", style: "margin-top: 8px;" }, toggle);
 }
 
-// --- reference photos (the chosen site) ---------------------------------------------------------
+// --- reference photos: universal (level = data.brand) and local (level = the site) ----------------
 
-async function sendPhoto(d, data, file, condition, replace) {
+async function sendPhoto(level, d, file, condition, replace) {
   const form = new FormData();
   form.append("photo", file);
-  form.append("site", data.site);
+  form.append("site", level);
   form.append("dish_id", d.dish_id);
   form.append("condition", condition);
   if (replace) form.append("replace", replace);
   return api("/api/admin/menu/photos", { method: "POST", form: form });
 }
 
-function photoTile(d, p, data, ctx, error) {
-  const img = el("img", { class: "thumb", alt: d.nombre, src: "/api/admin/menu/photo" + qs({ path: p.photo_path }) });
-  const file = el("input", { type: "file", accept: "image/jpeg,image/png", style: "display: none;" });
-  const replaceBtn = el("button", { class: "kit-copy", type: "button", text: "Reemplazar" });
-  replaceBtn.addEventListener("click", () => file.click());
-  file.addEventListener("change", () => busy(replaceBtn, async () => {
-    error.textContent = "";
-    try {
-      if (!file.files.length) return;
-      await sendPhoto(d, data, file.files[0], p.condition, p.photo_path);
-      toast("foto reemplazada en " + data.site, "ok");
-      ctx.refresh();
-    } catch (err) {
-      error.textContent = err.message;
-    }
-  }));
-  const remove = wire(el("button", { class: "kit-copy", type: "button", text: "Quitar" }), error, async () => {
-    const result = await confirmFlow(() => api("/api/admin/menu/photos/delete", {
-      method: "POST",
-      json: { site: data.site, dish_id: d.dish_id, photo_path: p.photo_path, condition: p.condition },
+function photoTile(d, p, level, editable, ctx, error) {
+  const src = "/api/admin/menu/photo" + qs({ path: p.photo_path });
+  const img = el("img", { class: "thumb", alt: d.nombre, src: src, loading: "lazy" });
+  const parts = [
+    el("a", { href: src, target: "_blank", rel: "noopener", title: "Ver completa" }, img),
+    el("div", {
+      class: "muted",
+      text: (CONDITION_WORDS[p.condition] || p.condition) + (p.original ? "" : " · sin original: se ve la copia ligera"),
+    }),
+  ];
+  if (p.compartida_con.length) {
+    parts.push(el("div", { class: "kit-note", text: "Compartida con " + p.compartida_con.join(", ") + ": cambiarla aquí no cambia la de ellos." }));
+  }
+  if (editable) {
+    const file = el("input", { type: "file", accept: "image/jpeg,image/png", style: "display: none;" });
+    const replaceBtn = el("button", { class: "kit-copy", type: "button", text: "Reemplazar" });
+    replaceBtn.addEventListener("click", () => file.click());
+    file.addEventListener("change", () => busy(replaceBtn, async () => {
+      error.textContent = "";
+      try {
+        if (!file.files.length) return;
+        await sendPhoto(level, d, file.files[0], p.condition, p.photo_path);
+        toast("foto reemplazada", "ok");
+        ctx.refresh();
+      } catch (err) {
+        error.textContent = err.message;
+      }
     }));
-    if (result) {
-      toast("foto quitada de " + data.site, "ok");
-      ctx.refresh();
-    }
-  });
-  return el("div", {},
-    img,
-    el("div", { class: "muted", text: (CONDITION_WORDS[p.condition] || p.condition) + (p.subida ? " · subida aquí" : " · colocada a mano") }),
-    p.compartida_con.length
-      ? el("div", { class: "kit-note", text: "Compartida con " + p.compartida_con.join(", ") + ": reemplazarla aquí no cambia la de ellos." })
-      : null,
-    el("div", { class: "kit-edit" }, replaceBtn, remove, file));
+    const remove = wire(el("button", { class: "kit-copy", type: "button", text: "Quitar" }), error, async () => {
+      const result = await confirmFlow(() => api("/api/admin/menu/photos/delete", {
+        method: "POST",
+        json: { site: level, dish_id: d.dish_id, photo_path: p.photo_path, condition: p.condition },
+      }));
+      if (result) {
+        toast("foto quitada", "ok");
+        ctx.refresh();
+      }
+    });
+    parts.push(el("div", { class: "kit-edit" }, replaceBtn, remove, file));
+  }
+  return el("div", {}, ...parts);
 }
 
-function photosBlock(d, data, ctx, error) {
+function uploadRow(level, d, data, ctx, error) {
   const file = el("input", { type: "file", accept: "image/jpeg,image/png", style: INLINE });
   const condition = el("select", { style: INLINE },
     data.conditions.map((c) => el("option", { value: c, text: CONDITION_WORDS[c] || c })));
   const upload = wire(btn("Subir foto", "primary"), error, async () => {
     if (!file.files.length) throw new Error("Elige una foto primero.");
-    await sendPhoto(d, data, file.files[0], condition.value, null);
-    toast("foto subida a " + data.site, "ok");
+    await sendPhoto(level, d, file.files[0], condition.value, null);
+    toast("foto subida", "ok");
     ctx.refresh();
   });
   return el("div", {},
-    d.photos.length
-      ? el("div", { class: "grid" }, d.photos.map((p) => photoTile(d, p, data, ctx, error)))
-      : el("p", { class: "muted", text: "Sin fotos en este sitio: el modelo trabaja solo con la definición." }),
     el("div", { class: "kit-edit", style: "margin-top: 8px;" }, file, condition, upload),
     el("div", {
       class: "muted",
-      text: "JPEG o PNG, hasta " + data.upload_max_mb + " MB. Se guarda el original intacto y una copia ligera "
-        + "(lado mayor " + data.diet_max_side + " px), que es la que ve el modelo.",
+      text: "JPEG o PNG, hasta " + data.upload_max_mb + " MB. Se guarda completa para verla aquí; el modelo recibe "
+        + "una copia ligera (lado mayor " + data.diet_max_side + " px).",
     }));
+}
+
+function photoBlock(title, rows, level, editable, emptyText, d, data, ctx, error) {
+  return el("div", {},
+    el("h3", { text: title }),
+    rows.length
+      ? el("div", { class: "grid" }, rows.map((p) => photoTile(d, p, level, editable, ctx, error)))
+      : el("p", { class: "muted", text: emptyText }),
+    editable ? uploadRow(level, d, data, ctx, error) : null);
 }
 
 // --- one dish -------------------------------------------------------------------------------------
 
 function dishCard(d, data, ctx) {
   const error = el("div", { class: "kit-error" });
+  const admin = ctx.sess.admin;
   const parts = [
     el("div", { class: "kit-head" },
       el("span", { class: "muted", text: d.dish_id }),
       el("span", { class: d.activo ? "chip ok" : "chip bad", text: d.activo ? "prendido" : "apagado" }),
       el("span", { class: "chip", text: "versión " + d.menu_version })),
   ];
-  if (ctx.sess.admin) parts.push(definitionEditor(d, ctx, error), activeRow(d, ctx, error));
+  if (admin) parts.push(definitionEditor(d, ctx, error), activeRow(d, ctx, error));
   else parts.push(componentsTable(d.componentes));
-  if (data.site) parts.push(el("h3", { text: "Fotos de referencia en " + data.site }), photosBlock(d, data, ctx, error));
+  parts.push(photoBlock("Fotos universales (todas las sucursales)", d.universales, data.brand, admin,
+    admin ? "Sin fotos universales: súbelas aquí." : "Sin fotos universales.", d, data, ctx, error));
+  if (data.site) {
+    parts.push(photoBlock("Fotos locales de " + data.site, d.locales, data.site, true,
+      "Sin fotos locales en " + data.site + ".", d, data, ctx, error));
+    parts.push(el("div", { class: d.usa === "ninguna" ? "kit-note" : "kit-reco", text: USA_WORDS[d.usa] }));
+  }
   parts.push(error);
   return card(d.nombre, ...parts);
 }

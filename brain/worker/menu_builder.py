@@ -25,9 +25,9 @@ from brain.db import queries as q
 
 log = logging.getLogger("lpq.worker.menu_builder")
 
-# The inheritance fallback: reference photos stored under this site name serve every site
-# that lacks its own photo for a dish. No sites row carries this name today, so the
-# fallback yields nothing and the model works from the definitions alone.
+# The UNIVERSAL level (owner ruling 3.10.1): the brand's photos live in brand_dish_photos and serve every
+# site that has no LOCAL photo of a dish. "brand" is a reserved slug (no site can carry it): it is how the
+# api names that level, never a sites row.
 BRAND_SITE = "brand"
 
 
@@ -89,7 +89,7 @@ def build_reference(conn: psycopg.Connection, site: str) -> MenuReference:
     """Universal layer + site layer (with brand inheritance) for ONE site, from the database."""
     dishes = conn.execute(q.SELECT_ACTIVE_DISHES).fetchall()
     own = _group_photos(conn.execute(q.SELECT_SITE_DISH_PHOTOS, {"site": site}).fetchall())
-    brand = _group_photos(conn.execute(q.SELECT_SITE_DISH_PHOTOS, {"site": BRAND_SITE}).fetchall())
+    brand = _group_photos(conn.execute(q.SELECT_BRAND_DISH_PHOTOS).fetchall())
 
     photos: list[RefPhoto] = []
     for dish in dishes:
