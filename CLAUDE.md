@@ -41,9 +41,9 @@ laptop Docker 27.1.1 + Compose v2.29.1-desktop.1; server Docker 29.8.0 + Compose
 - brain/worker/: loop.py, menu_builder.py · brain/adapter/: llm.py, raw_log.py · brain/capture/backends.py (PHOTO_ROOT)
 - brain/validator/: models.py, repair.py, knobs.py (F3), textos.py (F3)
 - bot/main.py · butler/lpq_butler.py + butler/lpq-butler.service (F3, installed on the host only)
-- scripts/: seed_menu.py, bakeoff.py, pg_backup.sh, set_password.py (F3)
+- scripts/: seed_menu.py, bakeoff.py, pg_backup.sh, set_password.py (F3), notas_from_menu.py (F3: the one-time copy of menu.yaml's descriptions into the dishes' notes)
 - frontend/: routes.py; pages/ captura, panel, review, galeria, camara, admin (F3), maquinas (F3); static/ app.css, app.js, captura.js, camara.js, admin.js, admin-kit.js, admin-knobs.js, admin-voice.js, admin-sites.js, admin-menu.js, admin-ops.js, maquinas.js (F3)
-- config/: config.yaml (OPERATOR STATE from Fase 3), textos.yaml (F3, machine-owned), menu.yaml (seed and backup road; the DB is the edited menu), prompts/
+- config/: config.yaml (OPERATOR STATE from Fase 3), textos.yaml (F3, machine-owned), menu.yaml (seed and backup road; the DB is the edited menu), prompts/ (prompt_ficha_v1.txt F3: the recetario reader)
 
 ## The live infrastructure (exists: touch only via listed commands)
 - VPS `lpq-brain`: Hetzner CX23, Ubuntu 26.04.1, Tailscale; UFW deny-all + tailscale0 only; public

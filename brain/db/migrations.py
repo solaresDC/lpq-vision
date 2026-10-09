@@ -28,6 +28,11 @@ Fase 3 (table steps are gated on to_regclass, column steps on information_schema
     (nobody can SEE a password: only its hash exists).
 15. brand_dish_photos: the UNIVERSAL reference photos of each dish (owner ruling 3.10.1), valid for every site
     that has no local photo of that dish; site_dish_photos keeps the LOCAL ones.
+16. menu_dishes.orden INT: the dish's page in the recetario book (owner ruling 3.10.2); NULL = never placed
+    (last, by name).
+17. menu_dishes.notas TEXT: "notas para el modelo", read by the model with the dish's definition. NULL = never
+    written (the one-time copy of the menu.yaml descriptions may fill it); '' = cleared by a person.
+18. dish_name_history: the names a dish had before (its clave never changes, so a rename keeps its history).
 
 Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or ADDs a missing column.
 """
@@ -125,6 +130,9 @@ MIGRATIONS: tuple[ColumnMigration | TableMigration, ...] = (
         statement=q.ADD_USERS_PASSWORD_CHANGED_BY,
     ),
     TableMigration(name="brand_dish_photos", table="brand_dish_photos", statement=q.CREATE_BRAND_DISH_PHOTOS_TABLE),
+    ColumnMigration(name="menu_dishes.orden", table="menu_dishes", column="orden", statement=q.ADD_MENU_DISHES_ORDEN),
+    ColumnMigration(name="menu_dishes.notas", table="menu_dishes", column="notas", statement=q.ADD_MENU_DISHES_NOTAS),
+    TableMigration(name="dish_name_history", table="dish_name_history", statement=q.CREATE_DISH_NAME_HISTORY_TABLE),
 )
 
 

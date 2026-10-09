@@ -123,6 +123,22 @@ CREATE TABLE brand_dish_photos (
 )
 """
 
+# 3.10.2 (owner ruling): the recetario book. orden = the dish's page (NULL = never placed: last, by name); notas =
+# "notas para el modelo" (NULL = never written, '' = cleared by a person); dish_name_history = the names a dish had
+# before (its clave never changes).
+ADD_MENU_DISHES_ORDEN = "ALTER TABLE menu_dishes ADD COLUMN orden INT"
+ADD_MENU_DISHES_NOTAS = "ALTER TABLE menu_dishes ADD COLUMN notas TEXT"
+CREATE_DISH_NAME_HISTORY_TABLE = """
+CREATE TABLE dish_name_history (
+  id          BIGSERIAL PRIMARY KEY,
+  dish_id     TEXT NOT NULL REFERENCES menu_dishes(dish_id),
+  nombre      TEXT NOT NULL,
+  hasta       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  usuario     TEXT,
+  usuario_uid BIGINT
+)
+"""
+
 
 # --------------------------------------------------------------------- seeds (idempotent)
 
@@ -157,9 +173,9 @@ WHERE site = %(site)s
 # menu_builder stamps: MAX over ALL dishes, never rewinding; 1 on an empty table.
 MAX_MENU_VERSION = "SELECT COALESCE(MAX(menu_version), 1) AS v FROM menu_dishes"
 
-# menu_builder reads the DATABASE, never menu.yaml (SPEC 1.5).
+# menu_builder reads the DATABASE, never menu.yaml (SPEC 1.5); from 3.10.2 each dish's notas travel with it.
 SELECT_ACTIVE_DISHES = """
-SELECT dish_id, nombre, plate_type, componentes, contable, menu_version
+SELECT dish_id, nombre, plate_type, componentes, contable, menu_version, notas
 FROM menu_dishes
 WHERE activo
 ORDER BY dish_id
@@ -492,6 +508,48 @@ DELETE_BRAND_DISH_PHOTO = "DELETE FROM brand_dish_photos WHERE dish_id = %(dish_
 REPOINT_BRAND_DISH_PHOTO = """
 UPDATE brand_dish_photos SET photo_path = %(new_path)s, condition = %(condition)s
 WHERE dish_id = %(dish_id)s AND photo_path = %(photo_path)s
+"""
+
+# The recetario book (owner ruling 3.10.2): every dish in page order; a dish never placed goes last, by name.
+SELECT_MENU_BOOK = """
+SELECT dish_id, nombre, plate_type, componentes, activo, menu_version, orden, notas
+FROM menu_dishes
+ORDER BY orden NULLS LAST, nombre, dish_id
+"""
+
+SELECT_DISH_BOOK = """
+SELECT dish_id, nombre, plate_type, componentes, activo, menu_version, orden, notas
+FROM menu_dishes
+WHERE dish_id = %(dish_id)s
+"""
+
+# Before a new page goes last: every dish takes its current page number 1..N, in the book's order.
+NUMBER_MENU_PAGES = """
+UPDATE menu_dishes AS m SET orden = r.n
+FROM (SELECT dish_id, row_number() OVER (ORDER BY orden NULLS LAST, nombre, dish_id) AS n FROM menu_dishes) AS r
+WHERE m.dish_id = r.dish_id AND m.orden IS DISTINCT FROM r.n
+"""
+
+NEXT_MENU_PAGE = "SELECT COALESCE(MAX(orden), 0) + 1 AS n FROM menu_dishes"
+
+SET_DISH_ORDEN = "UPDATE menu_dishes SET orden = %(orden)s WHERE dish_id = %(dish_id)s"
+
+SET_DISH_NOTAS = "UPDATE menu_dishes SET notas = %(notas)s WHERE dish_id = %(dish_id)s"
+
+# scripts/notas_from_menu.py writes only where nobody ever wrote (NULL), checked again at write time.
+SET_DISH_NOTAS_IF_NULL = "UPDATE menu_dishes SET notas = %(notas)s WHERE dish_id = %(dish_id)s AND notas IS NULL"
+
+SELECT_DISHES_WITHOUT_NOTAS = "SELECT dish_id FROM menu_dishes WHERE notas IS NULL ORDER BY dish_id"
+
+INSERT_DISH_NAME_HISTORY = """
+INSERT INTO dish_name_history (dish_id, nombre, usuario, usuario_uid)
+VALUES (%(dish_id)s, %(nombre)s, %(usuario)s, %(usuario_uid)s)
+"""
+
+SELECT_DISH_NAME_HISTORY = """
+SELECT dish_id, nombre, hasta
+FROM dish_name_history
+ORDER BY dish_id, hasta DESC, id DESC
 """
 
 

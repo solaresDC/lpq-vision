@@ -9,6 +9,9 @@ with it inside the stable prefix.
 The version stamp (Fase 3) is MAX(menu_version) over ALL dishes, active or not: a version
 clock never rewinds, so deactivating the top-version dish can never resurrect a number that
 once meant a different menu. With every dish active (today) it equals the Fase-2 number.
+
+Notes (owner ruling 3.10.2): a dish's "notas para el modelo" travel with its definition, as one line under its
+components, so the model reads them on every plate; an empty note adds nothing.
 """
 
 from __future__ import annotations
@@ -76,6 +79,9 @@ def _render_text(site: str, menu_version: int, dishes: list[dict[str, Any]], pho
         comps = ", ".join(f"{c['nombre']} ({c['porcion_g']} g)" for c in dish["componentes"])
         lines.append(f"- dish_id: {dish['dish_id']} | nombre: {dish['nombre']}")
         lines.append(f"  componentes: {comps}")
+        notas = (dish.get("notas") or "").strip()
+        if notas:
+            lines.append("  notas: " + " ".join(notas.split()))
     if photos:
         lines.append("Fotos de referencia (arriba, en este orden):")
         for i, photo in enumerate(photos, start=1):

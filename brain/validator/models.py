@@ -74,6 +74,12 @@ RESERVED_SITE_SLUGS = ("reference", "brand")   # the photos root's reference/ fo
 PASSWORD_MIN_CHARS = 10           # new passwords only; an existing one is checked, never length-judged
 USER_RECOVERY_DAYS = 30           # a deleted account stays recoverable this long, then the worker erases it (owner ruling 3.9.2)
 USER_ERASE_WARN_DAYS = 5          # the admin chat hears about the erase this many days before it happens
+# The recetario book (owner ruling 3.10.2): what a person types on a page; internal keys are made by the system.
+NOMBRE_MAX_CHARS = 80             # a dish's visible name
+ETIQUETA_MAX_CHARS = 60           # a component's visible label
+PORCION_MAX_G = 5000              # one component's standard portion, in grams
+COMPONENTES_MAX = 20              # components per dish
+NOTAS_MAX_CHARS = 1000            # "notas para el modelo", per dish
 
 SITE_SLUG_RE = re.compile(r"^[a-z][a-z0-9_-]{1,23}\Z")
 USER_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,31}\Z")
@@ -156,6 +162,10 @@ PROMPT_VERSION = prompt_version_of(ACTIVE_PROMPT_FILE)
 # The presentation lane's own prompt (T-E5): same naming law, same derivation, its own version.
 PRESENTATION_PROMPT_FILE = PROMPTS_DIR / "prompt_presentation_v1.txt"
 PRESENTATION_PROMPT_VERSION = prompt_version_of(PRESENTATION_PROMPT_FILE)
+
+# The recetario reader's prompt (owner ruling 3.10.2), read by the api outside the queue. Its prefix belongs to
+# no lane, so no selector ever lists it.
+FICHA_PROMPT_FILE = PROMPTS_DIR / "prompt_ficha_v1.txt"
 
 # A lane is its file prefix; N has no leading zero, so two files of one lane can never share a
 # version string (the SPEC's duplicated-vN refusal holds by construction).
@@ -476,12 +486,14 @@ class Config(BaseModel):
 # --------------------------------------------------------------------------- menu.yaml
 
 class Componente(BaseModel):
-    """One component of a dish: name (the JSON key the model will use) and portion."""
+    """One component of a dish: name (the JSON key the model will use), portion and, from 3.10.2, the label people
+    read (absent on older rows: the page shows the key in plain words)."""
 
     model_config = ConfigDict(extra="forbid")
 
     nombre: str = Field(min_length=1)
     porcion_g: int = Field(gt=0)
+    etiqueta: str | None = Field(default=None, min_length=1, max_length=ETIQUETA_MAX_CHARS)
 
 
 class Dish(BaseModel):
@@ -892,40 +904,91 @@ class SourceRequest(_Body):
     source: CameraSource
 
 
-class DishCreateRequest(_Body):
-    """CREAR PLATILLO: born at the current MAX menu_version; its photos arrive through the uploader."""
+class ComponenteForm(_Body):
+    """A component as the PAGE sends it (owner ruling 3.10.2): the label people read and the grams, plus the
+    internal key when the component already exists. The server makes a new component's key from its label."""
 
-    dish_id: str
-    nombre: str = Field(min_length=1, max_length=80)
-    componentes: list[Componente] = Field(min_length=1, max_length=20)
-    plate_type: str | None = None
+    etiqueta: str = Field(min_length=1, max_length=ETIQUETA_MAX_CHARS)
+    porcion_g: int = Field(gt=0, le=PORCION_MAX_G)
+    nombre: str | None = None
 
-    @field_validator("dish_id", mode="before")
+    @field_validator("etiqueta", mode="before")
     @classmethod
-    def _dish_id(cls, value: Any) -> Any:
+    def _label(cls, value: Any) -> Any:
+        return " ".join(value.split()) if isinstance(value, str) else value
+
+    @field_validator("nombre", mode="before")
+    @classmethod
+    def _key(cls, value: Any) -> Any:
         if isinstance(value, str):
-            value = value.strip()
-            if not DISH_ID_RE.match(value):
-                raise ValueError("dish_id en minúsculas_con_guion_bajo, como tartine_aguacate")
+            value = value.strip() or None
+            if value is not None and not DISH_ID_RE.match(value):
+                raise ValueError("clave interna de componente inválida: recarga la página")
         return value
+
+
+def _form_components(value: list[ComponenteForm]) -> list[ComponenteForm]:
+    seen: set[str] = set()
+    for component in value:
+        label = component.etiqueta.casefold()
+        if label in seen:
+            raise ValueError(f"el componente «{component.etiqueta}» aparece dos veces")
+        seen.add(label)
+    keys = [c.nombre for c in value if c.nombre]
+    if len(keys) != len(set(keys)):
+        raise ValueError("un componente aparece dos veces: recarga la página")
+    return value
+
+
+def _dish_name(value: Any) -> Any:
+    return " ".join(value.split()) if isinstance(value, str) else value
+
+
+class DishCreateRequest(_Body):
+    """CREAR PLATILLO (owner ruling 3.10.2): a person writes the name, the components with grams and the notes;
+    the server makes the clave (dish_id) from the name and each component key from its label. Born switched on
+    at the current MAX menu_version, on the book's last page; its photos arrive through the uploader."""
+
+    nombre: str = Field(min_length=1, max_length=NOMBRE_MAX_CHARS)
+    componentes: list[ComponenteForm] = Field(min_length=1, max_length=COMPONENTES_MAX)
+    notas: str | None = Field(default=None, max_length=NOTAS_MAX_CHARS)
+    plate_type: str | None = None      # absent from the page until a báscula exists; scripts may still send it
+
+    @field_validator("nombre", mode="before")
+    @classmethod
+    def _nombre(cls, value: Any) -> Any:
+        return _dish_name(value)
 
     @field_validator("componentes")
     @classmethod
-    def _components(cls, value: list[Componente]) -> list[Componente]:
-        return _component_list(value)
+    def _components(cls, value: list[ComponenteForm]) -> list[ComponenteForm]:
+        return _form_components(value)
 
 
 class DishEditRequest(_Body):
-    """The full new definition; a change in the SET of component names bumps to global MAX+1."""
+    """A page's full new definition. A field the page leaves out keeps its stored value (notas, plate_type: read
+    through model_fields_set); a change in the SET of component keys bumps to global MAX+1, a new label never."""
 
-    nombre: str = Field(min_length=1, max_length=80)
-    componentes: list[Componente] = Field(min_length=1, max_length=20)
+    nombre: str = Field(min_length=1, max_length=NOMBRE_MAX_CHARS)
+    componentes: list[ComponenteForm] = Field(min_length=1, max_length=COMPONENTES_MAX)
+    notas: str | None = Field(default=None, max_length=NOTAS_MAX_CHARS)
     plate_type: str | None = None
+
+    @field_validator("nombre", mode="before")
+    @classmethod
+    def _nombre(cls, value: Any) -> Any:
+        return _dish_name(value)
 
     @field_validator("componentes")
     @classmethod
-    def _components(cls, value: list[Componente]) -> list[Componente]:
-        return _component_list(value)
+    def _components(cls, value: list[ComponenteForm]) -> list[ComponenteForm]:
+        return _form_components(value)
+
+
+class MenuOrderRequest(_Body):
+    """The book's page order (admin): every dish_id exactly once, the first page first."""
+
+    orden: list[str] = Field(min_length=1, max_length=500)
 
 
 class RefPhotoRequest(_Body):
@@ -1075,6 +1138,86 @@ class PresentationResponse(BaseModel):
         if self.flags:
             out["flags"] = list(self.flags)
         return out
+
+
+# --------------------------------------------------------------------------- the recetario reader (owner ruling 3.10.2)
+
+class FichaComponente(BaseModel):
+    """One component as the model READ it from a recetario page: a proposal, so every field is forgiving."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    etiqueta: str = Field(min_length=1, max_length=ETIQUETA_MAX_CHARS)
+    porcion_g: int | None = None
+    duda: str | None = None
+
+    @field_validator("etiqueta", mode="before")
+    @classmethod
+    def _label(cls, value: Any) -> Any:
+        return " ".join(str(value).split())[:ETIQUETA_MAX_CHARS] if value is not None else value
+
+    @field_validator("porcion_g", mode="before")
+    @classmethod
+    def _grams(cls, value: Any) -> Any:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            grams = round(value)
+        elif isinstance(value, str):
+            found = re.search(r"\d+(?:[.,]\d+)?", value)
+            grams = round(float(found.group(0).replace(",", "."))) if found else 0
+        else:
+            return None
+        return grams if 0 < grams <= PORCION_MAX_G else None
+
+    @field_validator("duda", mode="before")
+    @classmethod
+    def _doubt(cls, value: Any) -> Any:
+        text = " ".join(str(value).split()) if value is not None else ""
+        return text[:200] or None
+
+
+class FichaLectura(BaseModel):
+    """The model's reading of ONE recetario page (prompt_ficha_v1): a PROPOSAL for a new page, never saved by
+    itself. Lenient on purpose: whatever cannot be read comes back empty, for the person to complete."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    nombre: str | None = None
+    componentes: list[FichaComponente] = Field(default_factory=list)
+    notas: str | None = None
+    dudas: list[str] = Field(default_factory=list)
+
+    @field_validator("nombre", "notas", mode="before")
+    @classmethod
+    def _text(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("componentes", mode="before")
+    @classmethod
+    def _components(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return []
+        kept = [c for c in value if isinstance(c, dict) and str(c.get("etiqueta") or "").strip()]
+        return kept[:COMPONENTES_MAX]
+
+    @field_validator("dudas", mode="before")
+    @classmethod
+    def _doubts(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return []
+        return [" ".join(str(v).split())[:200] for v in value if str(v).strip()][:10]
+
+    @model_validator(mode="after")
+    def _fit(self) -> "FichaLectura":
+        if self.nombre:
+            self.nombre = " ".join(self.nombre.split())[:NOMBRE_MAX_CHARS]
+        if self.notas:
+            self.notas = self.notas[:NOTAS_MAX_CHARS]
+        return self
 
 
 # --------------------------------------------------------------------------- loaders

@@ -51,6 +51,13 @@ const STYLE = `
 .kit-countdown { font-size: 13px; color: var(--muted); }
 .kit-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 .kit-placeholder { color: var(--muted); }
+.kit-viewer { position: fixed; inset: 0; z-index: 70; background: rgba(15, 14, 12, .92); display: flex; align-items: center; justify-content: center; padding: 56px 12px 64px; }
+.kit-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; background: #111; }
+.kit-viewer button { position: absolute; min-width: var(--tap); background: rgba(255, 255, 255, .92); border-color: transparent; }
+.kit-viewer .kit-x { top: 10px; right: 10px; }
+.kit-viewer .kit-prev { left: 10px; top: 50%; transform: translateY(-50%); }
+.kit-viewer .kit-next { right: 10px; top: 50%; transform: translateY(-50%); }
+.kit-viewer .kit-caption { position: absolute; left: 12px; right: 12px; bottom: 18px; text-align: center; color: #fff; font-size: 14px; }
 `;
 
 function injectStyle() {
@@ -466,4 +473,58 @@ export function infoDialog({ title, body }) {
     document.body.append(overlay);
     close.focus();
   });
+}
+
+
+// --- a photo, big, inside the page -----------------------------------------------------------------------
+
+// photoViewer(photos, start): a photo seen big INSIDE the page, never in a new tab (owner ruling 3.10.2). A dark
+// background, the photo whole; ✕, a click outside the photo or Escape closes it; ◀ ▶, the arrow keys or a swipe
+// on the phone move between `photos`, each {src, caption}. Any photo in the mostrador opens here.
+export function photoViewer(photos, start = 0) {
+  if (!photos || !photos.length) return;
+  let at = Math.min(Math.max(0, start), photos.length - 1);
+  const img = el("img", { alt: "" });
+  const caption = el("div", { class: "kit-caption" });
+  const close = el("button", { class: "kit-x", type: "button", text: "✕", "aria-label": "Cerrar" });
+  const prev = el("button", { class: "kit-prev", type: "button", text: "◀", "aria-label": "Foto anterior" });
+  const next = el("button", { class: "kit-next", type: "button", text: "▶", "aria-label": "Foto siguiente" });
+  const overlay = el("div", { class: "kit-viewer", role: "dialog", "aria-modal": "true" }, img, caption, close, prev, next);
+  const show = () => {
+    const photo = photos[at];
+    img.src = photo.src;
+    img.alt = photo.caption || "";
+    caption.textContent = (photo.caption ? photo.caption + " · " : "") + (at + 1) + " de " + photos.length;
+    prev.classList.toggle("hidden", photos.length < 2);
+    next.classList.toggle("hidden", photos.length < 2);
+  };
+  const step = (delta) => {
+    at = (at + delta + photos.length) % photos.length;
+    show();
+  };
+  const onKey = (ev) => {
+    if (ev.key === "Escape") done();
+    else if (ev.key === "ArrowLeft") step(-1);
+    else if (ev.key === "ArrowRight") step(1);
+  };
+  function done() {
+    document.removeEventListener("keydown", onKey);
+    overlay.remove();
+  }
+  let touchX = null;
+  overlay.addEventListener("touchstart", (ev) => { touchX = ev.touches[0].clientX; }, { passive: true });
+  overlay.addEventListener("touchend", (ev) => {
+    if (touchX === null) return;
+    const dx = ev.changedTouches[0].clientX - touchX;
+    touchX = null;
+    if (Math.abs(dx) > 50 && photos.length > 1) step(dx < 0 ? 1 : -1);
+  });
+  overlay.addEventListener("click", (ev) => { if (ev.target === overlay) done(); });
+  close.addEventListener("click", done);
+  prev.addEventListener("click", () => step(-1));
+  next.addEventListener("click", () => step(1));
+  document.addEventListener("keydown", onKey);
+  document.body.append(overlay);
+  show();
+  close.focus();
 }

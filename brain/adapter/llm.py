@@ -114,6 +114,19 @@ def build_repair_messages(messages: list[dict[str, Any]], bad_text: str) -> list
     ]
 
 
+# The recetario reader (owner ruling 3.10.2): ONE page photo and an instruction, no menu reference and no cache
+# mark. A one-off call the api makes while a person waits; complete() carries it (one timeout, no retries).
+FICHA_INSTRUCTION = "Lee esta ficha del recetario (la imagen) y responde con el JSON."
+
+
+def build_ficha_messages(system_prompt: str, page_jpeg: bytes) -> list[dict[str, Any]]:
+    """[system] + [the recetario page, instruction]."""
+    return [
+        {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+        {"role": "user", "content": [_image_block(page_jpeg), {"type": "text", "text": FICHA_INSTRUCTION}]},
+    ]
+
+
 def _usage_int(usage: Any, *paths: str) -> int:
     """Read the first available counter from a LiteLLM usage object, by dotted path; 0 if absent."""
     for path in paths:
