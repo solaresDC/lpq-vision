@@ -12,7 +12,8 @@ becomes a page, never an SSH session: two floors (/admin mostrador, /maquinas ma
 knob registry + the one config writer + the knob cascade, the per-site gafete, horario + vigilantes
 + /extender, papelera, menus edited in the DB + the AMO-Y-SOMBRA uploader, Crear restaurante, the
 spend dashboard, bot texts with fichas, the host butler, and the death of the three temporal .env
-keys. Authoritative spec: the LPQ-FASE3-SPEC (v3.8) pasted in the build conversation.
+keys. Authoritative spec: the LPQ-FASE3-SPEC (v3.8), held by HQ (the owner's build chat, which writes
+every section block: Claude Code never needs the SPEC itself), as amended by the owner rulings (rule 21).
 THE SYSTEM IS ONE: the demo happens only after this phase's checklist is green.
 
 ## Sealed stack (LAW: fix implementations, never substitute pieces)
@@ -106,6 +107,10 @@ laptop Docker 27.1.1 + Compose v2.29.1-desktop.1; server Docker 29.8.0 + Compose
 20. Kit rule 8: one-liners with `$?`, escaped quotes or regex run from BASH; `bash -s` over ssh
     breaks after `docker compose exec` (pass scripts as the ssh argument); `pg_restore` reads stdin
     with NO file argument.
+21. Owner rulings: `.claude/rules/owner-rulings.md` holds every owner ruling made after the SPEC and every
+    open promise with its section. Read it every session. A ruling wins over the SPEC and over older
+    text; if a hard rule here and a ruling ever disagree, STOP and flag. Only HQ's section blocks add or
+    change a ruling, and each section that changes one updates that file in its own commit.
 
 ## Environment variables (.env: values typed only by the human)
 ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, DATABASE_URL
