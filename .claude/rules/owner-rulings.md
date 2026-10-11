@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.11 (HEAD was def5e95, Section 3.10.3).
+- Last update: Section 3.12 (HEAD was e8270f4, Section 3.11).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -70,7 +70,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   strange, use 127.0.0.1:8000.
 
 ## The two machines today
-- Laptop: Fase 3 through 3.11; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.12; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -89,6 +89,29 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.12 (built in Section 3.12): the capture page
+- /captura is rebuilt around the alta, the gafete and the emergency road (SPEC 1.3 and 1.5, and 3.12's
+  promise list). Built defaults (HQ's standard choices; the owner may change any of them):
+  - The ORDER LAW: the page first asks the server who it is (/api/device/status, which never echoes
+    the gafete). A device that is not enrolled sees "1 · Instalar primero" (the Home-Screen app; a
+    computer skips it) and "2 · Inscribir después" (site and gafete, once). On a phone outside the
+    installed app, enrolling in the browser takes one more "no recomendado" confirm.
+  - The gafete rides every capture-lane call in X-Device-Key, and the device cookie travels by itself.
+    A stale copy on the page is dropped (the cookie alone may still be valid); a refused gafete sends
+    the page back to the alta with the reason.
+  - The camera picker shows the site's cameras, live every 5 s: a Pi camera with no recent copy is 🔴
+    (the emergency road); a phone camera another phone is sending asks first (platos dobles); this
+    phone's own camera goes first.
+  - The emergency road asks for a login of that site (its manager or the admin: the SPEC's "behind a
+    site login", so the bitácora names who took over) and the server's double confirm with its diff.
+    A session the page opened closes right after. Only toward the phone: the way back to the Pi is the
+    mostrador's switch, and a phone whose camera goes back to its Pi stops capturing.
+  - The push reply carries the live knobs (the capture block and frame_poll_s, now read from the knob
+    everywhere: the FRAME_POLL_S constant is gone), the site's two functions and the camera's source.
+    camara.js's vista viva obeys frame_poll_s and does not start without a loaded state.
+  - "Sí, salir" goes back to the camera picker (a kiosk app has no back button), not to /panel.
+  - The capture knobs stay global until 3.13 reads each site's own values.
 
 ### 3.11 (built in Section 3.11): the new bot
 - The bot is rewritten for the admin era (SPEC 1.5 and 1.8, and 3.11's promise list). Built defaults
@@ -206,15 +229,14 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
-- 3.12, /captura: enrollment under the ORDER LAW (install the Home-Screen app first, enroll second);
-  X-Device-Key on every call; live knobs from the push reply; the page's emergency road; the
-  Home-Screen meta tag in captura.html; the camara.js fallback.
-- 3.13, the wall and the capture lane: the gafete enforced; luma, black_for_s (to the last frame) and
-  up_s in /api/camera/state (the bot reads both since 3.11; 🕶️ gets its live test then, inside a
-  bracket of the server's bot); an all-black burst refused; per-site knobs; the align bitácora;
-  calibration on the one writer; discard wired in routes.py; the confianza count; /captura's emergency
-  relevo on the server (relevo() with no actor); plate photos stored as ONE light 1568 file after the
-  sharpest-frame pick (Galería, Review and the model use it), with the shrink time measured for real.
+- 3.13, the wall and the capture lane: the gafete enforced (on the capture reads, a session of another
+  site must not shadow a valid gafete: /captura reads 401 and 403 as "enroll again"); luma,
+  black_for_s (to the last frame) and up_s in /api/camera/state (the bot reads both since 3.11; 🕶️
+  gets its live test then, inside a bracket of the server's bot); an all-black burst refused; per-site
+  knobs (the state, the push reply and upload_burst's frame cap read the site's own values); the align
+  bitácora; calibration on the one writer; discard wired in routes.py; the confianza count; plate
+  photos stored as ONE light 1568 file after the sharpest-frame pick (Galería, Review and the model use
+  it), with the shrink time measured for real. (/captura's emergency relevo was built in 3.12.)
 - 3.14, ops: papelera and retention purge; cola (pause admin-only, retry site-scoped); gasto by site
   and local day, showing only what was spent (no cache savings number; prices are entered by a human
   after checking the source, "sin precio" until then), Leer ficha calls included (their tokens are in
@@ -242,7 +264,12 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 
 ## Waiting on the owner (no section owns these)
 - 3.11's ✋: the live Telegram test on the laptop (the server's bot stopped first and started again
-  at the end).
+  at the end). The owner deferred it on 11 Oct 2026 to keep building (his list:
+  3.11_pending_live_test_and_push.md; its push went out the same night). If it is still open at
+  3.13, that section's bracket takes it in with its texts updated (from 3.13 the 📵 counts from the
+  api's own boot).
+- 3.12's ✋: the browser check of /captura on the laptop (the alta, the picker, the live knobs, the
+  emergency road).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never

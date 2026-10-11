@@ -20,8 +20,8 @@ const OTRA_POLL_MS = 1000;
 const OTRA_CAP_MS = 25000;
 const OTRA_TICK_MS = 250;      // the countdown repaints this often; the frame poll stays at OTRA_POLL_MS
 const OTRA_CUSHION_S = 2;      // added to the estimate so the copy almost always lands before zero
-// The push cadence lives in api/routes.py FRAME_POLL_S, a mostrador knob in FASE 3; captura and
-// camara read it from /api/camera/state (frame_poll_s), never hardcode it.
+// The push cadence is the knob capture.frame_poll_s (Perillas, since Section 3.12); captura and camara
+// read it from /api/camera/state (frame_poll_s) and never write a number of their own.
 
 // --- picker ---------------------------------------------------------------------------
 const siteInput = el("input", { value: S.site, placeholder: "sitio" });
@@ -174,9 +174,21 @@ $("#otra").addEventListener("click", () => otra().catch((err) => { $("#otra-note
 $("#live").addEventListener("change", (ev) => {
   $("#otra").disabled = ev.target.checked;                    // vista viva ON: the button has no job
   $("#otra-note").textContent = "";
-  if (ev.target.checked) { S.liveStop = poll(fetchFrame, (S.st ? S.st.frame_poll_s : 5) * 1000); }
+  if (ev.target.checked) { S.liveStop = startLive(ev.target); }
   else if (S.liveStop) { S.liveStop(); S.liveStop = null; }
 });
+
+// Vista viva polls at the state's frame_poll_s (the knob), never at a number written here. With no state
+// loaded (a failed load) there is no cadence to obey: the switch springs back and says why.
+function startLive(box) {
+  if (!S.st) {
+    box.checked = false;
+    document.getElementById("otra").disabled = false;
+    toast("carga primero el sitio y su cámara", "bad");
+    return null;
+  }
+  return poll(fetchFrame, S.st.frame_poll_s * 1000);
+}
 
 // --- the alignment mode ---------------------------------------------------------------
 const minutesInput = el("input", { type: "number", min: 1, value: 1 });

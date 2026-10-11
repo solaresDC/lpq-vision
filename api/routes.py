@@ -67,7 +67,6 @@ JOB_KIND_ANALYZE = "analyze"
 JOB_KIND_PRESENTATION = "presentation"
 JOB_PRIORITY_RETURN = 100
 JOB_PRIORITY_EXPRESS = 10          # the claim's ORDER BY priority makes any free worker serve it first
-FRAME_POLL_S = 5                   # the mirilla's poll cadence (told to the pages via /api/camera/state)
 WATCHED_TTL_S = 15                 # how long one GET of the frame keeps a camera "watched"
 SHARPNESS_MAX_SIDE = 640           # px: every scored frame is downscaled to this longest side first
 MAX_FRAME_BYTES = 8 * 1024 * 1024  # a mirilla copy larger than this is refused
@@ -181,14 +180,19 @@ async def push_frame(
     camera: str | None = Form(None),
 ) -> Any:
     """From captura.js: store the latest copy in RAM, score it, and tell the page whether anyone
-    is watching (keep pushing) and whether its capture is paused by the alignment mode."""
+    is watching (keep pushing) and whether its capture is paused by the alignment mode. The page
+    knobs ride this reply (Section 3.12): the guard knobs, the push cadence, the site's two functions
+    and the camera's source, so the page obeys a change mid-flight with zero extra requests (a source
+    that is no longer "phone" went back to its Pi: the page stops)."""
     if frame is None:
         return _error(400, "missing frame")
     if not site or not site.strip() or not camera or not camera.strip():
         return _error(400, "missing site or camera")
     site, camera = site.strip(), camera.strip()
     try:
-        _camera_cfg(_site_cfg(load_config(), site), site, camera)
+        cfg = load_config()
+        site_cfg = _site_cfg(cfg, site)
+        cam = _camera_cfg(site_cfg, site, camera)
     except Rejected as exc:
         return _error(exc.status, exc.reason)
     data = await frame.read()
@@ -205,7 +209,15 @@ async def push_frame(
         _FRAMES[key] = FrameSlot(jpeg=data, ts=now, sharpness=score)
         watching = _is_watched(key, now)
         align = _align_state(key, now)
-    return {"watching": watching, "sharpness": score, "align": align}
+    return {
+        "watching": watching,
+        "sharpness": score,
+        "align": align,
+        "capture": cfg.capture.model_dump(),
+        "frame_poll_s": cfg.capture.frame_poll_s,
+        "funciones": site_cfg.funciones.model_dump(),
+        "source": cam.source,
+    }
 
 
 @router.get("/api/camera/frame")
@@ -269,7 +281,7 @@ async def camera_state(site: str = "") -> Any:
         "capture": cfg.capture.model_dump(),
         "video_align": cfg.video_align.model_dump(),
         "sharpness_min": cfg.alerts.sharpness_min,
-        "frame_poll_s": FRAME_POLL_S,
+        "frame_poll_s": cfg.capture.frame_poll_s,      # the knob (Perillas): the pages' one cadence
         "now": now.isoformat(),
         "cameras": cameras,
     }

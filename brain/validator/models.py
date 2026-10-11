@@ -65,7 +65,7 @@ Lane = Literal["merma", "presentacion"]
 RestartService = Literal["fastapi", "worker", "bot"]   # postgres never has a button
 
 # --- Fase-3 constants (SPEC section 4); the absent-key defaults live HERE, one source ------
-FRAME_POLL_S_DEFAULT = 5          # push cadence when capture.frame_poll_s is absent (api.routes.FRAME_POLL_S)
+FRAME_POLL_S_DEFAULT = 5          # push cadence when capture.frame_poll_s is absent (the knob's factory default)
 RAW_LOG_AUTO_OFF_HOURS = 24       # default life of the forensic river when switched on from the mostrador
 WORKER_SCALE_MAX = 4              # the butler's `scale worker <1..4>` ceiling
 DEFAULT_TIMEZONE = "America/Mexico_City"

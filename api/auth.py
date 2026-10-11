@@ -19,8 +19,10 @@ session holds a grant for MACHINE_GRANT_MIN minutes, in RAM, keyed by its sessio
 
 The gafete, the second wall inside the club: every site owns a device key (sites.device_key). A
 device presents it in the X-Device-Key header, or through the long-lived httponly device cookie that
-/api/device/enroll sets once; never in a URL. guard_site_key (key only) and guard_session_or_key are
-the checks of SPEC 1.3's enforcement matrix, called by the guarded lane.
+/api/device/enroll sets once; never in a URL. /api/device/status answers /captura's first question
+(which site does the gafete I present belong to?) and never echoes the gafete. guard_site_key (key
+only) and guard_session_or_key are the checks of SPEC 1.3's enforcement matrix, called by the
+guarded lane.
 
 Nothing auth-related is ever logged beyond the user or site name: no password, no hash, no key.
 The site rule: a site account gets every list endpoint FORCED to its site; admin sees all.
@@ -244,6 +246,21 @@ def site_key_ok(site: str, key: str | None) -> bool:
     return hmac.compare_digest(key.encode("utf-8"), stored.encode("utf-8")) and bool(stored)
 
 
+def site_of_key(key: str | None) -> str | None:
+    """The active site whose gafete this is, or None: a constant-time compare against every active
+    site's key (a few rows). Reads the database: call it off the event loop. The key is never logged."""
+    if not key:
+        return None
+    with q.connect() as conn:
+        rows = conn.execute(q.SELECT_SITE_KEYS).fetchall()
+    found = None
+    for row in rows:
+        stored = row["device_key"] or ""
+        if stored and hmac.compare_digest(key.encode("utf-8"), stored.encode("utf-8")):
+            found = row["site"]
+    return found
+
+
 async def guard_site_key(request: Request, site: str) -> None:
     """The capture lane's door (upload_burst, the frame push): THAT site's gafete, nothing else."""
     key = device_key_from(request)
@@ -327,6 +344,22 @@ async def session_info(request: Request) -> dict:
     """Who am I: lets a page restore its locked site chip and its machine grant after a reload; 401 when none."""
     session = await asyncio.to_thread(require_session, request)
     return _whoami(session)
+
+
+@router.get("/api/device/status")
+async def device_status(request: Request) -> dict:
+    """/captura's first question (Section 3.12): which site is this device enrolled in? Read from the
+    gafete it presents (the page's header copy first, else the device cookie); the answer never carries
+    the gafete. A gafete no active site owns (regenerated, or its site deactivated) answers stale:
+    enroll again."""
+    key = device_key_from(request)
+    site = await asyncio.to_thread(site_of_key, key)
+    if site is not None:
+        return {"enrolled": True, "site": site}
+    if key is not None:
+        log.info("device status: gafete not recognized")
+        return {"enrolled": False, "stale": True}
+    return {"enrolled": False}
 
 
 @router.post("/api/device/enroll")

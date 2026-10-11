@@ -7,6 +7,7 @@ POST /api/admin/sites/{site}/funciones               the site's two function swi
 POST /api/admin/sites/{site}/cameras                 add one camera, or change its source and role
 POST /api/admin/sites/{site}/cameras/{camera}/delete remove one camera (double confirm; never the last one)
 POST /api/admin/sites/{site}/cameras/{camera}/source the relevo, the mostrador's road
+POST /api/admin/sites/{site}/cameras/{camera}/takeover the relevo, /captura's emergency road (site login, double confirm)
 POST /api/admin/sites/{site}/gafete/reveal           show the site's gafete to enroll a device (admin)
 POST /api/admin/sites/{site}/gafete/regenerate       a new gafete; every enrolled device enrolls again (admin, double confirm)
 GET  /api/admin/users                                the accounts and the "Eliminadas" (admin; never the machine row)
@@ -70,6 +71,7 @@ router = APIRouter()
 
 SOURCE_WORDS = {"phone": "teléfono", "pi": "Pi"}
 ROLE_WORDS = {"return": "regreso", "outgoing": "salida", "both": "ambas"}
+EDGE_WORDS = {"top": "arriba", "bottom": "abajo", "left": "izquierda", "right": "derecha"}
 MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 
 
@@ -354,9 +356,10 @@ async def delete_camera(site: str, camera: str, session: Session = Depends(requi
 
 
 async def relevo(site: str, camera: str, source: str, actor: Session | None, road: str) -> dict[str, Any]:
-    """The ONE relevo, shared by both roads (the mostrador's switch here; /captura's emergency road from 3.13,
-    which passes actor None). The camera's source flips, and its kitchen_edge goes with the old device
-    (calibrate again). One write, one bitácora row; the bot announces the relevo from that row."""
+    """The ONE relevo, shared by both roads: the mostrador's switch, and /captura's emergency road through
+    camera_takeover below (behind a login of the site, so the bitácora names who took over). The camera's
+    source flips, and its kitchen_edge goes with the old device (calibrate again). One write, one bitácora
+    row; the bot announces the relevo from that row (road "captura" reads "teléfono de emergencia")."""
     site_cfg = _site_cfg(await _config(), site)
     cam = site_cfg.cameras.get(camera)
     if cam is None:
@@ -380,6 +383,40 @@ async def relevo(site: str, camera: str, source: str, actor: Session | None, roa
 async def camera_source(site: str, camera: str, body: SourceRequest, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
     target = write_scope(session, site)
     return await relevo(target, camera, body.source, session, "mostrador")
+
+
+@router.post("/api/admin/sites/{site}/cameras/{camera}/takeover")
+async def camera_takeover(site: str, camera: str, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
+    """/captura's emergency road (SPEC 1.5, the 8pm protocol): the phone in hand takes the place of a Pi
+    camera, behind a login of that site and the double confirm with its visible diff. Only toward the
+    phone: the way back to the Pi is the mostrador's switch. Step 2 runs the same relevo() with road
+    "captura"."""
+    target = write_scope(session, site)
+    cam = _site_cfg(await _config(), target).cameras.get(camera)
+    if cam is None:
+        raise HTTPException(status_code=404, detail=f"La cámara {camera} no existe en {target}.")
+    if cam.source == "phone":
+        raise HTTPException(status_code=409, detail=f"La cámara {camera} ya es de teléfono: no hace falta el relevo.")
+    cambios = [{"que": camera, "antes": SOURCE_WORDS.get(cam.source, cam.source), "despues": "teléfono (de emergencia)"}]
+    if cam.kitchen_edge is not None:
+        cambios.append({
+            "que": "calibración",
+            "antes": "borde-cocina " + EDGE_WORDS.get(cam.kitchen_edge, cam.kitchen_edge),
+            "despues": "sin calibrar (calíbrala en /camara)",
+        })
+
+    async def run() -> dict[str, Any]:
+        return await relevo(target, camera, "phone", session, "captura")
+
+    return propose(
+        session,
+        action="relevo de emergencia: " + camera + " de " + target + " pasa a teléfono",
+        diff={
+            "resumen": f"La cámara {camera} deja la Pi y pasa a este teléfono; el bot lo anuncia como teléfono de emergencia.",
+            "cambios": cambios,
+        },
+        run=run,
+    )
 
 
 # --- the gafete (admin) ------------------------------------------------------------------------
