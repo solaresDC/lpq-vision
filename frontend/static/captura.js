@@ -19,6 +19,9 @@
 //   the server's double confirm; a session the page opened for it closes right after.
 // - The live knobs ride the push reply: the guard knobs, the push cadence, the site's two functions
 //   and the camera's source (back to its Pi = this phone stops). Zero extra requests.
+// Section 3.13: the server enforces the gafete (401 or 403 = enroll again), the guard knobs and the
+// burst size are THIS site's own values, and a burst that is all black comes back refused with
+// black: true (counted as discarded, never as an error).
 // This file never uses the dollar sign (the build's transport rule): strings are joined with +.
 import { el, poll, session, toast } from "/static/app.js";
 
@@ -313,6 +316,14 @@ async function burst() {
     const res = await lane("/api/upload_burst", { method: "POST", body: form });
     const data = await bodyOf(res);
     if (refusedKey(res)) { lostEnrollment(data.error || ("HTTP " + res.status)); return; }
+    if (res.status === 400 && data.black) {
+      // Section 3.13: the door refuses a burst that is all black (a covered lens): nothing stored, nothing billed.
+      S.counts.discarded++;
+      byId("n-discarded").textContent = S.counts.discarded;
+      status("descartado: imagen negra (¿algo tapa la cámara?)");
+      log("descartado (" + es + "): la ventanilla rechazó una ráfaga negra, no se guardó nada");
+      return;
+    }
     if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
     S.counts.captured++;
     byId("n-captured").textContent = S.counts.captured;

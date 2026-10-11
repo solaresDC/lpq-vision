@@ -21,8 +21,8 @@ The gafete, the second wall inside the club: every site owns a device key (sites
 device presents it in the X-Device-Key header, or through the long-lived httponly device cookie that
 /api/device/enroll sets once; never in a URL. /api/device/status answers /captura's first question
 (which site does the gafete I present belong to?) and never echoes the gafete. guard_site_key (key
-only) and guard_session_or_key are the checks of SPEC 1.3's enforcement matrix, called by the
-guarded lane.
+only), guard_session_or_key and guard_known are the checks of SPEC 1.3's enforcement matrix, enforced
+since Section 3.13 by the guarded lane (api/routes.py) and by two Fase-1 endpoints (api/main.py).
 
 Nothing auth-related is ever logged beyond the user or site name: no password, no hash, no key.
 The site rule: a site account gets every list endpoint FORCED to its site; admin sees all.
@@ -44,7 +44,15 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from psycopg.types.json import Jsonb
 
 from brain.db import queries as q
-from brain.validator.models import MACHINE_DEFAULTS, MACHINE_USER, EnrollRequest, LoginRequest, OwnPasswordRequest, load_config
+from brain.validator.models import (
+    MACHINE_DEFAULTS,
+    MACHINE_USER,
+    SITE_SLUG_RE,
+    EnrollRequest,
+    LoginRequest,
+    OwnPasswordRequest,
+    load_config,
+)
 
 log = logging.getLogger("lpq.api.auth")
 
@@ -237,8 +245,9 @@ def device_key_from(request: Request) -> str | None:
 
 def site_key_ok(site: str, key: str | None) -> bool:
     """Constant-time check of a presented gafete against the site's own (an inactive or unknown site has
-    none). Reads the database: call it off the event loop. The key is never logged."""
-    if not key:
+    none, and a name that cannot be a site never reaches the database). Reads the database: call it off
+    the event loop. The key is never logged."""
+    if not key or not SITE_SLUG_RE.match(site):
         return False
     with q.connect() as conn:
         row = conn.execute(q.SELECT_DEVICE_KEY, {"site": site}).fetchone()
@@ -272,20 +281,47 @@ async def guard_site_key(request: Request, site: str) -> None:
 
 
 async def guard_session_or_key(request: Request, site: str) -> Session | None:
-    """The formerly session-free reads: a session (site-scoped as always) OR that site's gafete.
-    Returns the Session, or None when a device's gafete opened the door."""
+    """The formerly session-free reads (the frame, the state, /api/upload, /api/plates/{id}): a session
+    of THIS site (the admin's opens every site) OR that site's gafete. Returns the Session, or None when
+    a device's gafete opened the door. A session of ANOTHER site never shadows a valid gafete: a phone
+    enrolled in one site keeps capturing while someone is logged in to another site in the same
+    browser. Refusals: no credential at all = 401; a gafete that is not this site's = 403 (the page
+    enrolls again); a session of another site with no gafete = 403."""
     session = await asyncio.to_thread(_live, request.cookies.get(SESSION_COOKIE))
-    if session is not None:
-        if not session.is_admin and session.site != site:
-            raise HTTPException(status_code=403, detail=f"sitio fuera de tu alcance: {site}")
+    if session is not None and (session.is_admin or session.site == site):
         return session
+    key = device_key_from(request)
+    if key is not None:
+        if await asyncio.to_thread(site_key_ok, site, key):
+            return None
+        log.info("gafete refused site=%s", site)
+        raise HTTPException(status_code=403, detail=f"este dispositivo no está inscrito para el sitio {site}")
+    if session is not None:
+        raise HTTPException(status_code=403, detail=f"sitio fuera de tu alcance: {site}")
+    raise HTTPException(status_code=401, detail="sesión o gafete requeridos")
+
+
+async def may_read_site(request: Request, site: str) -> bool:
+    """guard_session_or_key as a yes or no, for a one-row read that answers 404 outside its scope."""
+    try:
+        await guard_session_or_key(request, site)
+    except HTTPException:
+        return False
+    return True
+
+
+async def guard_known(request: Request) -> None:
+    """Any credential this api knows: a live session, or a gafete some active site owns. Else 401 (none
+    presented) or 403 (a gafete no active site owns: enroll again). The door before a one-row read,
+    so a stranger never learns which ids exist."""
+    if await asyncio.to_thread(_live, request.cookies.get(SESSION_COOKIE)) is not None:
+        return
     key = device_key_from(request)
     if key is None:
         raise HTTPException(status_code=401, detail="sesión o gafete requeridos")
-    if not await asyncio.to_thread(site_key_ok, site, key):
-        log.info("gafete refused site=%s", site)
-        raise HTTPException(status_code=403, detail=f"este dispositivo no está inscrito para el sitio {site}")
-    return None
+    if await asyncio.to_thread(site_of_key, key) is None:
+        log.info("gafete not recognized")
+        raise HTTPException(status_code=403, detail="este dispositivo no está inscrito en ningún sitio activo")
 
 
 # --- the endpoints --------------------------------------------------------------------

@@ -14,6 +14,11 @@ process keeps a log file for the machine room's viewer (/data/logs/fastapi.log);
 boot time live on app.state for the post-reboot checklist; a pure-ASGI middleware remembers when the
 bot last called; a timer switches the forensic river off at raw_logging_off_at through the one writer;
 and /api/upload stamps the SELECTED merma prompt's version as the plan of record.
+
+Fase 3 (3.13), the gafete wall (SPEC 1.3): /api/upload needs a session of the site or that site's
+gafete (X-Device-Key or the device cookie), and /api/plates/{id} a session or a gafete that may read
+the plate's site; their SHAPES are untouched, and /api/health stays free. /api/upload stores ONE light
+copy of the photo (owner ruling 3.10.1), the same shrink as the burst road.
 """
 
 from __future__ import annotations
@@ -260,11 +265,14 @@ def _register_plate(req: UploadRequest, rel_path: str, data: bytes) -> dict[str,
 
 @app.post("/api/upload")
 async def upload(
+    request: Request,
     photo: UploadFile | None = File(None),
     site: str | None = Form(None),
     camera: str | None = Form(None),
     record_type: str | None = Form(None),
 ) -> Any:
+    """The single-photo road (curl). The wall (3.13): a session of the site or that site's gafete.
+    The stored file is ONE light copy (api.routes.light_plate), named by its own bytes."""
     if photo is None:
         return _error(400, "missing photo")
     if site is None or not site.strip():
@@ -275,10 +283,12 @@ async def upload(
         first = exc.errors()[0]
         where = ".".join(str(p) for p in first.get("loc", ()))
         return _error(400, f"malformed upload: {where}: {first.get('msg', 'invalid')}")
+    await auth.guard_session_or_key(request, req.site)
 
-    data = await photo.read()
-    if not data:
+    original = await photo.read()
+    if not original:
         return _error(400, "empty photo")
+    data = await asyncio.to_thread(api_routes.light_plate, original)
 
     rel_path = _photo_rel_path(req.site, data)
     result = await asyncio.to_thread(_register_plate, req, rel_path, data)
@@ -286,9 +296,9 @@ async def upload(
         return _error(400, result["error"])
 
     log.info(
-        "upload site=%s record_type=%s camera=%s plate_id=%s duplicate=%s bytes=%d photo=%s",
+        "upload site=%s record_type=%s camera=%s plate_id=%s duplicate=%s bytes_in=%d bytes=%d photo=%s",
         req.site, req.record_type, req.camera, result["plate_id"],
-        result.get("duplicate", False), len(data), rel_path,
+        result.get("duplicate", False), len(original), len(data), rel_path,
     )
     return result
 
@@ -301,9 +311,13 @@ def _fetch_plate(plate_id: int) -> dict[str, Any] | None:
 
 
 @app.get("/api/plates/{plate_id}")
-async def get_plate(plate_id: int) -> Any:
+async def get_plate(plate_id: int, request: Request) -> Any:
+    """The full row. The wall (3.13): a caller with no credential this api knows gets 401 or 403
+    whether or not the id exists; a known caller outside the plate's site gets the same 404 as a
+    missing id (an id never confirms another site's plate)."""
+    await auth.guard_known(request)
     row = await asyncio.to_thread(_fetch_plate, plate_id)
-    if row is None:
+    if row is None or not await auth.may_read_site(request, row["site"]):
         return _error(404, f"plate {plate_id} not found")
     # JSONB columns arrive as Python objects, timestamps as datetimes: the encoder makes them JSON/ISO.
     return jsonable_encoder(row)

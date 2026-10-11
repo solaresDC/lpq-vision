@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.12 (HEAD was e8270f4, Section 3.11).
+- Last update: Section 3.13 (HEAD was 7d2f83b, Section 3.12).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -70,7 +70,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   strange, use 127.0.0.1:8000.
 
 ## The two machines today
-- Laptop: Fase 3 through 3.12; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.13; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -89,6 +89,62 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.13 (built in Section 3.13): the wall and the capture lane
+- The gafete is ENFORCED (SPEC 1.3's matrix, and 3.13's promise list). Built defaults (HQ's standard
+  choices; the owner may change any of them):
+  - Writes (upload_burst, the frame push): THAT site's gafete only; a session alone is not a gafete
+    (401).
+  - Reads (the frame, the state, /api/upload): a session of the site (the admin's opens every site)
+    or that site's gafete. A session of another site never shadows a valid gafete. Refusals: nothing
+    presented 401; a gafete that is not this site's 403 (/captura enrolls again); another site's
+    session alone 403.
+  - /api/plates/{id}: a caller with no credential the api knows gets 401 (403 for a gafete no active
+    site owns) whether or not the id exists; a known caller outside the plate's site gets the same
+    404 as a missing id. /api/health stays free. No response shape changed.
+  - A malformed request still gets its 400 first, then the wall, then the unknown site or camera. A
+    name that cannot be a site (the slug pattern) is refused like a wrong gafete and never reaches
+    the database.
+  - Curl smokes carry -H "X-Device-Key: REPLACE_WITH_DEVICE_KEY" (the human copies the value from
+    the mostrador).
+- The measurements: every pushed copy gets its sharpness AND its luma (mean brightness, 0 to 255)
+  from the same 640 px gray copy.
+  - A camera's black streak starts at its first copy under the site's alerts.black_luma_max,
+    survives a pause of up to 3 pushes (3 times capture.frame_poll_s) and ends with a brighter copy.
+    The state shows luma, black_for_s (counted to the last copy; absent when not black) and up_s
+    (the api's own uptime).
+  - A burst whose EVERY readable frame sits under the site's floor is refused (400 with black: true):
+    never stored, never billed. In a mixed burst only the frames above the floor compete (a black
+    frame's noise can read sharp). /captura counts the refusal as discarded ("descartado: imagen
+    negra"), never as an error.
+  - Every decode is guarded: JPEG or PNG only, sized from the file's own header first, at most
+    50 MP (a 48 MP phone photo fits). Anything else, bigger or broken is "not an image": the push
+    and the burst answer 400, /api/upload stores it as it came. Never a 500, never a memory spike
+    in the one process.
+- Per-site knobs: the state, the push reply and upload_burst's frame cap read the site's own
+  capture.diff_threshold, capture.settle_frames and capture.burst_frames; the state's sharpness_min
+  and video_align.default_s are the site's too. capture.frame_poll_s stays global.
+- The plate's ONE light file (ruling 3.10.1): the sharpest frame, and the curl road's photo, shrunk
+  to 1568 on the long side (the reference photos' light-copy math: INTER_AREA, JPEG 85). A photo
+  already that small, or bytes that are not an image, are stored exactly as they came. The file is
+  named by its stored bytes, so a repeated burst stays a duplicate. upload_burst's reply carries
+  shrink_ms (only when it shrank), and its log line both sizes. About 20 ms for a 1920x1080 frame on
+  HQ's test machine; the laptop's number is in 3.13's report.
+- The align bitácora: align.start {site, camera, seconds, capped when capped}, written before the
+  rope starts (a rope that cannot leave its row never starts); align.stop {site, camera,
+  was_active}, after the stop (a stop for a camera the site does not have still answers 200 and
+  leaves no row). The bot does not announce them (it announces the pause from the state).
+- The calibration goes through the one writer (routes.py's private writer is gone): kitchen_edge is
+  written quoted ("left"), and its bitácora row "calibration" carries despues, plus antes when
+  there was one.
+- Descartar on the server: POST /api/review/{id}/discard and the bulk action "discard" (before, a
+  bulk discard fell into pendientes). Outside the session's site, unknown or already discarded = 404;
+  reopen never pulls a row out of the papelera. A discard leaves a log line like the other review
+  actions, not a bitácora row (the bitácora keeps the papelera's purge and eliminar-ya, 3.14). The
+  review page's button is 3.14.
+- The confianza count: /api/stats gains confianza {bajo_umbral, minima}: analyzed return rows ranked
+  under EACH site's own confianza_minima, the papelera excluded; minima is absent when the sites in
+  view differ. The panel's tile is 3.14.
 
 ### 3.12 (built in Section 3.12): the capture page
 - /captura is rebuilt around the alta, the gafete and the emergency road (SPEC 1.3 and 1.5, and 3.12's
@@ -111,7 +167,6 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
     everywhere: the FRAME_POLL_S constant is gone), the site's two functions and the camera's source.
     camara.js's vista viva obeys frame_poll_s and does not start without a loaded state.
   - "Sí, salir" goes back to the camera picker (a kiosk app has no back button), not to /panel.
-  - The capture knobs stay global until 3.13 reads each site's own values.
 
 ### 3.11 (built in Section 3.11): the new bot
 - The bot is rewritten for the admin era (SPEC 1.5 and 1.8, and 3.11's promise list). Built defaults
@@ -199,8 +254,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - CLAUDE.md hard rule 17: two levels (universal = brand, admin only; a site's local photo wins), every
   upload a pair (the original is shown, never modified, never sent to the model; the light copy at 1568
   is what the model reads, never shown), and delete or replace removes the pair once no row of either
-  level uses it. Plate photos become ONE light file in 3.13. Shrinking is the server's own image math,
-  never an LLM.
+  level uses it. Plate photos are ONE light file (built in 3.13). Shrinking is the server's own image
+  math, never an LLM.
 
 ### 3.9.1 to 3.9.6 (owner): accounts and passwords
 - Accounts CAN be deleted (amends SPEC section 3). Every account has a permanent number (users.uid,
@@ -229,14 +284,6 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
-- 3.13, the wall and the capture lane: the gafete enforced (on the capture reads, a session of another
-  site must not shadow a valid gafete: /captura reads 401 and 403 as "enroll again"); luma,
-  black_for_s (to the last frame) and up_s in /api/camera/state (the bot reads both since 3.11; 🕶️
-  gets its live test then, inside a bracket of the server's bot); an all-black burst refused; per-site
-  knobs (the state, the push reply and upload_burst's frame cap read the site's own values); the align
-  bitácora; calibration on the one writer; discard wired in routes.py; the confianza count; plate
-  photos stored as ONE light 1568 file after the sharpest-frame pick (Galería, Review and the model use
-  it), with the shrink time measured for real. (/captura's emergency relevo was built in 3.12.)
 - 3.14, ops: papelera and retention purge; cola (pause admin-only, retry site-scoped); gasto by site
   and local day, showing only what was spent (no cache savings number; prices are entered by a human
   after checking the source, "sin precio" until then), Leer ficha calls included (their tokens are in
@@ -263,13 +310,13 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   final phone test, and disk headroom (a bigger disk before production if needed).
 
 ## Waiting on the owner (no section owns these)
-- 3.11's ✋: the live Telegram test on the laptop (the server's bot stopped first and started again
-  at the end). The owner deferred it on 11 Oct 2026 to keep building (his list:
-  3.11_pending_live_test_and_push.md; its push went out the same night). If it is still open at
-  3.13, that section's bracket takes it in with its texts updated (from 3.13 the 📵 counts from the
-  api's own boot).
+- 3.13's ✋: on the laptop, inside a bracket of the server's bot: the wall seen from a browser, demo's
+  own guard value on /captura, 3.11's group commands (/id, /cola, /foto, /extender; 3.11's deferred
+  live test rides here), 🕶️ with the webcam covered, and 📵 after an api restart with the page
+  closed (the amnesia rule), then 🟢.
 - 3.12's ✋: the browser check of /captura on the laptop (the alta, the picker, the live knobs, the
-  emergency road).
+  emergency road). Deferred on 11 Oct; its list (tomorrow_tests_3.11_3.12.md, part A) still holds
+  on 3.13's code.
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never
