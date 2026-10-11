@@ -950,6 +950,15 @@ ORDER BY j.finished_at DESC
 LIMIT 1
 """
 
+# /cola, resolved to the group's site: that site's own waiting and in-process plates (Section 3.11).
+BOT_SITE_QUEUE = """
+SELECT COUNT(*) FILTER (WHERE j.status = 'pending') AS pending,
+       COUNT(*) FILTER (WHERE j.status = 'working') AS working
+FROM jobs AS j
+JOIN plates AS p ON p.id = j.plate_id
+WHERE p.site = %(site)s AND j.status IN ('pending', 'working')
+"""
+
 # Failures announced by finished_at (a retried job keeps its id: its second failure must not vanish).
 # The cursor is the pair (finished_at, id); the baseline is the newest failure at boot.
 BOT_FAILED_CURSOR = """

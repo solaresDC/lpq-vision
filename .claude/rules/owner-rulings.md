@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.10.3 (HEAD was 408fe1d, Section 3.10.2).
+- Last update: Section 3.11 (HEAD was def5e95, Section 3.10.3).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -44,9 +44,10 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - Commits: the section's exact title as the message, plus the same Co-Authored-By trailer the earlier
   commits carry. NEVER push: the owner pushes from PowerShell (Tailscale off for the push only).
 - Laptop test edits to config.yaml and textos.yaml are reverted before each commit (CLAUDE.md rule 19).
-- The laptop's bot stays STOPPED: one poller per token (the server's bot is the live one), and the
-  repo's bot cannot run until 3.11 rewrites it. Never press Start on the whole project in Docker
-  Desktop (it starts the bot too).
+- The laptop's bot stays STOPPED: one poller per token (the server's bot is the live one). A live bot
+  test on the laptop sits between a listed stop of the server's bot and its start again (the owner
+  runs both in the section's ✋). Never press Start on the whole project in Docker Desktop (it starts
+  the bot too).
 - If Docker Desktop is closed, you may open it yourself (the 3.2 and 3.10.2 precedent): it brings back
   only the containers that were running. Never press Start on the whole project, and confirm the bot
   is still stopped.
@@ -69,7 +70,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   strange, use 127.0.0.1:8000.
 
 ## The two machines today
-- Laptop: Fase 3 through 3.10.3; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.11; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -88,6 +89,28 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.11 (built in Section 3.11): the new bot
+- The bot is rewritten for the admin era (SPEC 1.5 and 1.8, and 3.11's promise list). Built defaults
+  (HQ's standard choices; the owner may change any of them):
+  - A group serves the sites whose Telegram chat it is; the admin chat and the temporal .env chat
+    serve every active site. In a group with several sites, /foto, /cola and /extender take the
+    site first (/extender roma 23:30) and the bot asks instead of guessing.
+  - /cola counts THAT site's plates and names the dish by its name (the clave is never shown).
+  - /extender: "tonight" is the service day still open; between two service days, the nearer one
+    (late at night the night that just closed, early in the morning today's). It refuses an hour
+    before tonight's close, an hour already past, and anything that reaches the next opening.
+  - 📵 is per camera: one cry after alerts.silent_site_min without frames inside the horario, 🟢
+    when its frames flow again; nothing outside the horario, and each day starts clean. A restart
+    of the api never reads as a recovery.
+  - 🕶️ is judged only while the camera's frames flow (a dead phone is 📵's job); its cooldown is
+    alerts.sharpness_cooldown_min.
+  - Mantenimiento silences everything of that site and clears its 📵: when it ends, a camera that
+    is still silent cries again.
+  - Announced from the bitácora: relevo (the site's chat), raw_logging.auto_off,
+    workers.reconverge and user.erase_soon (machine family). Failures, bitácora rows and extension
+    ends from while the bot was down are not announced later (its cursors start at its first read).
+  - The bot greets every chat at each start and never logs a chat id or a gafete.
 
 ### 3.10.3 (owner, 8 Oct 2026): the helps on every field (built in Section 3.10.3)
 - Every editable field of Menú, Sitios y cuentas and Voz del bot carries the three helps: its example
@@ -183,21 +206,15 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
-- 3.11, the new bot: horario in the site's timezone (midnight law); the vigilantes (black_for_s to the
-  LAST frame; the silent site counted from the later of the open and the last frame, the api's boot
-  standing in); /extender; the editable texts and destinations; /foto and /cola resolved from the group
-  that asked; the gafete header on its api calls; the finished_at cursor; the paused wording; the
-  shutdown cancel; demo's saved chat; mantenimiento's real silence; relevo announcements;
-  user.erase_soon sent as cuenta_por_borrarse; the "lpq-bot" User-Agent. Local bot tests bracket a
-  listed stop and start of the server's bot.
 - 3.12, /captura: enrollment under the ORDER LAW (install the Home-Screen app first, enroll second);
   X-Device-Key on every call; live knobs from the push reply; the page's emergency road; the
   Home-Screen meta tag in captura.html; the camara.js fallback.
-- 3.13, the wall and the capture lane: the gafete enforced; luma and black_for_s to the last frame;
-  up_s; an all-black burst refused; per-site knobs; the align bitácora; calibration on the one writer;
-  discard wired in routes.py; the confianza count; /captura's emergency relevo on the server (relevo()
-  with no actor); plate photos stored as ONE light 1568 file after the sharpest-frame pick (Galería,
-  Review and the model use it), with the shrink time measured for real.
+- 3.13, the wall and the capture lane: the gafete enforced; luma, black_for_s (to the last frame) and
+  up_s in /api/camera/state (the bot reads both since 3.11; 🕶️ gets its live test then, inside a
+  bracket of the server's bot); an all-black burst refused; per-site knobs; the align bitácora;
+  calibration on the one writer; discard wired in routes.py; the confianza count; /captura's emergency
+  relevo on the server (relevo() with no actor); plate photos stored as ONE light 1568 file after the
+  sharpest-frame pick (Galería, Review and the model use it), with the shrink time measured for real.
 - 3.14, ops: papelera and retention purge; cola (pause admin-only, retry site-scoped); gasto by site
   and local day, showing only what was spent (no cache savings number; prices are entered by a human
   after checking the source, "sin precio" until then), Leer ficha calls included (their tokens are in
@@ -205,11 +222,13 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   umbral" tile. A proposal for the owner's yes: Review and Panel show the component labels instead of
   the internal keys (today they show keys like pan_multigrano).
 - 3.15, the machine room: the grant gate; active_model (keyed models only); max_tokens and the machine
-  block; the worker census and scaling with boot reconvergence; restart one service; the reboot
+  block; the worker census and scaling with boot reconvergence (its bitácora row is workers.reconverge
+  with detail {deseados, corriendo}: the bot announces it); restart one service; the reboot
   choreography with the pre-reboot notice; the post-reboot checklist (init_report); the SSE log viewer;
   the positive unlock test with the laptop's real cuarto; the newPassword() widget reused.
 - 3.16, the butler and the compose ADDs: three verbs, the persistent lock, the probe, --dry-run; the
-  mailbox mount and the bot's logs volume; a laptop round trip in a throwaway container.
+  mailbox mount and the bot's logs volume (the bot writes /data/logs/bot.log since 3.11; until the
+  volume exists that file stays inside its container); a laptop round trip in a throwaway container.
 - 3.17, local closing: the full local checklist and the Fase 1 and 2 regression; the backup also copies
   config.yaml and textos.yaml.
 - 3.18, deploy: a staged copy WITHOUT config.yaml or textos.yaml, built while the old one serves; the
@@ -222,8 +241,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   final phone test, and disk headroom (a bigger disk before production if needed).
 
 ## Waiting on the owner (no section owns these)
-- 3.10.3's ✋: the helps on every field and Crear restaurante's new parts, seen in the browser (Crear
-  restaurante itself is used for real on the server, after 3.18).
+- 3.11's ✋: the live Telegram test on the laptop (the server's bot stopped first and started again
+  at the end).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never
@@ -238,6 +257,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - The 3.5.1 phone test (30 Sep), the 3.7 browser checks, 3.8.1, the 3.9 series, and 3.10 with 3.10.1
   (Menú: everything else worked; the owner's findings became 3.10.2).
 - 3.10.2's browser check (9 Oct): "everything perfect"; the ensalada de queso de cabra is page 1.
+- 3.10.3's browser check (10 Oct): "perfect".
 
 ## Still forbidden (post-demo): STOP and flag if asked
 Coach screens, pi_csi/usb backends, the MODEL cascade (stays "off"), geometry v2, the báscula, POS,

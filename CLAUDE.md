@@ -53,8 +53,9 @@ laptop Docker 27.1.1 + Compose v2.29.1-desktop.1; server Docker 29.8.0 + Compose
 - Nightly pg_dump timer at 03:30 UTC with a proven restore road (from Fase 3 it also copies
   config.yaml and textos.yaml).
 - Anthropic: prepaid account, auto-reload OFF (spending hard-lock). Key in .env only.
-- Telegram: bot @LPQ_vision_bot + group "LPQ demo-alertas"; the group's id lives TEMPORARILY in .env
-  (TELEGRAM_CHAT_ID) until the ceremony moves it to sites.telegram_chat_id.
+- Telegram: bot @LPQ_vision_bot + group "LPQ demo-alertas". Each site's group lives in
+  sites.telegram_chat_id (Destino Telegram in the mostrador); the temporal TELEGRAM_CHAT_ID in .env is
+  only the last resort until the ceremony deletes it.
 - The butler: installed on the server only by the deploy section's listed commands.
 
 ## HARD RULES (never violate)
