@@ -215,6 +215,9 @@ async def list_sites(site: str | None = None, session: Session = Depends(require
 
 @router.post("/api/admin/sites")
 async def create_site(body: SiteCreateRequest, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Crear restaurante: the site, its cameras, functions, gafete, Telegram chat (owner ruling 3.10.3), menu photos
+    and manager are born together in one write across the database and config.yaml, or nothing is. The chat id is
+    never logged: the bitácora says only whether one was given."""
     cfg = await _config()
     if body.site in cfg.sites:
         raise HTTPException(status_code=409, detail=f"El sitio {body.site} ya existe en config.yaml.")
@@ -230,6 +233,8 @@ async def create_site(body: SiteCreateRequest, session: Session = Depends(requir
         if body.clone_menu_from and conn.execute(q.SELECT_SITE, {"site": body.clone_menu_from}).fetchone() is None:
             raise HTTPException(status_code=400, detail=f"No existe el sitio {body.clone_menu_from} para clonar su menú.")
         conn.execute(q.INSERT_SITE_FULL, {"site": body.site, "ingestion": body.ingestion, "device_key": key})
+        if body.chat_id:
+            conn.execute(q.SET_SITE_CHAT, {"site": body.site, "chat_id": body.chat_id})
         manager_uid = conn.execute(q.INSERT_USER, {
             "usuario": body.manager_usuario, "password_hash": digest, "role": "manager", "site": body.site,
         }).fetchone()["uid"]
@@ -239,12 +244,13 @@ async def create_site(body: SiteCreateRequest, session: Session = Depends(requir
         _bitacora(conn, session, "site.create", {
             "site": body.site, "manager": body.manager_usuario, "manager_uid": manager_uid,
             "cameras": [c.name for c in body.cameras], "funciones": body.funciones.model_dump(),
-            "menu_de": body.clone_menu_from, "fotos": cloned,
+            "menu_de": body.clone_menu_from, "fotos": cloned, "chat": "asignado" if body.chat_id else "sin chat",
         })
         return cloned
 
     cloned = await _db_and_config(db_work, [cw.set_op(("sites", body.site), block, flow=False)])
-    log.info("site created %s manager=%s photos=%d user=%s", body.site, body.manager_usuario, cloned, session.user)
+    log.info("site created %s manager=%s photos=%d chat=%s user=%s",
+             body.site, body.manager_usuario, cloned, "yes" if body.chat_id else "no", session.user)
     view = await _view_of(body.site)
     return {"site": body.site, "manager": body.manager_usuario, "fotos_clonadas": cloned, "view": view}
 

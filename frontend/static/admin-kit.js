@@ -58,6 +58,12 @@ const STYLE = `
 .kit-viewer .kit-prev { left: 10px; top: 50%; transform: translateY(-50%); }
 .kit-viewer .kit-next { right: 10px; top: 50%; transform: translateY(-50%); }
 .kit-viewer .kit-caption { position: absolute; left: 12px; right: 12px; bottom: 18px; text-align: center; color: #fff; font-size: 14px; }
+.kit-field-help { font-size: 14px; margin: 4px 0 10px; display: grid; gap: 6px; }
+.kit-field-help code { background: var(--bg); padding: 1px 6px; border-radius: 4px; }
+.kit-ask { min-height: 28px; min-width: 28px; padding: 0 9px; margin-left: 6px; font-size: 13px; font-weight: 700; border-radius: 999px; vertical-align: middle; }
+.kit-more { background: var(--bg); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; }
+.kit-hint { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.kit-edit input[type="checkbox"] { min-width: 0; }
 `;
 
 function injectStyle() {
@@ -113,24 +119,66 @@ export function groupBySeccion(knobs) {
 
 // --- the three helps and the badge -------------------------------------------------------
 
-export function helps(knob) {
-  const copy = el("button", {
+function copyButton(text) {
+  return el("button", {
     class: "kit-copy",
     type: "button",
     text: "copiar",
     onclick: async () => {
       try {
-        await navigator.clipboard.writeText(knob.ejemplo);
+        await navigator.clipboard.writeText(text);
         toast("ejemplo copiado", "ok");
       } catch {
         toast("no se pudo copiar: selecciónalo a mano", "bad");
       }
     },
   });
+}
+
+export function helps(knob) {
   return el("div", { class: "kit-helps" },
     el("div", { text: knob.que_es }),
-    el("div", {}, el("span", { class: "muted", text: "Ejemplo: " }), el("code", { text: knob.ejemplo }), copy),
+    el("div", {}, el("span", { class: "muted", text: "Ejemplo: " }), el("code", { text: knob.ejemplo }), copyButton(knob.ejemplo)),
     el("div", { class: "kit-reco", text: "Recomendación: " + knob.recomendacion }));
+}
+
+// fieldHelp(help, {name}): the three helps of a field that is not a knob (SPEC 1.4; owner ruling 3.10.3). The
+// example is also the field's gray placeholder; the recommendation is always visible; "?" opens what the field
+// is and its example, with copiar when the example is something a person would type (help.copiar !== false).
+// `name` starts the line when one help serves a whole column of fields (every component's grams, say).
+export function fieldHelp(help, { name = "" } = {}) {
+  const more = el("div", { class: "kit-more hidden" },
+    el("div", { text: help.que_es }),
+    el("div", {}, el("span", { class: "muted", text: "Ejemplo: " }), el("code", { text: help.ejemplo }),
+      help.copiar === false ? null : copyButton(help.ejemplo)));
+  const ask = el("button", {
+    class: "kit-ask", type: "button", text: "?", title: "¿Qué es?", "aria-expanded": "false",
+    "aria-label": "Qué es" + (name ? ": " + name : ""),
+  });
+  ask.addEventListener("click", () => {
+    const open = !more.classList.toggle("hidden");
+    ask.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  return el("div", { class: "kit-field-help" },
+    el("div", { class: "kit-reco" }, name ? el("strong", { text: name + ". " }) : null, "Recomendación: " + help.recomendacion, ask),
+    more);
+}
+
+// A Telegram chat field (owner ruling 3.8.1): group ids are negative, so the page shows a fixed "-" and keeps
+// ONLY digits while typing or pasting ("-1001234" keeps "1001234"). read() answers "-" plus the digits, or null
+// when empty (an empty field removes the chat: absent-when-off). DIGITS_HINT goes under EVERY Telegram field
+// (owner ruling 3.10.3).
+export const DIGITS_HINT = "Pega solo los números: el signo menos lo pone el sistema.";
+
+export function chatField(current) {
+  const input = el("input", { type: "text", inputmode: "numeric", autocomplete: "off", placeholder: "1001234567890" });
+  input.value = String(current || "").replace(/[^0-9]/g, "");
+  input.addEventListener("input", () => {
+    const digits = input.value.replace(/[^0-9]/g, "");
+    if (digits !== input.value) input.value = digits;
+  });
+  const node = el("span", { class: "kit-edit" }, el("span", { class: "kit-value", text: "-" }), input);
+  return { node: node, read: () => (input.value ? "-" + input.value : null) };
 }
 
 // How the value is painted: a site's own value, inherited from the global, or the global itself.
@@ -386,11 +434,12 @@ export function typeToConfirm({ title, name, warning }) {
 
 // --- the password window -----------------------------------------------------------------------
 
-// passwordDialog({title, current, note, minChars}): a small window for a NEW password, typed twice. With
+// passwordDialog({title, current, note, minChars, help}): a small window for a NEW password, typed twice. With
 // current: true (Mi cuenta) it first asks for the CURRENT one. ONE "ver" shows or hides every field; copy,
-// cut, paste and drop are blocked in the new-password fields. Resolves {current, password} after a local
-// check (length, match), or null on Cancelar or Escape. The caller's "¿seguro?" step follows.
-export function passwordDialog({ title, current = false, note = "", minChars = 10 }) {
+// cut, paste and drop are blocked in the new-password fields. help: the field's three helps (fieldHelp).
+// Resolves {current, password} after a local check (length, match), or null on Cancelar or Escape. The
+// caller's "¿seguro?" step follows.
+export function passwordDialog({ title, current = false, note = "", minChars = 10, help = null }) {
   return new Promise((resolve) => {
     const make = (placeholder, guarded) => {
       const input = el("input", {
@@ -418,6 +467,7 @@ export function passwordDialog({ title, current = false, note = "", minChars = 1
       el("div", { class: "card" },
         el("h2", { text: title }),
         note ? el("p", { class: "muted", text: note }) : null,
+        help ? fieldHelp(help) : null,
         ...fields.map((f) => el("div", { style: "margin: 6px 0;" }, f)),
         el("div", { class: "kit-edit" }, eye),
         error,

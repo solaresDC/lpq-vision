@@ -4,7 +4,8 @@ GET  /api/admin/voice                         every visible site's chat and mant
 POST /api/admin/voice/chat/{site}             a site's Telegram chat; empty = removed      (sites.telegram_chat_id)
 POST /api/admin/voice/admin_chat              the machine families' own chat (admin)     (config admin_chat_id)
 POST /api/admin/voice/mantenimiento/{site}    mute a site's alerts (absent-when-off)     (config sites.<site>.mantenimiento)
-POST /api/admin/voice/test                    enviar prueba: a site's chat, else the admin chat
+POST /api/admin/voice/test                    enviar prueba: a site's chat, else the admin chat; with chat_id
+                                              (admin), a chat typed in Crear restaurante before it is saved
 GET  /api/admin/textos                        every bot message with its fichas (admin)
 POST /api/admin/textos/save | restore | test  edit, restore or try one message (admin)
 
@@ -182,10 +183,19 @@ async def set_mantenimiento(site: str, body: SwitchRequest, session: Session = D
 
 @router.post("/api/admin/voice/test")
 async def test_destination(body: TelegramTestRequest, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
-    chat_id, que = await _target(session, body.site)
+    """Enviar prueba. With chat_id (Crear restaurante, owner ruling 3.10.3): the chat the admin typed, tested
+    before anything is saved. Otherwise a site's saved chat, or the admin chat."""
+    record: dict[str, Any] = {"site": body.site or session.site}
+    if body.chat_id:
+        if not session.is_admin:
+            raise HTTPException(status_code=403, detail="Solo el admin prueba un chat que todavía no está guardado.")
+        chat_id, que = body.chat_id, "las alertas del restaurante nuevo"
+        record = {"site": None, "nuevo": True}
+    else:
+        chat_id, que = await _target(session, body.site)
     overrides = await asyncio.to_thread(textos.load_textos)
     ok, detail = await _send(chat_id, textos.render("prueba_destino", {"que": que}, overrides))
-    await alog(session, "destino.prueba", {"site": body.site or session.site, "ok": ok})
+    await alog(session, "destino.prueba", {**record, "ok": ok})
     if not ok:
         raise HTTPException(status_code=502, detail=_why(detail))
     return {"ok": True, "enviado": que}

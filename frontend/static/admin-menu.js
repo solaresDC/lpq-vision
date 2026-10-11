@@ -8,9 +8,10 @@
 // exists. Every photo shown here is its ORIGINAL; the model receives a light copy nobody sees. A photo opens in a
 // viewer inside the page (admin-kit's photoViewer), never a new tab. A manager reads the book and manages only
 // its own site's local photos; the server enforces that too.
+// Every editable field shows its three helps (admin-kit's fieldHelp; owner ruling 3.10.3).
 
 import { api, el, qs, toast } from "/static/app.js";
-import { busy, card, confirmDialog, confirmFlow, photoViewer } from "/static/admin-kit.js";
+import { busy, card, confirmDialog, confirmFlow, fieldHelp, photoViewer } from "/static/admin-kit.js";
 
 const enc = encodeURIComponent;
 const CONDITION_WORDS = { normal: "luz normal", lampara: "con lámpara" };
@@ -21,6 +22,42 @@ const USA_WORDS = {
 };
 const EDIT_NOTE = "Cambiar el nombre, el nombre de un componente, una porción o las notas no cambia la versión del "
   + "menú. Agregar o quitar un componente la sube (te pide confirmación).";
+
+// The three helps of this tab's fields (owner ruling 3.10.3): the example is also the field's gray placeholder.
+const AYUDAS = {
+  nombre: {
+    que_es: "El nombre del platillo como lo dice la carta. Así lo ve todo el mundo en el mostrador; su clave interna la pone el sistema.",
+    ejemplo: "Tartine de pollo",
+    recomendacion: "El de la carta, con acentos y sin abreviar. No puede repetir el nombre de otro platillo.",
+  },
+  componente: {
+    que_es: "Una parte del plato que se ve en la foto y que el modelo mide por separado: pan, proteína, queso, salsa, guarnición. Su clave interna la pone el sistema.",
+    ejemplo: "Aderezo chipotle",
+    recomendacion: "Como se dice en la cocina, con acentos. Una salsa o un relleno es un solo componente: no separes sus ingredientes.",
+  },
+  gramos: {
+    que_es: "Cuánto pesa ese componente en el plato servido completo. El modelo calcula lo que sobra contra este número.",
+    ejemplo: "30",
+    recomendacion: "El gramaje del recetario, en número entero. Si el recetario dice mililitros, por ahora escribe el mismo número.",
+  },
+  notas: {
+    que_es: "Lo que el modelo debe saber al ver este plato: qué va aparte, cómo se acomoda, qué se confunde con qué. Las lee en cada plato.",
+    ejemplo: "La vinagreta va aparte, en el ramekin.",
+    recomendacion: "Frases cortas sobre lo que se VE en la foto. Los gramos no van aquí: ya están en los componentes.",
+  },
+  ficha: {
+    que_es: "Lee la foto de UNA página del recetario y abre una página nueva ya llena; nada se guarda hasta que la revisas y la guardas.",
+    ejemplo: "La foto de la ficha completa, derecha y con buena luz",
+    recomendacion: "Una página por foto, sin reflejos. Revisa contra la foto lo marcado en naranja antes de guardar.",
+    copiar: false,
+  },
+  foto: {
+    que_es: "Una foto del platillo bien servido para que el modelo lo reconozca. Las universales valen para todas las sucursales; las locales, solo para su sitio, y le ganan a las universales.",
+    ejemplo: "La foto de estudio del recetario, con luz normal",
+    recomendacion: "El plato completo, de frente o desde arriba, sin manos. Una con luz normal y, si la barra tiene lámpara, otra con lámpara.",
+    copiar: false,
+  },
+};
 
 const STYLE = `
 .mb-book { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; align-items: flex-start; overscroll-behavior-x: contain; }
@@ -165,7 +202,7 @@ function toolbar(ctx, status, error) {
     view.mode = "order";
     ctx.refresh();
   });
-  return el("div", { class: "kit-edit" }, leer, mano, ordenar, file);
+  return el("div", {}, el("div", { class: "kit-edit" }, leer, mano, ordenar, file), fieldHelp(AYUDAS.ficha, { name: "Leer ficha" }));
 }
 
 function coverOf(d, data) {
@@ -404,7 +441,7 @@ function pageEditor({ d, data, ctx, error, onCancel, draft = null }) {
   add.addEventListener("click", () => rows.append(compRow(null, limits)));
   const notas = el("textarea", {
     class: "mb-notes", maxlength: String(limits.notas), "aria-label": "Notas para el modelo",
-    placeholder: "Lo que el modelo debe saber al ver este plato (por ejemplo: la vinagreta va aparte, en ramekin).",
+    placeholder: AYUDAS.notas.ejemplo,
   });
   notas.value = source.notas || "";
   const count = el("div", { class: "muted" });
@@ -436,12 +473,13 @@ function pageEditor({ d, data, ctx, error, onCancel, draft = null }) {
     onCancel();
   });
   return el("div", {},
-    el("label", { text: "Nombre del platillo" }), nombre,
+    el("label", { text: "Nombre del platillo" }), nombre, fieldHelp(AYUDAS.nombre),
     el("h3", { text: "Componentes y su porción estándar" }),
-    el("p", { class: "muted", text: "Escríbelos como se dicen en la cocina, con acentos. El sistema les pone su clave interna." }),
+    fieldHelp(AYUDAS.componente, { name: "Componente" }),
+    fieldHelp(AYUDAS.gramos, { name: "Gramos" }),
     rows,
     el("div", { class: "kit-edit" }, add),
-    el("h3", { text: "Notas para el modelo" }), notas, count,
+    el("h3", { text: "Notas para el modelo" }), notas, count, fieldHelp(AYUDAS.notas),
     d ? el("div", { class: "kit-note", text: EDIT_NOTE }) : null,
     el("div", { class: "kit-edit", style: "margin-top: 10px;" }, save, cancel));
 }
@@ -627,5 +665,6 @@ function photosOf(d, data, ctx, error) {
       "Sin fotos locales en " + data.site + ".", d, data, ctx, error));
     parts.push(el("div", { class: d.usa === "ninguna" ? "kit-note" : "kit-reco", text: USA_WORDS[d.usa] }));
   }
+  if (admin || data.site) parts.push(fieldHelp(AYUDAS.foto, { name: "Fotos" }));
   return el("div", {}, ...parts);
 }

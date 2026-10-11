@@ -38,6 +38,7 @@ My shorthand → precise meaning (FASE 3 era: the admin module is THE CURRENT WO
 | "el recetario" / "el libro" | the Menú tab as a book of dish pages (owner ruling 3.10.2) |
 | "la ficha" | one page of the restaurant's printed recetario; "Leer ficha" reads its photo into a new page |
 | "la clave" | a dish's dish_id: made by the system from the name, never typed, never shown, never changed |
+| "las tres ayudas" | qué es, Ejemplo (also the field's gray placeholder; copiar when it is typed) and Recomendación (always visible); knobs show all three open, other fields open qué es and Ejemplo with "?" (owner ruling 3.10.3) |
 
 FASE 3 is the current work: the mostrador, the cuarto de máquinas, the papelera, the mayordomo and
 everything in the LPQ-FASE3-SPEC are BUILT when a section asks for them, as amended by the owner

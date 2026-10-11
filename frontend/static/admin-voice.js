@@ -1,12 +1,13 @@
-// LPQ_VISION admin-voice.js: the Voz del bot tab of the mostrador (family admin_voice; SPEC 1.5).
-// Destino Telegram: each visible site's chat (pasted from /id), its test and its mantenimiento switch; the
-// admin also sees the admin chat (machine alerts). A chat field takes ONLY digits: Telegram group ids are
-// negative, so the page shows a fixed "-" and saves "-" plus the digits. Textos del bot (admin only): every
-// message with its fichas as chips (a click inserts one at the cursor), Guardar, Probar (example values)
-// and Restaurar original. Tests go through the api's own Telegram helper, so they work even with the bot down.
+// LPQ_VISION admin-voice.js: the Voz del bot tab of the mostrador (family admin_voice; SPEC 1.5; owner rulings
+// 3.8.1 and 3.10.3). Destino Telegram: each visible site's chat (pasted from /id), its test and its mantenimiento
+// switch; the admin also sees the admin chat (machine alerts). A chat field takes ONLY digits (admin-kit's
+// chatField) and carries the "Pega solo los números" hint under it. Textos del bot (admin only): every message
+// with its fichas as chips (a click inserts one at the cursor), Guardar, Probar (example values) and Restaurar
+// original. Every editable field shows its three helps (admin-kit's fieldHelp; the admin chat's come from the
+// knob registry). Tests go through the api's own Telegram helper, so they work even with the bot down.
 
 import { api, el, toast } from "/static/app.js";
-import { busy, card } from "/static/admin-kit.js";
+import { DIGITS_HINT, busy, card, chatField, fieldHelp } from "/static/admin-kit.js";
 
 const FAMILIAS = {
   site: "Van al chat del sitio",
@@ -17,11 +18,38 @@ const FAMILIAS = {
 };
 const TEXTAREA_STYLE = "width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); "
   + "border-radius: var(--radius); background: var(--paper); margin: 6px 0;";
-const DIGITS_HINT = "Pega solo los números: el signo menos lo pone el sistema.";
+
+// The three helps of this tab's fields (owner ruling 3.10.3). The admin chat's live in the knob registry.
+const AYUDAS = {
+  chat: {
+    que_es: "El grupo de Telegram del sitio, donde llegan sus alertas. Escribe /id en ese grupo: el bot contesta con el número del chat.",
+    ejemplo: "1001234567890",
+    recomendacion: "Pega el número, pulsa Guardar y después «Enviar prueba» para confirmar que llega.",
+    copiar: false,
+  },
+  mantenimiento: {
+    que_es: "Calla las alertas del sitio mientras lo arreglan, por ejemplo con una cámara en reparación o una remodelación.",
+    ejemplo: "Poner en mantenimiento durante una remodelación",
+    recomendacion: "Quítalo en cuanto terminen: mientras esté puesto, ese sitio no avisa nada.",
+    copiar: false,
+  },
+  texto: {
+    que_es: "Lo que escribe el bot en cada caso. Las fichas entre llaves, como {sitio}, se llenan solas al enviar.",
+    ejemplo: "🟢 El sitio {sitio} volvió a mandar imagen ({camara}).",
+    recomendacion: "Corto y claro, como lo diría el gerente. Deja las fichas tal cual, con sus llaves, y usa «Probar» antes de dejarlo.",
+    copiar: false,
+  },
+};
 
 export async function render(ctx) {
   const voice = await api("/api/admin/voice");
-  const box = el("div", {}, destinoCard(voice, ctx));
+  let adminHelp = null;
+  if (ctx.sess.admin) {
+    const knob = (await api("/api/admin/knobs")).knobs.find((k) => k.name === "admin_chat_id");
+    // The registry's example carries the minus; this field takes only the digits.
+    if (knob) adminHelp = { que_es: knob.que_es, ejemplo: knob.ejemplo.replace("-", ""), recomendacion: knob.recomendacion, copiar: false };
+  }
+  const box = el("div", {}, destinoCard(voice, ctx, adminHelp));
   if (ctx.sess.admin) box.append(await textosCard(ctx));
   else box.append(card("Textos del bot", el("p", { class: "muted", text: "Los textos del bot los cambia el admin." })));
   return box;
@@ -45,31 +73,19 @@ function wire(button, error, fn, okText) {
   return button;
 }
 
-// chatField(current): only digits survive typing or pasting ("-1001234" keeps "1001234"); read() answers
-// "-" plus the digits, or null when empty (an empty field removes the chat: absent-when-off).
-function chatField(current) {
-  const input = el("input", { type: "text", inputmode: "numeric", autocomplete: "off", placeholder: "1001234567890" });
-  input.value = String(current || "").replace(/[^0-9]/g, "");
-  input.addEventListener("input", () => {
-    const digits = input.value.replace(/[^0-9]/g, "");
-    if (digits !== input.value) input.value = digits;
-  });
-  const node = el("span", { class: "kit-edit" }, el("span", { class: "kit-value", text: "-" }), input);
-  return { node: node, read: () => (input.value ? "-" + input.value : null) };
-}
-
 // --- Destino Telegram ----------------------------------------------------------------------
 
-function destinoCard(voice, ctx) {
+function destinoCard(voice, ctx, adminHelp) {
   const parts = [
     el("p", {
       class: "muted",
-      text: "Escribe /id en el grupo de Telegram del sitio: el bot contesta con el número del chat. "
-        + DIGITS_HINT + " Pulsa Guardar y luego «Enviar prueba».",
+      text: "Cada sitio avisa en su propio grupo de Telegram." + (ctx.sess.admin ? " El chat de admin recibe las alertas de máquina." : ""),
     }),
+    fieldHelp(AYUDAS.chat, { name: "Chat del sitio" }),
+    fieldHelp(AYUDAS.mantenimiento, { name: "Mantenimiento" }),
     ...voice.sites.map((s) => siteRow(s, ctx)),
   ];
-  if (ctx.sess.admin) parts.push(el("h3", { text: "Chat de admin (alertas de máquina)" }), adminChatRow(voice, ctx));
+  if (ctx.sess.admin) parts.push(el("h3", { text: "Chat de admin (alertas de máquina)" }), adminChatRow(voice, ctx, adminHelp));
   return card("Destino Telegram", ...parts);
 }
 
@@ -99,10 +115,11 @@ function siteRow(s, ctx) {
       el("span", { class: s.chat_id ? "chip ok" : "chip", text: s.chat_id ? "chat asignado" : "sin chat" }),
       s.mantenimiento ? el("span", { class: "chip warn", text: "en mantenimiento: sus alertas callan" }) : null),
     el("div", { class: "kit-edit" }, field.node, save, test, maint),
+    el("div", { class: "kit-hint", text: DIGITS_HINT }),
     error);
 }
 
-function adminChatRow(voice, ctx) {
+function adminChatRow(voice, ctx, adminHelp) {
   const field = chatField(voice.admin_chat_id);
   const error = el("div", { class: "kit-error" });
   const save = wire(btn("Guardar", "primary"), error, async () => {
@@ -116,8 +133,10 @@ function adminChatRow(voice, ctx) {
     toast("prueba enviada: " + answer.enviado, "ok");
   }, null);
   return el("div", { class: "kit-knob" },
-    el("div", { class: "muted", text: "Vacío = las alertas de máquina van a todos los chats de los sitios. " + DIGITS_HINT }),
+    el("div", { class: "muted", text: "Vacío = las alertas de máquina van a todos los chats de los sitios." }),
     el("div", { class: "kit-edit" }, field.node, save, test),
+    el("div", { class: "kit-hint", text: DIGITS_HINT }),
+    adminHelp ? fieldHelp(adminHelp) : null,
     voice.env_chat
       ? el("div", { class: "kit-note", text: "Mientras exista, el chat temporal de .env (TELEGRAM_CHAT_ID) es el último recurso: recibe lo que no tenga otro destino." })
       : null,
@@ -134,11 +153,14 @@ async function textosCard(ctx) {
     groups.get(t.familia).push(t);
   }
   const where = ctx.site ? "al chat de " + ctx.site : "al chat de admin";
-  const parts = [el("p", {
-    class: "muted",
-    text: "Las fichas entre llaves se llenan solas al enviar; pulsa una ficha para insertarla donde está el cursor. "
-      + "«Probar» manda el texto con valores de ejemplo " + where + ".",
-  })];
+  const parts = [
+    el("p", {
+      class: "muted",
+      text: "Las fichas entre llaves se llenan solas al enviar; pulsa una ficha para insertarla donde está el cursor. "
+        + "«Probar» manda el texto con valores de ejemplo " + where + ".",
+    }),
+    fieldHelp(AYUDAS.texto, { name: "Cada texto" }),
+  ];
   for (const [familia, list] of groups) {
     parts.push(el("h3", { text: FAMILIAS[familia] || familia }));
     for (const t of list) parts.push(textoRow(t, data.max_chars, ctx));
@@ -155,7 +177,7 @@ function insertAt(area, token) {
 }
 
 function textoRow(t, maxChars, ctx) {
-  const area = el("textarea", { rows: "3", maxlength: String(maxChars), style: TEXTAREA_STYLE });
+  const area = el("textarea", { rows: "3", maxlength: String(maxChars), style: TEXTAREA_STYLE, placeholder: t.original });
   area.value = t.actual;
   const error = el("div", { class: "kit-error" });
   const chips = Object.keys(t.fichas).map((name) =>

@@ -778,24 +778,35 @@ class RawLoggingRequest(_Body):
     hours: int | None = Field(default=None, ge=1, le=720)   # absent = RAW_LOG_AUTO_OFF_HOURS
 
 
+def _chat_value(value: Any) -> Any:
+    """A Telegram chat id typed in a form: empty or absent = None (absent-when-off); else digits, optional minus."""
+    if value is None or isinstance(value, bool):
+        return None if value is None else value
+    value = str(value).strip()
+    if value == "":
+        return None
+    if not CHAT_ID_RE.match(value):
+        raise ValueError("el chat es un número de Telegram, como -1001234567890 (escribe /id en el grupo)")
+    return value
+
+
 class ChatIdRequest(_Body):
     chat_id: str | None = None    # empty or absent = remove the chat (absent-when-off)
 
     @field_validator("chat_id", mode="before")
     @classmethod
     def _chat(cls, value: Any) -> Any:
-        if value is None or isinstance(value, bool):
-            return None if value is None else value
-        value = str(value).strip()
-        if value == "":
-            return None
-        if not CHAT_ID_RE.match(value):
-            raise ValueError("el chat es un número de Telegram, como -1001234567890 (escribe /id en el grupo)")
-        return value
+        return _chat_value(value)
 
 
 class TelegramTestRequest(_Body):
     site: str | None = None       # absent = the admin chat
+    chat_id: str | None = None    # a chat typed in Crear restaurante, not saved yet (admin only; owner ruling 3.10.3)
+
+    @field_validator("chat_id", mode="before")
+    @classmethod
+    def _chat(cls, value: Any) -> Any:
+        return _chat_value(value)
 
 
 class TextoSaveRequest(_Body):
@@ -856,13 +867,14 @@ class CameraUpsertRequest(_Body):
 
 
 class SiteCreateRequest(_Body):
-    """Crear restaurante, stage 0 (SPEC 1.5): site, cameras, functions, menu clone and its manager,
-    born together in one all-or-nothing write (the gafete is born inside it too)."""
+    """Crear restaurante, stage 0 (SPEC 1.5): site, cameras, functions, Telegram chat (owner ruling 3.10.3),
+    menu clone and its manager, born together in one all-or-nothing write (the gafete is born inside it too)."""
 
     site: str
     ingestion: Ingestion = "phone_web"
     funciones: Funciones
     cameras: list[CameraUpsertRequest] = Field(min_length=1, max_length=8)
+    chat_id: str | None = None    # its Telegram group, born with it; absent or empty = none yet
     clone_menu_from: str | None = None
     manager_usuario: str
     manager_password: str = Field(min_length=PASSWORD_MIN_CHARS, max_length=200)
@@ -871,6 +883,11 @@ class SiteCreateRequest(_Body):
     @classmethod
     def _slug(cls, value: Any) -> Any:
         return _site_slug(value)
+
+    @field_validator("chat_id", mode="before")
+    @classmethod
+    def _chat(cls, value: Any) -> Any:
+        return _chat_value(value)
 
     @field_validator("manager_usuario", mode="before")
     @classmethod
