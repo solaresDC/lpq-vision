@@ -14,7 +14,7 @@ My shorthand → precise meaning (FASE 3 era: the admin module is THE CURRENT WO
 | "el express" / "el carril express" | the presentation lane (kind='presentation', priority 10) |
 | "los dos compose" | compose.mac.yaml (runs everywhere this era) + compose.universal.yaml (future ollama) |
 | "la escotilla" | Hetzner web Console emergency access (NEVER used by you) |
-| "el bot" / "la voz" | @LPQ_vision_bot, `bot/main.py` (commands, alert families, vigilantes, /extender) |
+| "el bot" / "la voz" | @LPQ_vision_bot, `bot/main.py` (commands, alert families, vigilantes, /extender and the one-day hours) |
 | "la cara" / "the face" | `frontend/` (captura, panel, review, galeria, camara + admin, maquinas) |
 | "la mirilla" | `/camara`: foto-al-toque + vista viva (RAM copies, never stored) |
 | "el modo alineación" / "la cuerda" | the alignment pause on `/camara` and its mandatory timeout |
@@ -31,7 +31,7 @@ My shorthand → precise meaning (FASE 3 era: the admin module is THE CURRENT WO
 | "la papelera" | discarded plates (`review_status='discarded'`) and their retention purge |
 | "el mayordomo" / "el buzón" | the host butler `butler/lpq_butler.py` and its unix-socket mailbox `/run/lpq-butler/butler.sock` |
 | "el censo" | the running worker count read from the compose network's DNS |
-| "los vigilantes" | 🕶️ black timer, 📵 silent site, `/extender` (judged in the site's timezone) |
+| "los vigilantes" | 🕶️ black timer, 📵 silent site, judged in the site's timezone with that day's hours (`/extender`, `/abrir`, `/cerrar`, `/hoy`, `/manana` change one day) |
 | "la ceremonia" | the death of TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH, DEMO_PASSWORD_HASH, in the SPEC's order |
 | "la carpeta" / "the folder" | `C:\Users\danie\Downloads\LPQ_VISION` |
 | "HQ" / "el cuartel" | the owner's build chat on claude.ai: it holds the SPEC and writes every section block |

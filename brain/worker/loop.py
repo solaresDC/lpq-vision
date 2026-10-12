@@ -17,10 +17,10 @@ block (rescue window, attempts, the model's time limit and answer length), each 
 SELECTED prompt, and the queue brake (queue_paused: claim nothing while it exists). Every
 finished job writes its token usage into jobs.usage INSIDE the completion transaction. Once
 an hour (PURGE_SWEEP_MIN) each worker sweeps: papelera plates past their retention lose their
-jobs, their row and their photo (reference/ is never touched), and extensions long past leave
-horario_extensiones; SKIP LOCKED keeps several workers off the same rows. Each replica logs to
-its own /data/logs/worker-<hostname>.log, prunes stale replica files at boot, and touches its
-own file hourly so an idle replica never ages out.
+jobs, their row and their photo (reference/ is never touched), and hour changes long past leave
+horario_extensiones (a day's rows together); SKIP LOCKED keeps several workers off the same
+rows. Each replica logs to its own /data/logs/worker-<hostname>.log, prunes stale replica files
+at boot, and touches its own file hourly so an idle replica never ages out.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ JOB_KIND_PRESENTATION = "presentation"
 LAST_ERROR_MAX_CHARS = 2000
 PURGE_SWEEP_MIN = 60                   # the hourly gate of the papelera + extensions sweep
 PURGE_BATCH = 200                      # plates per purge transaction
-EXTENSION_GRACE = timedelta(days=1)    # an extension this long past its close leaves the table
+EXTENSION_GRACE = timedelta(days=1)    # a day's hour changes this long past their close leave the table
 WORKER_LOG_PRUNE_DAYS = 7              # a replica log file untouched this long is a dead set's: pruned at boot
 REFERENCE_PREFIX = "reference/"        # the sacred folder: a purge never deletes under it
 
@@ -459,7 +459,8 @@ def purge_papelera(cfg: Config) -> int:
 
 
 def purge_extensions() -> int:
-    """One-night extensions whose close passed more than EXTENSION_GRACE ago leave horario_extensiones."""
+    """A day's hour changes leave horario_extensiones together, once all of them closed more than
+    EXTENSION_GRACE ago (Section 3.13.1: the latest row of a day is that day's state)."""
     with q.connect() as conn:
         return conn.execute(q.PURGE_OLD_EXTENSIONS, {"grace": EXTENSION_GRACE}).rowcount
 
@@ -499,7 +500,7 @@ def sweep(cfg: Config, own_log: Path | None) -> None:
         warned, erased = warn_and_erase_users()
         if purged or ended or warned or erased:
             log.info(
-                "sweep: papelera purged %d plate(s) (retention %d days), %d old extension(s) removed, "
+                "sweep: papelera purged %d plate(s) (retention %d days), %d old hour change(s) removed, "
                 "%d deleted account(s) warned, %d erased",
                 purged, cfg.papelera_dias, ended, warned, erased,
             )

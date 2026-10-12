@@ -8,8 +8,14 @@
 // fieldHelp). New passwords go through admin-kit's newPassword() or passwordDialog(): viewable with "ver" while
 // typed, never copyable. Nobody can SEE a stored password; the page never keeps one. A gafete appears only
 // after "Mostrar gafete".
+// Live (Section 3.13.1): every LIVE_MS the tab re-reads its sites (and, for the admin, the accounts) and rebuilds
+// in place each card whose data changed, so a relevo made from a phone or another window shows up by itself.
+// A card someone is using waits, with a note, until it is free: a field with the cursor in it, a value typed or
+// chosen and not saved, a button still working, a gafete on screen (until "ocultar"), or an open window. A site
+// added or removed elsewhere rebuilds the whole tab on the same terms, checked again right before it happens. The
+// re-read never opens the login (an expired session waits for the next click) and dies with the tab.
 
-import { api, el, fmtDate, qs, toast } from "/static/app.js";
+import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import {
   DIGITS_HINT, SECCIONES, busy, card, chatField, confirmDialog, confirmFlow, fieldHelp, fmtValue, infoDialog,
   newPassword, passwordDialog, typeToConfirm,
@@ -23,6 +29,11 @@ const INLINE = "width: auto;";
 const CHECK = "width: auto; min-height: 0; margin: 0;";
 const CHECK_LABEL = "display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--ink); font-size: 15px;";
 const MAX_CAMERAS = 8;
+const LIVE_MS = 5000;           // the tab re-reads itself this often while it is on screen (owner ruling 3.13.1)
+const FIELD_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA"]);
+const LIVE_NOTE_CARD = "Hay cambios nuevos en esta tarjeta: aparecen en cuanto termines lo que estás editando.";
+const LIVE_NOTE_HOLD = "Hay cambios nuevos en esta tarjeta: aparecen en cuanto ocultes el gafete.";
+const LIVE_NOTE_TAB = "Se agregó o se quitó un sitio en otra ventana: la pestaña se actualiza en cuanto termines lo que estás editando.";
 
 // The three helps of this tab's fields (owner ruling 3.10.3): the example is also the field's gray placeholder.
 const AYUDAS = {
@@ -141,16 +152,145 @@ function sitePath(site) {
 
 export async function render(ctx) {
   const data = await api("/api/admin/sites" + qs({ site: ctx.site }));
-  const box = el("div", {});
+  const view = { names: siteNames(data), note: el("div", { class: "kit-note hidden" }), cards: new Map(), parts: [], users: null };
+  const box = el("div", {}, view.note);
   if (!data.sites.length) box.append(card("Sitios", el("p", { class: "muted", text: "No hay sitios que mostrar." })));
-  for (const s of data.sites) box.append(siteCard(s, ctx));
+  for (const s of data.sites) {
+    const node = remember(siteCard(s, ctx));
+    view.cards.set(s.site, { node: node, sig: JSON.stringify(s) });
+    box.append(node);
+  }
   if (ctx.sess.admin) {
     const global = await api("/api/admin/knobs");          // the global values a new restaurant inherits
-    box.append(createCard(ctx, global.knobs.filter((k) => k.per_site)));
-    box.append(await usersCard(ctx));
+    view.parts.push(remember(createCard(ctx, global.knobs.filter((k) => k.per_site))));
+    const accounts = await api("/api/admin/users");
+    const recent = await api("/api/admin/password-history" + qs({ limit: HISTORY_PREVIEW }));
+    view.users = { node: remember(usersCard(ctx, accounts, recent)), sig: JSON.stringify(accounts) };
+    box.append(view.parts[0], view.users.node);
+  } else {
+    view.parts.push(remember(myPasswordCard()));          // the admin changes its own from its row in Cuentas
+    box.append(view.parts[0]);
   }
-  if (!ctx.sess.admin) box.append(myPasswordCard());   // the admin changes its own from its row in Cuentas
+  const stop = poll(liveTick(ctx, view), LIVE_MS);
+  ctx.onLeave(() => { view.gone = true; stop(); });
   return box;
+}
+
+// --- live: the tab follows the system by itself (Section 3.13.1) ---------------------------------
+
+const BASELINES = new WeakMap();   // card -> its fields and the values they had when the card was built
+
+function siteNames(data) {
+  return data.sites.map((s) => s.site).join("|");
+}
+
+function valueOf(field) {
+  return field.type === "checkbox" || field.type === "radio" ? String(field.checked) : field.value;
+}
+
+function remember(node) {
+  BASELINES.set(node, [...node.querySelectorAll("input, select, textarea")].map((f) => [f, valueOf(f)]));
+  return node;
+}
+
+// In use: a window is open, the cursor is in one of its fields, a value was typed or chosen and not saved, a
+// button is still working (busy() disables it until its answer lands, error line included), or a gafete is on
+// screen. A field added after the card was built (another camera row) counts once it holds anything. A card in
+// use is never rebuilt under someone's hands.
+function inUse(node) {
+  if (document.querySelector(".overlay")) return true;
+  const active = document.activeElement;
+  if (active && node.contains(active) && FIELD_TAGS.has(active.tagName)) return true;
+  if (node.querySelector("[data-live-hold], button:disabled")) return true;
+  const base = new Map(BASELINES.get(node) || []);
+  return [...node.querySelectorAll("input, select, textarea")].some((f) =>
+    base.has(f) ? valueOf(f) !== base.get(f) : !["", "false"].includes(valueOf(f)));
+}
+
+// The card's note says what it is waiting for; it goes away with the rebuild, or by itself when the data comes
+// back to what the card already shows.
+function flag(node) {
+  const text = node.querySelector("[data-live-hold]") ? LIVE_NOTE_HOLD : LIVE_NOTE_CARD;
+  let note = node.querySelector("[data-live-note]");
+  if (!note) {
+    note = el("p", { class: "kit-note" });
+    note.dataset.liveNote = "1";
+    const title = node.querySelector("h2");
+    if (title) title.after(note); else node.prepend(note);
+  }
+  if (note.textContent !== text) note.textContent = text;
+}
+
+function unflag(node) {
+  const note = node.querySelector("[data-live-note]");
+  if (note) note.remove();
+}
+
+// A plain read: a 401 or a network hiccup skips this round instead of opening the login.
+async function liveGet(path) {
+  try {
+    const res = await fetch(path, { credentials: "same-origin", cache: "no-store" });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+// After every await the tick looks again: the tab may be gone (another section on screen) or in use by now.
+function liveTick(ctx, view) {
+  let running = false;
+  let first = true;
+  return async () => {
+    if (first) { first = false; return; }   // the render just read everything: the first round is the next one
+    if (running || view.gone) return;       // a slow answer never stacks a second round on top
+    running = true;
+    try {
+      const data = await liveGet("/api/admin/sites" + qs({ site: ctx.site }));
+      if (!data || view.gone) return;
+      if (siteNames(data) !== view.names) {
+        const all = () => [...view.parts, ...[...view.cards.values()].map((c) => c.node), ...(view.users ? [view.users.node] : [])];
+        const busyTab = () => {
+          if (!all().some(inUse)) return false;
+          view.note.textContent = LIVE_NOTE_TAB;
+          view.note.classList.remove("hidden");
+          return true;
+        };
+        if (busyTab()) return;
+        await ctx.refreshOverview();
+        if (view.gone || busyTab()) return;
+        ctx.refresh();
+        return;
+      }
+      view.note.classList.add("hidden");
+      for (const s of data.sites) {
+        const entry = view.cards.get(s.site);
+        const sig = JSON.stringify(s);
+        if (!entry) continue;
+        if (entry.sig === sig) { unflag(entry.node); continue; }
+        if (inUse(entry.node)) { flag(entry.node); continue; }
+        const fresh = remember(siteCard(s, ctx));
+        entry.node.replaceWith(fresh);
+        entry.node = fresh;
+        entry.sig = sig;
+      }
+      if (view.users) {
+        const accounts = await liveGet("/api/admin/users");
+        if (!accounts || view.gone) return;
+        const sig = JSON.stringify(accounts);
+        if (sig === view.users.sig) { unflag(view.users.node); return; }
+        if (inUse(view.users.node)) { flag(view.users.node); return; }
+        const recent = await liveGet("/api/admin/password-history" + qs({ limit: HISTORY_PREVIEW }));
+        if (!recent || view.gone) return;
+        if (inUse(view.users.node)) { flag(view.users.node); return; }
+        const fresh = remember(usersCard(ctx, accounts, recent));
+        view.users.node.replaceWith(fresh);
+        view.users.node = fresh;
+        view.users.sig = sig;
+      }
+    } finally {
+      running = false;
+    }
+  };
 }
 
 // --- one site --------------------------------------------------------------------------------
@@ -242,6 +382,7 @@ function addCameraRow(s, ctx, error) {
 }
 
 function showKey(box, key) {
+  box.dataset.liveHold = "1";        // a gafete on screen holds its card still until "ocultar" (the live re-read waits)
   const copy = el("button", { class: "kit-copy", type: "button", text: "copiar" });
   copy.addEventListener("click", async () => {
     try {
@@ -251,8 +392,13 @@ function showKey(box, key) {
       toast("no se pudo copiar: selecciónalo a mano", "bad");
     }
   });
+  const hide = el("button", { class: "kit-copy", type: "button", text: "ocultar" });
+  hide.addEventListener("click", () => {
+    box.replaceChildren();
+    delete box.dataset.liveHold;
+  });
   box.replaceChildren(el("div", { class: "kit-helps" },
-    el("div", {}, el("span", { class: "muted", text: "Gafete: " }), el("code", { text: key }), copy),
+    el("div", {}, el("span", { class: "muted", text: "Gafete: " }), el("code", { text: key }), copy, hide),
     el("div", {
       class: "kit-note",
       text: "Para inscribir un teléfono: instala /captura en su pantalla de inicio, ábrela desde ese ícono y pega "
@@ -528,8 +674,7 @@ function deletedTable(rows, ctx, error) {
       }))))));
 }
 
-async function usersCard(ctx) {
-  const data = await api("/api/admin/users");
+function usersCard(ctx, data, recent) {
   const error = el("div", { class: "kit-error" });
   const siteNames = ctx.overview.sites.map((s) => s.site);
   const activeAdmins = data.users.filter((u) => u.role === "admin" && u.active).length;
@@ -549,7 +694,6 @@ async function usersCard(ctx) {
   if (data.eliminadas.length) {
     parts.push(el("h3", { text: "Eliminadas: se recuperan en " + data.recovery_days + " días" }), deletedTable(data.eliminadas, ctx, error));
   }
-  const recent = await api("/api/admin/password-history" + qs({ limit: HISTORY_PREVIEW }));
   parts.push(
     el("h3", { text: "Últimos cambios de contraseña" }),
     historyTable(recent.historial, "Todavía no hay cambios de contraseña registrados."),

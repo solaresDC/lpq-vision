@@ -1,15 +1,20 @@
-"""LPQ_VISION bot/main.py: la voz, @LPQ_vision_bot on python-telegram-bot 22.8 (SPEC 1.5 and 1.8; Section 3.11).
+"""LPQ_VISION bot/main.py: la voz, @LPQ_vision_bot on python-telegram-bot 22.8 (SPEC 1.5 and 1.8; Sections 3.11, 3.13.1).
 
 Commands, answered in the group that asked: /id (this chat's number, to paste in the mostrador), /cola (that
-site's queue and its last finished plate), /foto (what that site's camera sees now) and /extender (moves
-tonight's close later; its row is the bot's ONE write, in horario_extensiones). A group serves the sites whose
-sites.telegram_chat_id it is; the admin chat and the temporal .env chat serve every active site. A group with
-several sites names the site first (/foto roma, /extender roma 23:30) and the bot asks instead of guessing.
+site's queue and its last finished plate), /foto (what that site's camera sees now), /extender (moves tonight's
+close later) and the one-day hours (Section 3.13.1): /hoy and /manana show that day's hours; /abrir, /cerrar,
+/cerrar ya, /hoy HH:MM HH:MM, /hoy cerrado and their mañana forms change them, only for today or tomorrow and
+only for that day. /mañana with the ñ works too: Telegram ends a command at the ñ, so a text filter catches it.
+Every change, /extender's included, is ONE row of horario_extensiones (the whole new state of that service day;
+the latest row of a day wins) plus its bitácora row, in one transaction: the bot's only writes. A group serves
+the sites whose sites.telegram_chat_id it is; the admin chat and the temporal .env chat serve every active site.
+A group with several sites names the site first (/foto roma, /extender roma 23:30, /abrir roma mañana 10:00)
+and the bot asks instead of guessing.
 
 One round every alerts.poll_s. Config and textos.yaml are read every round (every knob enters hot); then the
 database and the api; each rule is a pure function of the round's inputs and the bot's RAM, returning the
-messages to send. The vigilantes judge each site in its own timezone and horario (the midnight law; tonight's
-extensions included): 📵 a camera with no frames, counted from the later of its last frame (the api's boot
+messages to send. The vigilantes judge each site in its own timezone and horario (the midnight law; that day's
+one-day changes included): 📵 a camera with no frames, counted from the later of its last frame (the api's boot
 standing in when it has none) and the opening; 🕶️ a covered camera (black_for_s, which the api measures to the
 LAST frame); the dirty lens; the alignment notices. Nothing judges a site in mantenimiento. Machine families:
 the backlog, the failures (a cursor on finished_at: a retried job's second failure is announced too), the
@@ -34,13 +39,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from psycopg.types.json import Jsonb
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from brain.adapter import raw_log
 from brain.db import queries as q
@@ -58,15 +64,23 @@ USER_AGENT = "lpq-bot"                       # the api's machine-room status rec
 API_REMINDER = timedelta(minutes=15)         # how often "la ventanilla sigue sin responder" repeats
 RAW_LOG_REMINDER_HOURS = 48
 LAST_ERROR_MAX_CHARS = 300
-EXTENSION_LOOKBACK = timedelta(days=2)       # extensions this recent can still belong to a live service day
+HORARIO_LOOKBACK = timedelta(days=3)         # the service days read: from the day before yesterday (it bounds
+                                             # yesterday's opening) on, in any site's timezone
 POLL_S_DEFAULT = 10                          # the round cadence until a config has loaded once
 ENV_TOKEN = "TELEGRAM_BOT_TOKEN"
 ENV_CHAT_ID = "TELEGRAM_CHAT_ID"             # temporal: the last-resort chat until the ceremony deletes it
 MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+DIAS_SEMANA = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+DIA_PALABRAS = {"hoy": 0, "mañana": 1, "manana": 1}   # the only days a one-day change may name
 FUENTES = {"phone": "teléfono", "pi": "Pi"}
+QUIEN_MAX = 60                               # the Telegram name kept in an hour change's bitácora row
+BITACORA_HORARIO = "horario.cambio"          # the bitácora action of every hour change (/extender's included)
 
 _HORA_RE = re.compile(r"^(\d{1,2}):(\d{2})\Z")
 _MAS_RE = re.compile(r"^\+(?:(\d{1,2})h(?:(\d{1,2})m?)?|(\d{1,4})m)\Z")
+# /mañana with the ñ (composed, or n plus the combining tilde): Telegram ends a command entity at the ñ, so the
+# bot matches the text itself. Group 1 is the bot it is written to, when it says.
+_MANANA_ENIE_RE = re.compile(r"^/ma(?:ñ|n\u0303)ana(?:@(\w+))?(?:\s|\Z)", re.IGNORECASE)
 
 
 def _now() -> datetime:
@@ -85,16 +99,47 @@ def _hhmm(moment: datetime, zone: ZoneInfo) -> str:
 
 @dataclass(frozen=True)
 class Window:
-    """One service day: its opening, its regular close (the NEXT day when close <= open) and the next opening."""
+    """One service day's REGULAR window: its opening, its close (the NEXT day when close <= open) and the next
+    day's regular opening."""
 
     open: datetime
     close: datetime
     next_open: datetime
 
 
-def _at(day: date, hhmm: str, zone: ZoneInfo) -> datetime:
+@dataclass(frozen=True)
+class Dia:
+    """One service day as it stands: its regular window and its hours after that day's one-day changes (the
+    latest change of the day wins). open None = cerrado todo el día."""
+
+    fecha: date
+    base: Window
+    open: datetime | None
+    close: datetime | None
+
+    @property
+    def cerrado(self) -> bool:
+        return self.open is None
+
+    @property
+    def cambiado(self) -> bool:
+        return self.open != self.base.open or self.close != self.base.close
+
+    def dentro(self, now: datetime) -> bool:
+        return self.open is not None and self.close is not None and self.open <= now < self.close
+
+
+def _utc(moment: datetime | None) -> datetime | None:
+    """Every instant of the horario is kept in UTC, whatever timezone the database session hands back: comparisons
+    and "+2h" then count real time, daylight saving included."""
+    return None if moment is None else moment.astimezone(timezone.utc)
+
+
+def _at(day: date, hhmm: str, zone: ZoneInfo, fold: int = 0) -> datetime:
+    """That day's HH:MM on the site's wall clock, as a UTC instant (fold=1: the second pass of the hour that repeats
+    when daylight saving ends)."""
     hours, minutes = (int(part) for part in hhmm.split(":"))
-    return datetime(day.year, day.month, day.day, hours, minutes, tzinfo=zone)
+    return datetime(day.year, day.month, day.day, hours, minutes, tzinfo=zone, fold=fold).astimezone(timezone.utc)
 
 
 def _window(day: date, horario: HorarioConfig, zone: ZoneInfo) -> Window:
@@ -103,30 +148,78 @@ def _window(day: date, horario: HorarioConfig, zone: ZoneInfo) -> Window:
                   _at(day + timedelta(days=1), horario.open, zone))
 
 
-def window_at(now: datetime, horario: HorarioConfig, zone: ZoneInfo) -> Window:
-    """The service day that opened most recently (it may have closed already)."""
+def _primera_despues(moment: datetime, hhmm: str, zone: ZoneInfo) -> datetime:
+    """HH:MM's first occurrence after a moment, in the site's timezone (a close after midnight is the next day)."""
+    day = moment.astimezone(zone).date()
+    pasos = (_at(day, hhmm, zone), _at(day, hhmm, zone, fold=1), _at(day + timedelta(days=1), hhmm, zone))
+    return next(at for at in pasos if at > moment)
+
+
+def _cierre_para(abre: datetime, hhmm: str, zone: ZoneInfo, now: datetime) -> datetime:
+    """A close written as HH:MM: its first occurrence after the opening; in the hour that repeats when daylight
+    saving ends, its second pass once the first one went by."""
+    cierre = _primera_despues(abre, hhmm, zone)
+    if cierre <= now:
+        otra = _at(cierre.astimezone(zone).date(), hhmm, zone, fold=1)
+        if otra > now:
+            return otra
+    return cierre
+
+
+def dia_de(fecha: date, horario: HorarioConfig, zone: ZoneInfo, cambios: Iterable[Mapping[str, Any]]) -> Dia:
+    """That service day's hours: its regular window, unless a one-day change of that day exists (the latest wins)."""
+    base = _window(fecha, horario, zone)
+    mios = [c for c in cambios if c["dia"] == fecha]
+    if not mios:
+        return Dia(fecha, base, base.open, base.close)
+    last = max(mios, key=lambda c: (_utc(c["created_at"]), c["id"]))
+    if last["cerrado"]:
+        return Dia(fecha, base, None, None)
+    return Dia(fecha, base, _utc(last["abre_at"]) or base.open, _utc(last["until"]))
+
+
+def hoy_de(now: datetime, horario: HorarioConfig, zone: ZoneInfo,
+           cambios: Iterable[Mapping[str, Any]]) -> tuple[Dia, bool]:
+    """The service day "hoy" means, and whether now is inside it. A night still open past midnight is still
+    yesterday's service day (the midnight law); otherwise hoy is the calendar day in the site's timezone."""
+    cambios = list(cambios)
     today = now.astimezone(zone).date()
-    win = _window(today, horario, zone)
-    return win if win.open <= now else _window(today - timedelta(days=1), horario, zone)
+    ayer = dia_de(today - timedelta(days=1), horario, zone, cambios)
+    if ayer.dentro(now):
+        return ayer, True
+    hoy = dia_de(today, horario, zone, cambios)
+    return hoy, hoy.dentro(now)
 
 
-def effective_close(win: Window, untils: Iterable[datetime]) -> datetime:
-    """The close, moved later by the extensions of THAT night (each one dies before the next opening)."""
-    return max([win.close, *(u for u in untils if win.close < u < win.next_open)])
+def siguiente_apertura(fecha: date, horario: HorarioConfig, zone: ZoneInfo,
+                       cambios: Iterable[Mapping[str, Any]]) -> datetime:
+    """The next day's opening, its own one-day change included (a day closed all day bounds with its regular one)."""
+    nxt = dia_de(fecha + timedelta(days=1), horario, zone, cambios)
+    return nxt.open or nxt.base.open
 
 
-def inside(now: datetime, horario: HorarioConfig, zone: ZoneInfo, untils: Iterable[datetime] = ()) -> bool:
-    win = window_at(now, horario, zone)
-    return win.open <= now < effective_close(win, untils)
+def cierre_anterior(fecha: date, horario: HorarioConfig, zone: ZoneInfo,
+                    cambios: Iterable[Mapping[str, Any]]) -> datetime:
+    """The previous day's close, its own one-day change included (a day closed all day bounds with its regular one)."""
+    prev = dia_de(fecha - timedelta(days=1), horario, zone, cambios)
+    return prev.close or prev.base.close
+
+
+def _hora(text: str) -> str | None:
+    """HH:MM on a 24-hour clock, normalized (9:05 -> 09:05); None when it is anything else."""
+    found = _HORA_RE.match(text.strip())
+    if not found:
+        return None
+    hours, minutes = int(found.group(1)), int(found.group(2))
+    return f"{hours:02d}:{minutes:02d}" if hours < 24 and minutes < 60 else None
 
 
 def parse_extension(arg: str) -> tuple[str, Any] | None:
     """("hora", "HH:MM") for /extender 23:30, ("mas", timedelta) for +2h, +1h30 or +90m; None when unreadable."""
     text = arg.strip().lower()
-    found = _HORA_RE.match(text)
-    if found:
-        hours, minutes = int(found.group(1)), int(found.group(2))
-        return ("hora", f"{hours:02d}:{minutes:02d}") if hours < 24 and minutes < 60 else None
+    hora = _hora(text)
+    if hora:
+        return ("hora", hora)
     found = _MAS_RE.match(text)
     if found:
         if found.group(3) is not None:
@@ -140,31 +233,199 @@ def parse_extension(arg: str) -> tuple[str, Any] | None:
     return None
 
 
-def resolve_extension(now: datetime, horario: HorarioConfig, zone: ZoneInfo, untils: list[datetime],
-                      pedido: tuple[str, Any]) -> tuple[datetime | None, str]:
-    """(until, "") for an accepted /extender, or (None, motivo). "Tonight" is the service day still open; between
-    two service days it is the nearer one (late at night the one that just closed, early in the morning today's).
-    HH:MM is that time's first occurrence after tonight's effective close; +2h counts from the effective close
-    (extensions included); an extension that would reach the next opening is refused at the door."""
-    win = window_at(now, horario, zone)
-    eff = effective_close(win, untils)
-    if now >= eff:
-        upcoming = _window(win.next_open.astimezone(zone).date(), horario, zone)
-        if upcoming.open - now < now - eff:
-            win, eff = upcoming, effective_close(upcoming, untils)
+def _noche(now: datetime, horario: HorarioConfig, zone: ZoneInfo, cambios: list[Mapping[str, Any]]) -> Dia:
+    """The night /extender lengthens: the service day open now; else hoy once its opening came (even when it closed
+    early); before hoy opens, the nearer of last night (just closed) and hoy (opens later; a day closed all day
+    counts with its regular opening, and then there is nothing to lengthen). Never tomorrow: the answer says
+    "hoy"."""
+    hoy, dentro = hoy_de(now, horario, zone, cambios)
+    abre = hoy.open or hoy.base.open
+    if dentro or abre <= now:
+        return hoy
+    ayer = dia_de(hoy.fecha - timedelta(days=1), horario, zone, cambios)
+    if ayer.cerrado:
+        return hoy
+    return hoy if abre - now < now - ayer.close else ayer
+
+
+def resolve_extension(now: datetime, horario: HorarioConfig, zone: ZoneInfo, cambios: Iterable[Mapping[str, Any]],
+                      pedido: tuple[str, Any]) -> tuple[Dia | None, datetime | None, str]:
+    """(day, until, "") for an accepted /extender, or (None, None, motivo). "Tonight" is _noche's day. HH:MM is
+    that time's first occurrence after the day's opening and must fall after tonight's close; +2h counts from
+    tonight's close (that day's changes included); nothing may reach the next opening."""
+    cambios = list(cambios)
+    dia = _noche(now, horario, zone, cambios)
+    if dia.cerrado:
+        return None, None, "hoy está cerrado todo el día y /extender solo alarga una noche abierta."
     kind, value = pedido
     if kind == "hora":
-        day = win.open.astimezone(zone).date()
-        until = _at(day if value >= horario.open else day + timedelta(days=1), value, zone)
-        if until <= eff:
-            return None, f"hoy ya cierra a las {_hhmm(eff, zone)} y /extender solo alarga la noche."
+        until = _cierre_para(dia.open, value, zone, now)
+        if until <= dia.close:
+            return None, None, f"hoy ya cierra a las {_hhmm(dia.close, zone)} y /extender solo alarga la noche."
     else:
-        until = eff + value
-        if until >= win.next_open:
-            return None, f"llegaría a la apertura de mañana ({horario.open})."
+        until = dia.close + value
+    tope = siguiente_apertura(dia.fecha, horario, zone, cambios)
+    if until >= tope:
+        return None, None, f"llegaría a la apertura de mañana ({_hhmm(tope, zone)})."
     if until <= now:
-        return None, "esa hora ya pasó."
-    return until, ""
+        return None, None, "esa hora ya pasó."
+    return dia, until, ""
+
+
+def parse_orden(comando: str, args: list[str]) -> tuple[Any, ...] | None:
+    """What a one-day hours command asks for, or None when it is written another way (the answer is the usage).
+    ("ver", d) · ("cerrado", d) · ("horario", d, abre, cierra) · ("abrir", d, hora) · ("cerrar", d, hora) · ("ya",)
+    · ("lejos", palabra) for a day that is neither hoy nor mañana. d: 0 = hoy, 1 = mañana."""
+    words = [a.strip().lower() for a in args if a.strip()]
+    if comando in ("hoy", "manana"):
+        d = DIA_PALABRAS[comando]
+        if not words:
+            return ("ver", d)
+        if words == ["cerrado"]:
+            return ("cerrado", d)
+        if len(words) == 2 and _hora(words[0]) and _hora(words[1]):
+            return ("horario", d, _hora(words[0]), _hora(words[1]))
+        return None
+    if comando == "cerrar" and words == ["ya"]:
+        return ("ya",)
+    if comando in ("abrir", "cerrar"):
+        if len(words) == 1 and _hora(words[0]):
+            return (comando, 0, _hora(words[0]))
+        if len(words) == 2 and _hora(words[1]):
+            if words[0] in DIA_PALABRAS:
+                return (comando, DIA_PALABRAS[words[0]], _hora(words[1]))
+            if not _hora(words[0]):
+                return ("lejos", words[0])
+    return None
+
+
+def _nombre(fecha: date) -> str:
+    return f"{DIAS_SEMANA[fecha.weekday()]} {fecha.day}"
+
+
+def _para_manana(orden: tuple[Any, ...]) -> str:
+    """The same change written for mañana."""
+    if orden[0] in ("abrir", "cerrar"):
+        return f"/{orden[0]} mañana {orden[2]}"
+    if orden[0] == "horario":
+        return f"/manana {orden[2]} {orden[3]}"
+    return "/manana cerrado"
+
+
+def _con_pista(motivo: str, pista: str) -> str:
+    return motivo if not pista else motivo + (" " if motivo.endswith(".") else ". ") + pista
+
+
+def resolve_cambio(now: datetime, horario: HorarioConfig, zone: ZoneInfo, cambios: Iterable[Mapping[str, Any]],
+                   orden: tuple[Any, ...]) -> tuple[Dia | None, Dia | None, str]:
+    """(before, after, "") for an accepted one-day change, or (None, None, motivo). It targets hoy (the service
+    day hoy_de names) or mañana, and lives only that day. A close is the time's first occurrence after that
+    day's opening (after midnight = the next morning). A day may not open before the previous day closes nor
+    close at or after the next day's opening. Refused too: a close already past, moving the opening of a day
+    open right now to an hour already past, closing all day a day already over, and a change that changes
+    nothing. Past midnight inside last night's service, "hoy" is still that night: every refusal then also
+    shows the mañana form. A day closed all day reopens from its regular hours."""
+    cambios = list(cambios)
+    hoy, dentro = hoy_de(now, horario, zone, cambios)
+    if orden[0] == "ya":
+        if not dentro:
+            return None, None, "no está abierto ahora."
+        return hoy, replace(hoy, close=now), ""
+    fecha = hoy.fecha + timedelta(days=orden[1])
+    dia = dia_de(fecha, horario, zone, cambios)
+    cuando = _cuando(fecha, hoy.fecha)
+    pista = ""
+    if dentro and orden[1] == 0 and hoy.fecha < now.astimezone(zone).date():
+        pista = (f"Pasada la medianoche, «hoy» todavía es la noche del {_nombre(hoy.fecha)}, abierta hasta las "
+                 f"{_cierre_txt(hoy, zone)}. Para el {_nombre(hoy.fecha + timedelta(days=1))}: {_para_manana(orden)}")
+
+    def no(motivo: str) -> tuple[None, None, str]:
+        return None, None, _con_pista(motivo, pista)
+
+    if orden[0] == "cerrado":
+        if dia.cerrado:
+            return no(f"{cuando} ya está cerrado todo el día.")
+        if pista:
+            return no(f"{cuando} está abierto ahora. Para cerrar ahora: /cerrar ya")
+        if dia.close <= now:
+            return no(f"{cuando} ya cerró, a las {_cierre_txt(dia, zone)}. Para mañana: /manana cerrado")
+        return dia, replace(dia, open=None, close=None), ""
+    abre = dia.base.open if dia.cerrado else dia.open
+    cierra = dia.base.close if dia.cerrado else dia.close
+    if orden[0] in ("abrir", "horario"):
+        abre = _at(fecha, orden[2], zone)
+        if dia.dentro(now) and abre != dia.open and abre <= now:
+            solo = f" Para cambiar solo el cierre: /cerrar {orden[3]}" if orden[0] == "horario" else ""
+            return no(f"{cuando} ya abrió, a las {_hhmm(dia.open, zone)}, y esa apertura ya pasó.{solo}")
+    if orden[0] == "abrir":
+        if abre >= cierra:
+            fin = dia.base.close if dia.base.close > abre else abre + timedelta(hours=2)
+            comando = "hoy" if orden[1] == 0 else "manana"
+            return no(f"ese día cierra a las {_hhmm(cierra, zone)}, antes de abrir. Para cambiar las dos horas a la "
+                      f"vez: /{comando} {orden[2]} {_hhmm(fin, zone)}")
+        nuevo = replace(dia, open=abre, close=cierra)
+    elif orden[0] == "cerrar":
+        nuevo = replace(dia, open=abre, close=_cierre_para(abre, orden[2], zone, now))
+    else:
+        if orden[2] == orden[3]:
+            return no("la apertura y el cierre no pueden ser la misma hora.")
+        nuevo = replace(dia, open=abre, close=_cierre_para(abre, orden[3], zone, now))
+    if nuevo.open != dia.open:
+        previo = cierre_anterior(fecha, horario, zone, cambios)
+        if nuevo.open < previo:
+            return no(f"abriría antes de que cierre el día anterior (cierra a las {_hhmm(previo, zone)}).")
+    tope = siguiente_apertura(fecha, horario, zone, cambios)
+    if nuevo.close >= tope:
+        return no(f"el cierre llegaría a la apertura del día siguiente ({_hhmm(tope, zone)}).")
+    if nuevo.close <= now:
+        if dentro and fecha == hoy.fecha:
+            return no("esa hora ya pasó. Para cerrar ahora: /cerrar ya")
+        return no(f"ese horario ya terminó (cerraría a las {_hhmm(nuevo.close, zone)}). Para mañana escribe "
+                  f"«mañana», por ejemplo: /abrir mañana {_hhmm(nuevo.open, zone)}")
+    if nuevo.open == dia.open and nuevo.close == dia.close:
+        return no(f"{cuando} ya queda así: {horas_txt(dia, zone, nota=False)}.")
+    return dia, nuevo, ""
+
+
+def _cuando(fecha: date, hoy: date) -> str:
+    """'hoy (domingo 11)' or 'mañana (lunes 12)': every answer names the day."""
+    return f"{'hoy' if fecha == hoy else 'mañana'} ({DIAS_SEMANA[fecha.weekday()]} {fecha.day})"
+
+
+def _cierre_txt(dia: Dia, zone: ZoneInfo) -> str:
+    """A close after midnight says so."""
+    texto = _hhmm(dia.close, zone)
+    return texto + " de la madrugada" if dia.close.astimezone(zone).date() > dia.fecha else texto
+
+
+def horas_txt(dia: Dia, zone: ZoneInfo, nota: bool = True) -> str:
+    """'abre 07:00, cierra 22:00' or 'cerrado todo el día', plus the regular hours when a change applies."""
+    texto = "cerrado todo el día" if dia.cerrado else f"abre {_hhmm(dia.open, zone)}, cierra {_cierre_txt(dia, zone)}"
+    if nota and dia.cambiado:
+        texto += f" (cambio de un día; el normal es {_hhmm(dia.base.open, zone)} a {_hhmm(dia.base.close, zone)})"
+    return texto
+
+
+def cambio_txt(orden: tuple[Any, ...], nuevo: Dia, zone: ZoneInfo) -> str:
+    if orden[0] == "ya":
+        return f"se cerró ahora, a las {_hhmm(nuevo.close, zone)}"
+    if orden[0] == "cerrado":
+        return "queda cerrado todo el día"
+    if orden[0] == "abrir":
+        return f"se cambió la apertura a las {_hhmm(nuevo.open, zone)}"
+    if orden[0] == "cerrar":
+        return f"se cambió el cierre a las {_cierre_txt(nuevo, zone)}"
+    return f"se cambió el horario: abre {_hhmm(nuevo.open, zone)}, cierra {_cierre_txt(nuevo, zone)}"
+
+
+def vuelta_txt(nuevo: Dia, hoy: Dia, horario: HorarioConfig, zone: ZoneInfo, cambios: Iterable[Mapping[str, Any]]) -> str:
+    """What comes after: tomorrow's regular hours, unless tomorrow has its own change."""
+    if nuevo.fecha != hoy.fecha:
+        return "Solo ese día."
+    manana = dia_de(hoy.fecha + timedelta(days=1), horario, zone, cambios)
+    if manana.cambiado:
+        return f"Mañana tiene su propio cambio: {horas_txt(manana, zone, nota=False)}."
+    return "Mañana vuelve el horario normal."
 
 
 # --- the round's inputs ------------------------------------------------------------------
@@ -196,7 +457,7 @@ class DbState:
     log_max_id: int = 0
     sites: list[dict[str, Any]] = field(default_factory=list)     # every sites row
     keys: dict[str, str] = field(default_factory=dict)            # site -> gafete (never logged)
-    extensions: dict[str, list[datetime]] = field(default_factory=dict)
+    cambios: dict[str, list[dict[str, Any]]] = field(default_factory=dict)   # site -> its recent hour changes
     sharpness: dict[tuple[str, str], list[float]] = field(default_factory=dict)   # newest first
 
 
@@ -240,7 +501,7 @@ class BotState:
     black_last: dict[tuple[str, str], datetime] = field(default_factory=dict)
     silent: set[tuple[str, str]] = field(default_factory=set)
     align_active: dict[tuple[str, str], bool] = field(default_factory=dict)
-    ended: set[tuple[str, str]] = field(default_factory=set)    # extensions whose end was handled
+    ended: set[tuple[str, str]] = field(default_factory=set)    # later closes whose end was handled
     raw_log_first_seen: datetime | None = None
     raw_log_last_reminder: datetime | None = None
 
@@ -391,19 +652,24 @@ def rule_black(state: BotState, judged: Iterable[CamJudge], now: datetime) -> li
     return out
 
 
-def rule_extension_end(state: BotState, nights: Mapping[str, tuple[HorarioConfig, ZoneInfo, list[datetime]]],
+def rule_extension_end(state: BotState, nights: Mapping[str, tuple[HorarioConfig, ZoneInfo, list[dict[str, Any]]]],
                        now: datetime, announce: bool = True) -> list[Msg]:
-    """🟢 once when tonight's last extension passes. announce=False records without speaking (the boot baseline)."""
+    """🟢 once when a night that closes LATER than its regular close (/extender, or a later close by a one-day
+    change) passes it. announce=False records without speaking (the boot baseline)."""
     out: list[Msg] = []
-    for site, (horario, zone, untils) in nights.items():
-        win = window_at(now, horario, zone)
-        eff = effective_close(win, untils)
-        key = (site, eff.isoformat())
-        if eff > win.close and now >= eff and key not in state.ended:
+    for site, (horario, zone, cambios) in nights.items():
+        today = now.astimezone(zone).date()
+        for fecha in (today - timedelta(days=1), today):
+            dia = dia_de(fecha, horario, zone, cambios)
+            if dia.cerrado or dia.close <= dia.base.close or now < dia.close:
+                continue
+            key = (site, dia.close.isoformat())
+            if key in state.ended:
+                continue
             state.ended.add(key)
             if announce:
                 out.append(Msg("extension_fin", {"sitio": site, "apertura": horario.open, "cierre": horario.close}, site=site))
-    state.ended = {k for k in state.ended if datetime.fromisoformat(k[1]) > now - EXTENSION_LOOKBACK}
+    state.ended = {k for k in state.ended if datetime.fromisoformat(k[1]) > now - HORARIO_LOOKBACK}
     return out
 
 
@@ -506,8 +772,8 @@ def read_db(cfg: Config, state: BotState) -> DbState:
             newest = conn.execute(q.BOT_FAILED_CURSOR).fetchone()
             db.failed_newest = (newest["finished_at"], int(newest["id"])) if newest else (None, 0)
             db.log_max_id = int(conn.execute(q.ADMIN_LOG_MAX_ID).fetchone()["id"])
-        for row in conn.execute(q.SELECT_RECENT_EXTENSIONS, {"window": EXTENSION_LOOKBACK}).fetchall():
-            db.extensions.setdefault(row["site"], []).append(row["until"])
+        for row in conn.execute(q.SELECT_RECENT_HORARIO, {"window": HORARIO_LOOKBACK}).fetchall():
+            db.cambios.setdefault(row["site"], []).append(row)
         for row in db.sites:
             site = row["site"]
             if not row["active"] or site not in cfg.sites:
@@ -624,9 +890,28 @@ def reply_foto(chat_id: str, args: list[str]) -> tuple[bytes | None, str]:
     return body, caption
 
 
-def reply_extender(chat_id: str, args: list[str], now: datetime | None = None) -> str:
-    """/extender <HH:MM|+2h>, or /extender <sitio> <HH:MM|+2h> in a group with several sites. The row it writes
-    is the bot's ONE write: tonight's new close (until), the site and the chat that asked."""
+def _cambios_de(conn: Any, site: str) -> list[dict[str, Any]]:
+    return [r for r in conn.execute(q.SELECT_RECENT_HORARIO, {"window": HORARIO_LOOKBACK}).fetchall() if r["site"] == site]
+
+
+def _escribe_cambio(conn: Any, site: str, nuevo: Dia, zone: ZoneInfo, chat_id: str, quien: str, comando: str) -> None:
+    """The bot's only writes, inside the caller's transaction: the day's whole new state, and its bitácora row
+    (who wrote it in Telegram and the command, never the chat's id)."""
+    conn.execute(q.INSERT_HORARIO_CAMBIO, {
+        "site": site, "dia": nuevo.fecha, "abre_at": nuevo.open,
+        "until": nuevo.base.close if nuevo.cerrado else nuevo.close, "cerrado": nuevo.cerrado, "chat_id": chat_id,
+    })
+    detail = {
+        "sitio": site, "dia": nuevo.fecha.isoformat(), "comando": comando, "cerrado": nuevo.cerrado,
+        "abre": None if nuevo.cerrado else _hhmm(nuevo.open, zone),
+        "cierra": None if nuevo.cerrado else _hhmm(nuevo.close, zone),
+    }
+    conn.execute(q.INSERT_ADMIN_LOG, {"usuario": "telegram: " + quien, "action": BITACORA_HORARIO, "detail": Jsonb(detail)})
+
+
+def reply_extender(chat_id: str, args: list[str], quien: str = "?", now: datetime | None = None) -> str:
+    """/extender <HH:MM|+2h>, or /extender <sitio> <HH:MM|+2h> in a group with several sites. Its change is that
+    night's new close, written like every hour change (the day's row plus its bitácora row)."""
     overrides = textos.load_textos()
     now = now or _now()
     try:
@@ -647,16 +932,60 @@ def reply_extender(chat_id: str, args: list[str], now: datetime | None = None) -
     zone = ZoneInfo(knobs.timezone_of(cfg, site))
     try:
         with q.connect() as conn, conn.transaction():
-            untils = [r["until"] for r in conn.execute(q.SELECT_RECENT_EXTENSIONS, {"window": EXTENSION_LOOKBACK}).fetchall()
-                      if r["site"] == site]
-            until, motivo = resolve_extension(now, horario, zone, untils, pedido)
-            if until is None:
+            dia, until, motivo = resolve_extension(now, horario, zone, _cambios_de(conn, site), pedido)
+            if dia is None or until is None:
                 return textos.render("extension_rechazada", {"sitio": site, "motivo": motivo}, overrides)
-            conn.execute(q.INSERT_EXTENSION, {"site": site, "until": until, "chat_id": chat_id})
+            _escribe_cambio(conn, site, replace(dia, close=until), zone, chat_id, quien, "/extender " + " ".join(args))
     except Exception as exc:
         return textos.render("extension_rechazada", {"sitio": site, "motivo": f"no pude guardarla ({type(exc).__name__})."}, overrides)
     log.info("extension written for %s until %s", site, until.isoformat())
     return textos.render("extension_ok", {"sitio": site, "hora": _hhmm(until, zone)}, overrides)
+
+
+def reply_horario(chat_id: str, comando: str, args: list[str], quien: str = "?", now: datetime | None = None) -> str:
+    """/hoy, /manana, /abrir and /cerrar (Section 3.13.1). Showing the hours writes nothing; a change writes the
+    day's row and its bitácora row in one transaction, and its answer always names the day."""
+    overrides = textos.load_textos()
+    now = now or _now()
+    try:
+        cfg = load_config()
+        rows = _site_rows()
+    except Exception as exc:
+        return textos.render("horario_error", {"sitio": "?", "motivo": type(exc).__name__}, overrides)
+    sites = group_sites(chat_id, rows, cfg)
+    if not sites:
+        return textos.render("grupo_sin_sitio", {}, overrides)
+    site, rest = pick_site(sites, args)
+    if site is None:
+        return textos.render("comando_pide_sitio", {"sitios": ", ".join(sites), "comando": comando, "ejemplo": sites[0]}, overrides)
+    orden = parse_orden(comando, rest)
+    if orden is None:
+        return textos.render("horario_uso", {}, overrides)
+    if orden[0] == "lejos":
+        motivo = "solo se cambia hoy o mañana, y solo por ese día. El horario de los demás días se cambia en el mostrador."
+        return textos.render("horario_rechazado", {"sitio": site, "motivo": motivo}, overrides)
+    horario = knobs.horario_of(cfg, site)
+    zone = ZoneInfo(knobs.timezone_of(cfg, site))
+    try:
+        with q.connect() as conn, conn.transaction():
+            cambios = _cambios_de(conn, site)
+            hoy, _ = hoy_de(now, horario, zone, cambios)
+            if orden[0] == "ver":
+                dia = dia_de(hoy.fecha + timedelta(days=orden[1]), horario, zone, cambios)
+                values = {"sitio": site, "dia": _cuando(dia.fecha, hoy.fecha), "horas": horas_txt(dia, zone)}
+                return textos.render("horario_dia", values, overrides)
+            _, nuevo, motivo = resolve_cambio(now, horario, zone, cambios, orden)
+            if nuevo is None:
+                return textos.render("horario_rechazado", {"sitio": site, "motivo": motivo}, overrides)
+            _escribe_cambio(conn, site, nuevo, zone, chat_id, quien, " ".join(["/" + comando, *args]))
+    except Exception as exc:
+        if orden[0] == "ver":
+            return textos.render("horario_error", {"sitio": site, "motivo": type(exc).__name__}, overrides)
+        return textos.render("horario_rechazado", {"sitio": site, "motivo": f"no pude guardarlo ({type(exc).__name__})."}, overrides)
+    log.info("hours change written for %s on %s", site, nuevo.fecha.isoformat())
+    values = {"sitio": site, "dia": _cuando(nuevo.fecha, hoy.fecha), "cambio": cambio_txt(orden, nuevo, zone),
+              "vuelta": vuelta_txt(nuevo, hoy, horario, zone, cambios)}
+    return textos.render("horario_cambiado", values, overrides)
 
 
 # --- the bot ----------------------------------------------------------------------------------
@@ -704,15 +1033,15 @@ class Bot:
                 continue
             horario = knobs.horario_of(cfg, site)
             zone = ZoneInfo(knobs.timezone_of(cfg, site))
-            win = window_at(now, horario, zone)
-            is_inside = win.open <= now < effective_close(win, db.extensions.get(site, []))
+            dia, is_inside = hoy_de(now, horario, zone, db.cambios.get(site, []))
+            opened = dia.open or dia.base.open
             window = timedelta(minutes=knobs.effective(cfg, "alerts.silent_site_min", site))
             timer = knobs.effective(cfg, "alerts.black_timer_s", site)
             cooldown = timedelta(minutes=knobs.effective(cfg, "alerts.sharpness_cooldown_min", site))
             for camera in cfg.sites[site].cameras:
                 cam = api.cameras.get((site, camera), CamState())
                 last = now - timedelta(seconds=cam.age_s) if cam.age_s is not None else None
-                judged.append(CamJudge(site=site, camera=camera, inside=is_inside, opened=win.open, last_frame_at=last,
+                judged.append(CamJudge(site=site, camera=camera, inside=is_inside, opened=opened, last_frame_at=last,
                                        boot_at=boot_at, window=window, fresh=last is not None and now - last <= window,
                                        black_for_s=cam.black_for_s, black_timer_s=timer, cooldown=cooldown))
         return judged
@@ -735,7 +1064,7 @@ class Bot:
             judged_sites = [site for site in active if site not in muted]
             for site in muted:
                 state.silent = {k for k in state.silent if k[0] != site}
-            nights = {site: (knobs.horario_of(cfg, site), ZoneInfo(knobs.timezone_of(cfg, site)), db.extensions.get(site, []))
+            nights = {site: (knobs.horario_of(cfg, site), ZoneInfo(knobs.timezone_of(cfg, site)), db.cambios.get(site, []))
                       for site in active}
             api = await asyncio.to_thread(read_api, {site: db.keys.get(site) for site in active})
         else:
@@ -746,7 +1075,7 @@ class Bot:
             messages += rule_align(state, api)
         if db is not None:
             if not state.baseline_ready:
-                # The cursors start at the first SUCCESSFUL read: old failures, old bitácora rows and extensions
+                # The cursors start at the first SUCCESSFUL read: old failures, old bitácora rows and later closes
                 # that already ended are never announced, even when the first rounds fail.
                 state.failed_cursor, state.log_cursor = db.failed_newest, db.log_max_id
                 state.baseline_ready = True
@@ -818,8 +1147,40 @@ class Bot:
             await update.effective_message.reply_photo(photo=photo, caption=text)
 
     async def cmd_extender(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        text = await asyncio.to_thread(reply_extender, str(update.effective_chat.id), list(context.args or []))
+        text = await asyncio.to_thread(reply_extender, str(update.effective_chat.id), list(context.args or []),
+                                       quien_de(update))
         await update.effective_message.reply_text(text)
+
+    async def horario(self, update: Update, comando: str, args: list[str]) -> None:
+        text = await asyncio.to_thread(reply_horario, str(update.effective_chat.id), comando, args, quien_de(update))
+        await update.effective_message.reply_text(text)
+
+    async def cmd_hoy(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self.horario(update, "hoy", list(context.args or []))
+
+    async def cmd_manana(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self.horario(update, "manana", list(context.args or []))
+
+    async def cmd_abrir(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self.horario(update, "abrir", list(context.args or []))
+
+    async def cmd_cerrar(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self.horario(update, "cerrar", list(context.args or []))
+
+    async def msg_manana_enie(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """/mañana with the ñ (Telegram ends the command at the ñ): it works exactly like /manana. Written to
+        another bot (/mañana@OtroBot), it is not for this one, as with every command."""
+        text = update.effective_message.text or ""
+        found = _MANANA_ENIE_RE.match(text)
+        if found is None or (found.group(1) and found.group(1).lower() != (context.bot.username or "").lower()):
+            return
+        await self.horario(update, "manana", text.split()[1:])
+
+
+def quien_de(update: Update) -> str:
+    """The Telegram name of who wrote a command, for the bitácora row of an hour change."""
+    user = update.effective_user
+    return ((user.full_name if user else "") or "").strip()[:QUIEN_MAX] or "?"
 
 
 def main() -> None:
@@ -842,6 +1203,11 @@ def main() -> None:
     app.add_handler(CommandHandler("cola", bot.cmd_cola))
     app.add_handler(CommandHandler("foto", bot.cmd_foto))
     app.add_handler(CommandHandler("extender", bot.cmd_extender))
+    app.add_handler(CommandHandler("hoy", bot.cmd_hoy))
+    app.add_handler(CommandHandler("manana", bot.cmd_manana))
+    app.add_handler(CommandHandler("abrir", bot.cmd_abrir))
+    app.add_handler(CommandHandler("cerrar", bot.cmd_cerrar))
+    app.add_handler(MessageHandler(filters.Regex(_MANANA_ENIE_RE), bot.msg_manana_enie))
     app.run_polling(drop_pending_updates=True)
 
 

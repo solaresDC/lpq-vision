@@ -16,7 +16,8 @@ Fase 2:
 Fase 3 (table steps are gated on to_regclass, column steps on information_schema):
 4. users: accounts in the database; the reserved 'cuarto' row (role machine) IS the machine floor.
 5. admin_log: the internal bitácora; usuario NULL means the system acted (boot, reconvergence, auto-off).
-6. horario_extensiones: the one-night extension, written by the bot (its ONE writable table).
+6. horario_extensiones: the one-night extension, written by the bot (3.11); from 3.13.1 every one-day hour
+   change (steps 19 to 21).
 7. plates.discarded_at TIMESTAMPTZ: the papelera's retention clock.
 8. jobs.usage JSONB: token counts per finished job, written inside the completion transaction.
 9. sites.device_key TEXT: the site's gafete; init births one for every site that has none.
@@ -33,6 +34,10 @@ Fase 3 (table steps are gated on to_regclass, column steps on information_schema
 17. menu_dishes.notas TEXT: "notas para el modelo", read by the model with the dish's definition. NULL = never
     written (the one-time copy of the menu.yaml descriptions may fill it); '' = cleared by a person.
 18. dish_name_history: the names a dish had before (its clave never changes, so a rename keeps its history).
+19. horario_extensiones.dia DATE: the service day a one-day hour change belongs to (Section 3.13.1). Rows
+    from before have none and are ignored.
+20. horario_extensiones.abre_at TIMESTAMPTZ: that day's opening after the change (NULL when cerrado).
+21. horario_extensiones.cerrado BOOLEAN NOT NULL DEFAULT false: closed all day.
 
 Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or ADDs a missing column.
 """
@@ -133,6 +138,13 @@ MIGRATIONS: tuple[ColumnMigration | TableMigration, ...] = (
     ColumnMigration(name="menu_dishes.orden", table="menu_dishes", column="orden", statement=q.ADD_MENU_DISHES_ORDEN),
     ColumnMigration(name="menu_dishes.notas", table="menu_dishes", column="notas", statement=q.ADD_MENU_DISHES_NOTAS),
     TableMigration(name="dish_name_history", table="dish_name_history", statement=q.CREATE_DISH_NAME_HISTORY_TABLE),
+    ColumnMigration(name="horario_extensiones.dia", table="horario_extensiones", column="dia", statement=q.ADD_HORARIO_DIA),
+    ColumnMigration(
+        name="horario_extensiones.abre_at", table="horario_extensiones", column="abre_at", statement=q.ADD_HORARIO_ABRE_AT,
+    ),
+    ColumnMigration(
+        name="horario_extensiones.cerrado", table="horario_extensiones", column="cerrado", statement=q.ADD_HORARIO_CERRADO,
+    ),
 )
 
 

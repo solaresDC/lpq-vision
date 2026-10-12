@@ -10,7 +10,7 @@ Fases 1 and 2 are LIVE on this laptop and on lpq-brain (deployed at main 1286eb9
 Current phase (Fase 3, El Producto, the Build Plan's Etapa F): the ADMIN module. Daily operation
 becomes a page, never an SSH session: two floors (/admin mostrador, /maquinas machine room), the
 knob registry + the one config writer + the knob cascade, the per-site gafete, horario + vigilantes
-+ /extender, papelera, menus edited in the DB + the AMO-Y-SOMBRA uploader, Crear restaurante, the
++ /extender and the one-day hours, papelera, menus edited in the DB + the AMO-Y-SOMBRA uploader, Crear restaurante, the
 spend dashboard, bot texts with fichas, the host butler, and the death of the three temporal .env
 keys. Authoritative spec: the LPQ-FASE3-SPEC (v3.8), held by HQ (the owner's build chat, which writes
 every section block: Claude Code never needs the SPEC itself), as amended by the owner rulings (rule 21).
@@ -25,7 +25,7 @@ THE SYSTEM IS ONE: the demo happens only after this phase's checklist is green.
 | LLM adapter | LiteLLM, LIBRARY mode, PINNED | model from config (claude-sonnet-5); max_tokens and llm_timeout_s from the machine block; model `cascade` stays "off"; prompt caching on |
 | DB + queue | Postgres 16.15; queue = `jobs` table, FOR UPDATE SKIP LOCKED | NO Redis/broker, ever; ALL SQL in brain/db/queries.py; schema.sql sealed forever; evolution ONLY via migrations.py (existence-gated ADDs of columns and tables, every boot) |
 | Pixels | opencv-python-headless + numpy (pinned) | sharpness, luma, resize; imported ONLY under api/ (routes.py and the admin families), never under brain/ |
-| Bot | python-telegram-bot 22.8, PINNED | /id /cola /foto /extender, alert families + vigilantes; writes exactly ONE table (horario_extensiones); ONE poller per token |
+| Bot | python-telegram-bot 22.8, PINNED | /id /cola /foto /extender and the one-day hours (/hoy /manana /abrir /cerrar), alert families + vigilantes; writes ONLY an hour change: its horario_extensiones row and its bitácora row, in one transaction; ONE poller per token |
 | Frontend | static HTML + vanilla ES modules, deletable | seven pages served as files; admin.js shell + admin-knobs/voice/sites/menu/ops.js + admin-kit.js; maquinas.js; live views by polling; SSE ONLY for the log viewer; no websockets, no template engine, no build step |
 | Butler | stdlib Python + systemd on the HOST | deaf to every network: unix-socket mailbox /run/lpq-butler/butler.sock mounted ONLY into fastapi; three verbs (reboot, scale worker 1..4, restart fastapi/worker/bot); never a service on the laptop |
 | Deploy | Docker Compose, TWO files | compose.mac.yaml runs on laptop and VPS; compose.universal.yaml carries the future ollama block; bare `docker compose up` MUST fail |

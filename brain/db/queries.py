@@ -5,9 +5,10 @@ Every statement is a module constant; callers pass a dict of named parameters
 Rows come back as dicts (row_factory=dict_row) so callers read columns by name.
 
 Fase 3 adds every statement of the admin era at once: the migrations' table steps, accounts,
-the bitácora, the one-night extensions, the gafete, the papelera, the usage write and the spend
-dashboard, menu editing and reference photos, and the bot's new cursors. The shared plate filter
-now leaves 'discarded' rows out of review, stats and gallery: only the papelera lists them.
+the bitácora, the one-day hour changes (Section 3.13.1; the one-night extension was the first kind),
+the gafete, the papelera, the usage write and the spend dashboard, menu editing and reference photos,
+and the bot's new cursors. The shared plate filter now leaves 'discarded' rows out of review, stats
+and gallery: only the papelera lists them.
 """
 
 from __future__ import annotations
@@ -86,7 +87,10 @@ CREATE TABLE admin_log (
 )
 """
 
-# The one-night extension (the bot's ONE writable table): until = tonight's new close.
+# The bot's hours table, born in 3.11 for the one-night extension (until = tonight's new close). From 3.13.1
+# it holds every one-day hour change, /extender's included: each new row is the WHOLE new state of one
+# service day (dia, abre_at, until = its close, cerrado), and the latest row of a day wins. The table keeps
+# its first name; rows from before 3.13.1 have no dia and are ignored (only test rows on the laptop).
 CREATE_HORARIO_EXTENSIONES_TABLE = """
 CREATE TABLE horario_extensiones (
   id         BIGSERIAL PRIMARY KEY,
@@ -100,6 +104,12 @@ CREATE TABLE horario_extensiones (
 ADD_PLATES_DISCARDED_AT = "ALTER TABLE plates ADD COLUMN discarded_at TIMESTAMPTZ"
 ADD_JOBS_USAGE = "ALTER TABLE jobs ADD COLUMN usage JSONB"
 ADD_SITES_DEVICE_KEY = "ALTER TABLE sites ADD COLUMN device_key TEXT"
+
+# Section 3.13.1: the one-day hour changes. dia = the service day a row changes; abre_at = its opening
+# (NULL when cerrado); cerrado = closed all day (its until is then that day's regular close, for the sweep).
+ADD_HORARIO_DIA = "ALTER TABLE horario_extensiones ADD COLUMN dia DATE"
+ADD_HORARIO_ABRE_AT = "ALTER TABLE horario_extensiones ADD COLUMN abre_at TIMESTAMPTZ"
+ADD_HORARIO_CERRADO = "ALTER TABLE horario_extensiones ADD COLUMN cerrado BOOLEAN NOT NULL DEFAULT false"
 
 # Owner ruling 3.9.2: accounts can be deleted, recoverable for USER_RECOVERY_DAYS. uid is the permanent
 # account number: born with the row (existing rows get theirs at this migration), never reused.
@@ -407,25 +417,37 @@ ORDER BY id
 """
 
 
-# --------------------------------------------------------------------- the one-night extension (Fase 3)
+# --------------------------------------------------------------------- the one-day hour changes (Fase 3)
 
-INSERT_EXTENSION = """
-INSERT INTO horario_extensiones (site, until, chat_id)
-VALUES (%(site)s, %(until)s, %(chat_id)s)
+# One change = the whole new state of one service day. The bot writes it in the same transaction as its
+# bitácora row (INSERT_ADMIN_LOG).
+INSERT_HORARIO_CAMBIO = """
+INSERT INTO horario_extensiones (site, dia, abre_at, until, cerrado, chat_id)
+VALUES (%(site)s, %(dia)s, %(abre_at)s, %(until)s, %(cerrado)s, %(chat_id)s)
 RETURNING id
 """
 
-# Live extensions and the ones that just ended (window: a timedelta), for the vigilantes and the
-# return-to-default announcement. An expired row is dead by comparison.
-SELECT_RECENT_EXTENSIONS = """
-SELECT id, site, until, chat_id, created_at
+# The changes of the service days that can still matter (window: a timedelta): every row of each day from
+# the window's start on, whole days only, since the latest row of a day is that day's state. Rows without
+# dia (written before 3.13.1) are left out.
+SELECT_RECENT_HORARIO = """
+SELECT id, site, dia, abre_at, until, cerrado, created_at
 FROM horario_extensiones
-WHERE until > now() - %(window)s
-ORDER BY site, until
+WHERE dia >= (now() - %(window)s)::date
+ORDER BY site, created_at, id
 """
 
-# The worker's sweep: rows long past (grace: a timedelta) leave the table.
-PURGE_OLD_EXTENSIONS = "DELETE FROM horario_extensiones WHERE until < now() - %(grace)s"
+# The worker's sweep (grace: a timedelta). A day's rows leave together, once every one of them closed more
+# than the grace ago: deleting a day's latest row alone would bring back an older state of that day. Rows
+# without dia (before 3.13.1) leave one by one, as always.
+PURGE_OLD_EXTENSIONS = """
+DELETE FROM horario_extensiones h
+WHERE h.until < now() - %(grace)s
+  AND NOT EXISTS (
+    SELECT 1 FROM horario_extensiones o
+    WHERE o.site = h.site AND o.dia = h.dia AND o.until >= now() - %(grace)s
+  )
+"""
 
 
 # --------------------------------------------------------------------- menu editing and reference photos (Fase 3)

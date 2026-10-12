@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.13 (HEAD was 7d2f83b, Section 3.12).
+- Last update: Section 3.13.1 (HEAD was 1339ca5, Section 3.13).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -61,6 +61,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - Tailscale stays ON while working (lpq-brain resolves only through it). It goes off only for the push.
   It was found stopped at the start of two sessions: a section that touches the server first confirms
   that Tailscale is connected (the owner turns it on).
+- If lpq-brain does not resolve (seen on 11 Oct), the server answers on its Tailscale address:
+  `ssh root@100.126.179.123`. This note goes away once the name resolves again (3.18 checks).
 - Norton's HTTPS scanning was switched off in 3.2 (it intercepted the containers' HTTPS), but TLS
   trouble has been seen intermittently since. If the containers or git fail TLS, check Norton first
   (the owner switches it).
@@ -70,7 +72,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   strange, use 127.0.0.1:8000.
 
 ## The two machines today
-- Laptop: Fase 3 through 3.13; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.13.1; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -89,6 +91,45 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.13.1 (owner, 11 and 12 Oct 2026; built in Section 3.13.1): one-day hours, Sitios y cuentas live
+- The bot changes a day's hours from Telegram: only today or tomorrow, and only for that day. /hoy and
+  /manana show that day; /abrir [hoy|mañana] HH:MM, /cerrar [hoy|mañana] HH:MM, /cerrar ya,
+  /hoy HH:MM HH:MM, /manana HH:MM HH:MM, /hoy cerrado and /manana cerrado change it. No day = today.
+  Every answer names the day ("🟡 demo: hoy (domingo 11) se cambió la apertura a las 10:00. Mañana
+  vuelve el horario normal."), and every change is that 🟡 in the group plus a bitácora row. The
+  regular hours change only in the mostrador. /extender stays.
+- Sitios y cuentas follows the system by itself every 5 s: a relevo made from /captura or from another
+  window shows up without reloading.
+- Built defaults (HQ's standard choices; the owner may change any of them):
+  - /mañana with the ñ works too (Telegram ends a command's name at the ñ, so the bot reads the text
+    itself); written to another bot (/mañana@OtroBot) it is ignored, like any command.
+  - Each change is ONE row of horario_extensiones holding the whole new state of that service day
+    (dia, abre_at, until = its close, cerrado); the latest row of a day wins; rows from before 3.13.1
+    (no dia) are ignored. /extender writes the same kind of row. The bot writes that row and its
+    bitácora row (horario.cambio: usuario "telegram: <the Telegram name>", detail {sitio, dia,
+    comando, abre, cierra, cerrado}, never the chat id) in one transaction (hard rule 15; CLAUDE.md's
+    Bot row).
+  - "hoy": past midnight, a night still open is still hoy (the midnight law); otherwise the calendar
+    day in the site's timezone. A close HH:MM is its first occurrence after that day's opening (after
+    midnight = the next morning; in the hour that repeats when daylight saving ends, the coming one).
+    The hours math runs in real time: "+2h" is two real hours on the nights the clock changes.
+  - Refused, with the reason and the command that does it instead: a close already past (while open:
+    /cerrar ya); moving the opening of a day open right now to an hour already past (/cerrar changes
+    only the close); an opening before the previous day closes; a close at or after the next day's
+    opening; closing all day a day already over; a change that changes nothing. Past midnight inside
+    last night, every refusal also shows the mañana form.
+  - /extender lengthens the night open now; otherwise today once its opening has come (even after an
+    early close); before today opens, the nearer of last night and today (a day closed all day counts
+    with its regular opening, and is refused). Never tomorrow (its answer says "hoy").
+  - The worker's sweep removes a day's rows together, once all of them closed more than a day ago (the
+    latest row alone would bring an older state back); the bot reads whole days, from the day before
+    yesterday on.
+  - Sitios y cuentas rebuilds in place a card whose data changed, never under someone's hands: it
+    waits, with a note, while a window is open, the cursor is in one of its fields, a value was typed
+    or chosen and not saved, a button is still working, or a gafete is on screen (the gafete gained
+    "ocultar"). A site added or removed elsewhere rebuilds the whole tab on the same terms. The re-read
+    never opens the login, and it stops when the tab is left or hidden.
 
 ### 3.13 (built in Section 3.13): the wall and the capture lane
 - The gafete is ENFORCED (SPEC 1.3's matrix, and 3.13's promise list). Built defaults (HQ's standard
@@ -129,7 +170,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   already that small, or bytes that are not an image, are stored exactly as they came. The file is
   named by its stored bytes, so a repeated burst stays a duplicate. upload_burst's reply carries
   shrink_ms (only when it shrank), and its log line both sizes. About 20 ms for a 1920x1080 frame on
-  HQ's test machine; the laptop's number is in 3.13's report.
+  HQ's test machine; 21.9 ms on the laptop (3.13's report: 49,160 to 32,387 bytes).
 - The align bitácora: align.start {site, camera, seconds, capped when capped}, written before the
   rope starts (a rope that cannot leave its row never starts); align.stop {site, camera,
   was_active}, after the stop (a stop for a camera the site does not have still answers 200 and
@@ -162,7 +203,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   - The emergency road asks for a login of that site (its manager or the admin: the SPEC's "behind a
     site login", so the bitácora names who took over) and the server's double confirm with its diff.
     A session the page opened closes right after. Only toward the phone: the way back to the Pi is the
-    mostrador's switch, and a phone whose camera goes back to its Pi stops capturing.
+    mostrador's switch, and a phone whose camera goes back to its Pi stops capturing. As built, the
+    page reuses a session of that site the browser already has (no new login then). 3.13.2 replaces
+    this road (the mostrador's Aceptar, no password on the phone).
   - The push reply carries the live knobs (the capture block and frame_poll_s, now read from the knob
     everywhere: the FRAME_POLL_S constant is gone), the site's two functions and the camera's source.
     camara.js's vista viva obeys frame_poll_s and does not start without a loaded state.
@@ -178,6 +221,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   - /extender: "tonight" is the service day still open; between two service days, the nearer one
     (late at night the night that just closed, early in the morning today's). It refuses an hour
     before tonight's close, an hour already past, and anything that reaches the next opening.
+    3.13.1 keeps it and refines it (a day that closed early, the day rows): see there.
   - 📵 is per camera: one cry after alerts.silent_site_min without frames inside the horario, 🟢
     when its frames flow again; nothing outside the horario, and each day starts clean. A restart
     of the api never reads as a recovery.
@@ -284,6 +328,15 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
+- 3.13.2, camera links and the new captura (owner, 11 and 12 Oct): one link per camera, its code shown,
+  lasting what the admin picks ("permanente" included); one phone per camera; the phone gives a name
+  and waits "Pendiente" for the admin's Aceptar (the bot posts the request in the site's group); Sacar
+  (the manager for his site, the admin for all); a Pi that stops sending shows its link, and Aceptar
+  moves the camera to that phone with no password on it. Each camera row: its light (the Pi, the
+  phone's name, or "Nada conectado"), the mirilla in a window, "Dame el enlace" and "Cambiar enlace"
+  (the admin and that site's manager). /captura: phones only, in the browser (no Home-Screen app, no
+  ORDER LAW), out of the tabs, reached only through a camera's link, no camera list. Cameras are
+  added, removed and re-roled by the admin only (HQ's recommendation, built unless the owner objects).
 - 3.14, ops: papelera and retention purge; cola (pause admin-only, retry site-scoped); gasto by site
   and local day, showing only what was spent (no cache savings number; prices are entered by a human
   after checking the source, "sin precio" until then), Leer ficha calls included (their tokens are in
@@ -301,22 +354,33 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - 3.17, local closing: the full local checklist and the Fase 1 and 2 regression; the backup also copies
   config.yaml and textos.yaml.
 - 3.18, deploy: a staged copy WITHOUT config.yaml or textos.yaml, built while the old one serves; the
-  butler installed; the gafete revealed and the phone re-enrolled under the ORDER LAW; the iPhone
-  standalone camera test; the one-time copy of the notes and labels (scripts/notas_from_menu.py, once
-  the new code has booted) on the server; then the owner's first real Crear restaurante.
+  butler installed; the one-time copy of the notes and labels (scripts/notas_from_menu.py, once the
+  new code has booted) on the server; the iPhone list and the cleanup (the two "Para 3.18" sections
+  below); then the owner's first real Crear restaurante.
 - 3.19, the ceremony: the server's own cuarto password; TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH and
   DEMO_PASSWORD_HASH leave both .env files in the SPEC's order; the present/absent proof.
 - 3.20, T-F6 on the server: the full regression, the yes/no checklist against the 14 criteria, the
   final phone test, and disk headroom (a bigger disk before production if needed).
 
+## Para 3.18: la lista del iPhone
+- Owner's ruling (12 Oct): what needs a real iPhone (/captura in Safari) waits for 3.18. Until then HQ
+  tests /captura with a simulated phone in its own workspace (nothing of it reaches the laptop or the
+  code), and each section's check runs on the laptop. A section that leaves something for the iPhone
+  adds it here; 3.18's ✋ walks the list and closes each item. It replaces 3.18's old iPhone item (the
+  phone enrolled with the gafete as a Home-Screen app).
+- The list: empty until 3.13.2.
+
+## Para 3.18: la limpieza
+- Owner's ruling (12 Oct): at 3.18, after the list, everything temporary is cleaned as if it never
+  happened, and 3.18's report confirms each line: the check scripts in photos/_smoke/ deleted; no test
+  rows or photo folders left in the laptop's database; config.yaml as the repo has it; a search of the
+  code finds nothing a section replaced; the laptop's network fixes of 11 Oct, if they were applied (a
+  hosts line for lpq-brain, Tailscale's accept-dns off), kept or undone as the owner decides.
+
 ## Waiting on the owner (no section owns these)
-- 3.13's ✋: on the laptop, inside a bracket of the server's bot: the wall seen from a browser, demo's
-  own guard value on /captura, 3.11's group commands (/id, /cola, /foto, /extender; 3.11's deferred
-  live test rides here), 🕶️ with the webcam covered, and 📵 after an api restart with the page
-  closed (the amnesia rule), then 🟢.
-- 3.12's ✋: the browser check of /captura on the laptop (the alta, the picker, the live knobs, the
-  emergency road). Deferred on 11 Oct; its list (tomorrow_tests_3.11_3.12.md, part A) still holds
-  on 3.13's code.
+- 3.13.1's ✋: on the laptop, inside a bracket of the server's bot: the hours commands in the group
+  (/hoy, /abrir, /cerrar, /mañana, a refusal, the way back), and Sitios y cuentas following a relevo
+  by itself in two windows, holding still while something is typed.
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never
@@ -332,6 +396,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (Menú: everything else worked; the owner's findings became 3.10.2).
 - 3.10.2's browser check (9 Oct): "everything perfect"; the ensalada de queso de cabra is page 1.
 - 3.10.3's browser check (10 Oct): "perfect".
+- 3.11's group commands, 3.12's /captura browser check and 3.13's ✋ (11 Oct, on the laptop): done
+  through the push (e8270f4..1339ca5), no failure reported.
 
 ## Still forbidden (post-demo): STOP and flag if asked
 Coach screens, pi_csi/usb backends, the MODEL cascade (stays "off"), geometry v2, the báscula, POS,
