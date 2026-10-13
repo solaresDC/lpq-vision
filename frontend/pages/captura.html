@@ -3,12 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<!-- The Home-Screen web app (Section 3.12): an installed app keeps its own storage, Safari's 7-day
-     purge spares it, and it opens fullscreen. Install first, enroll second (the ORDER LAW). -->
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="LPQ Captura">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<!-- Section 3.13.2: a phone opens this page in its browser through its camera's link (/captura#CODE);
+     no Home-Screen app. -->
 <meta name="theme-color" content="#111111">
 <title>Captura · LPQ_VISION</title>
 <link rel="stylesheet" href="/static/app.css">
@@ -18,7 +14,8 @@
   .card { background: #1c1c1c; border-color: #333; }
   .viewport { position: relative; width: 100%; background: #000; border-radius: var(--radius); overflow: hidden; }
   video { width: 100%; display: block; }
-  .arrow { position: absolute; font-weight: 700; font-size: 15px; padding: 6px 10px; border-radius: 8px; background: rgba(0,0,0,.55); color: #fff; }
+  .arrow { position: absolute; font-weight: 700; font-size: 14px; padding: 6px 10px; border-radius: 8px; background: rgba(0,0,0,.55); color: #fff; max-width: 44%; }
+  .arrow.top, .arrow.bottom { max-width: 90%; }
   .arrow.top { top: 8px; left: 50%; transform: translateX(-50%); }
   .arrow.bottom { bottom: 8px; left: 50%; transform: translateX(-50%); }
   .arrow.left { left: 8px; top: 50%; transform: translateY(-50%); }
@@ -26,9 +23,9 @@
   .arrow.kitchen { background: rgba(224,138,30,.85); }
   .arrow.room { background: rgba(46,158,91,.85); }
   .arrow.off { background: rgba(120,120,120,.85); color: #ddd; }
-  .rolesign { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); background: rgba(0,0,0,.6); color: #fff; padding: 6px 12px; border-radius: 8px; font-weight: 700; }
+  .rolesign { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); background: rgba(0,0,0,.6); color: #fff; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 14px; max-width: 90%; text-align: center; }
   .status { font-size: 18px; padding: 10px 0; min-height: 44px; }
-  .tiles { display: grid; gap: 8px; grid-template-columns: repeat(4, 1fr); }
+  .tiles { display: grid; gap: 8px; grid-template-columns: repeat(2, 1fr); }   /* a phone's width */
   .tile { background: #262626; border-radius: 8px; padding: 8px 10px; }
   .tile .label { font-size: 12px; color: #aaa; }
   #log { list-style: none; padding: 0; margin: 10px 0 0; font-size: 14px; color: #ccc; }
@@ -51,35 +48,30 @@
   .confirm .buttons { display: flex; gap: 12px; }
   .confirm .buttons button { flex: 1; min-height: 56px; font-size: 18px; }
   .confirm .auto { margin-top: 14px; color: #aaa; font-variant-numeric: tabular-nums; }
-  /* the alta, the camera picker and the page's dialog (Section 3.12) */
-  .steps { display: grid; gap: 12px; }
-  .step { background: #262626; border-radius: 8px; padding: 12px; }
-  .step h3 { margin: 0 0 6px; font-size: 15px; }
-  .step.done h3 { color: #7fd1a3; }
-  .step form label { margin-top: 8px; }
-  .step form button { margin-top: 10px; width: 100%; }
-  .warnline { color: #f4c56a; font-size: 14px; margin: 8px 0 0; }
-  .errline { color: #ff8a80; font-size: 14px; min-height: 20px; margin: 6px 0 0; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .slots { display: grid; gap: 10px; margin-top: 10px; }
-  .slot { display: block; width: 100%; text-align: left; min-height: 64px; padding: 10px 14px; background: #262626; color: #eee; border: 1px solid #333; border-radius: 10px; }
-  .slot .name { font-size: 20px; font-weight: 700; }
-  .slot .line { font-size: 14px; color: #bbb; margin-top: 2px; }
-  .slot.fallen { border-color: #b3261e; }
-  .slot.mine { border-color: #2e9e5b; }
+  /* the screens before and after capturing (Section 3.13.2) */
+  .screen h2 { font-size: 22px; margin: 4px 0 10px; }
+  .screen p { margin: 8px 0; }
+  .screen form { display: grid; gap: 8px; margin-top: 12px; }
+  .screen button.big { min-height: 56px; font-size: 18px; width: 100%; margin-top: 12px; }
+  .warnline { color: #f4c56a; font-size: 15px; margin: 8px 0 0; }
+  .errline { color: #ff8a80; font-size: 15px; min-height: 20px; margin: 6px 0 0; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 1px; }
+  .waiting { font-size: 44px; text-align: center; margin: 6px 0; }
   .knobs { font-size: 13px; color: #aaa; margin: -4px 0 10px; }
-  .linkish { background: none; border: 0; color: #9ecbff; padding: 0; min-height: 0; text-decoration: underline; cursor: pointer; }
-  .confirm .box .body { text-align: left; color: #ddd; margin-bottom: 14px; }
-  .confirm .box ul { text-align: left; color: #ddd; padding-left: 18px; margin: 0 0 14px; }
-  .confirm .box input { margin-bottom: 8px; }
+  /* an iPhone sends a tap's click only to something that looks clickable: any tap on the stage asks for the lock */
+  #stage { cursor: pointer; }
+  /* the screen stays on only after a tap on a phone: this button asks for it while no lock is held */
+  .wake { width: 100%; min-height: 56px; font-size: 17px; font-weight: 700; margin: 0 0 10px; background: #f4c56a; border-color: #f4c56a; color: #111; }
+  #wake-note { margin: 0 0 10px; }
 </style>
 </head>
 <body>
 <header class="topbar">
   <h1>Captura</h1>
-  <span class="chip" id="role-chip">sin cámara</span>
+  <span class="chip hidden" id="cam-chip"></span>
+  <span class="chip hidden" id="role-chip"></span>
   <div class="spacer"></div>
-  <div class="exit">
+  <div class="exit hidden" id="exit">
     <span class="hint">desliza →</span>
     <input type="range" id="exit-slider" min="0" max="100" value="0" aria-label="desliza para salir">
     <button class="bad hidden" id="exit-btn" type="button">Salir</button>
@@ -87,12 +79,12 @@
   <span class="chip" id="conn-chip">detenida</span>
 </header>
 <main class="wrap">
-  <section class="card" id="boot">
-    <p class="muted" id="boot-note">conectando con la ventanilla…</p>
+  <section class="card screen" id="screen">
+    <p class="muted">conectando con la ventanilla…</p>
   </section>
-  <section class="card hidden" id="enroll"></section>
-  <section class="card hidden" id="slots"></section>
   <section class="card hidden" id="stage">
+    <button class="wake hidden" id="wake-btn" type="button">☀️ Toca aquí para que la pantalla no se apague</button>
+    <p class="warnline hidden" id="wake-note">Este navegador no puede mantener la pantalla encendida: en los ajustes del teléfono, pon el bloqueo automático de la pantalla en «Nunca» mientras captura.</p>
     <div class="viewport">
       <video id="video" playsinline muted autoplay></video>
       <div class="arrow top hidden" id="arrow-top"></div>
@@ -126,7 +118,6 @@
       <div class="auto">se cancela solo en <span id="exit-count">10</span></div>
     </div>
   </div>
-  <div class="confirm hidden" id="dialog"><div class="box" id="dialog-box"></div></div>
 </main>
 <canvas id="sample" class="hidden"></canvas>
 <canvas id="full" class="hidden"></canvas>

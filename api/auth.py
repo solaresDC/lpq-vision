@@ -1,5 +1,5 @@
 """The session (Arch 25.3, SPEC 1.3): accounts in the DATABASE, cookie sessions in RAM, the machine
-grant, and the gafete door.
+grant, the gafete door, and the phones' pass (Section 3.13.2).
 
 Accounts (Fase 3): the `users` table. Login is the same PBKDF2 as Fase 2 (stdlib only, one import-time
 dummy round for names that cannot log in, the check off the event loop, a constant-time compare), now
@@ -17,14 +17,18 @@ This depends on the api being ONE uvicorn process, which it is and must remain.
 The machine floor: once the hub has checked the `cuarto` password (check_machine_password), THIS
 session holds a grant for MACHINE_GRANT_MIN minutes, in RAM, keyed by its session id; logout drops it.
 
-The gafete, the second wall inside the club: every site owns a device key (sites.device_key). A
-device presents it in the X-Device-Key header, or through the long-lived httponly device cookie that
-/api/device/enroll sets once; never in a URL. /api/device/status answers /captura's first question
-(which site does the gafete I present belong to?) and never echoes the gafete. guard_site_key (key
-only), guard_session_or_key and guard_known are the checks of SPEC 1.3's enforcement matrix, enforced
-since Section 3.13 by the guarded lane (api/routes.py) and by two Fase-1 endpoints (api/main.py).
+The gafete, the second wall inside the club: every site owns a device key (sites.device_key), and since
+Section 3.13.2 only the MACHINES carry it (the bot reads it from the database; a Pi will carry it), always
+in the X-Device-Key header: never in a URL, never in a cookie. guard_session_or_key and guard_known are
+the read checks of SPEC 1.3's enforcement matrix (api/routes.py and two Fase-1 endpoints in api/main.py).
 
-Nothing auth-related is ever logged beyond the user or site name: no password, no hash, no key.
+The phone's pass (Section 3.13.2): a phone accepted on a camera carries only its own pass, a random token
+in the long-lived httponly cookie lpq_pase; the database keeps only its sha256 (telefonos.pase).
+guard_capture opens the capture lane to THAT site's gafete or to the pass of the phone on THAT camera. A
+memo in RAM keeps, for a day, why a phone lost its camera, so its page can say it; a restart forgets it,
+harmlessly (the page then just asks for the camera's link).
+
+Nothing auth-related is ever logged beyond the user or site name: no password, no hash, no key, no pass.
 The site rule: a site account gets every list endpoint FORCED to its site; admin sees all.
 """
 
@@ -48,7 +52,6 @@ from brain.validator.models import (
     MACHINE_DEFAULTS,
     MACHINE_USER,
     SITE_SLUG_RE,
-    EnrollRequest,
     LoginRequest,
     OwnPasswordRequest,
     load_config,
@@ -63,9 +66,11 @@ HASH_SCHEME = "pbkdf2_sha256"
 # escape so that no copy of this file can ever lose it. The format is byte-identical to Fase 2's.
 HASH_SEP = "\x24"
 SESSION_COOKIE = "lpq_session"
-DEVICE_COOKIE = "lpq_device"
 DEVICE_HEADER = "X-Device-Key"
-DEVICE_COOKIE_DAYS = 400          # the longest lifetime browsers honor for a cookie
+PASE_COOKIE = "lpq_pase"
+PASE_COOKIE_DAYS = 400            # the longest lifetime browsers honor for a cookie
+PASE_BYTES = 32                   # random bytes of a phone's pass
+FUERA_TTL_S = 24 * 3600           # how long the memo keeps why a phone lost its camera
 MACHINE_GRANT_MIN = 15
 ROLE_ADMIN = "admin"
 ROLE_MANAGER = "manager"
@@ -90,6 +95,7 @@ class Session:
 # from the event loop and from worker threads (sync dependencies, admin actions run off the loop).
 _SESSIONS: dict[str, Session] = {}
 _GRANTS: dict[str, float] = {}     # session id -> monotonic deadline of its machine grant
+_FUERA: dict[str, tuple[str, float]] = {}   # pass sha256 -> (why its phone lost its camera, monotonic deadline)
 _LOCK = threading.Lock()
 
 
@@ -238,8 +244,8 @@ def revoke_machine(session: Session) -> None:
 # --- the gafete -----------------------------------------------------------------------
 
 def device_key_from(request: Request) -> str | None:
-    """The gafete a request presents: the X-Device-Key header first, else the enrolled device cookie."""
-    key = (request.headers.get(DEVICE_HEADER) or request.cookies.get(DEVICE_COOKIE) or "").strip()
+    """The gafete a machine presents, in the X-Device-Key header (the only road since Section 3.13.2)."""
+    key = (request.headers.get(DEVICE_HEADER) or "").strip()
     return key or None
 
 
@@ -270,23 +276,12 @@ def site_of_key(key: str | None) -> str | None:
     return found
 
 
-async def guard_site_key(request: Request, site: str) -> None:
-    """The capture lane's door (upload_burst, the frame push): THAT site's gafete, nothing else."""
-    key = device_key_from(request)
-    if key is None:
-        raise HTTPException(status_code=401, detail="gafete requerido: inscribe este dispositivo en /captura")
-    if not await asyncio.to_thread(site_key_ok, site, key):
-        log.info("gafete refused site=%s", site)
-        raise HTTPException(status_code=403, detail=f"este dispositivo no está inscrito para el sitio {site}")
-
-
 async def guard_session_or_key(request: Request, site: str) -> Session | None:
     """The formerly session-free reads (the frame, the state, /api/upload, /api/plates/{id}): a session
     of THIS site (the admin's opens every site) OR that site's gafete. Returns the Session, or None when
-    a device's gafete opened the door. A session of ANOTHER site never shadows a valid gafete: a phone
-    enrolled in one site keeps capturing while someone is logged in to another site in the same
-    browser. Refusals: no credential at all = 401; a gafete that is not this site's = 403 (the page
-    enrolls again); a session of another site with no gafete = 403."""
+    a machine's gafete opened the door. A session of ANOTHER site never shadows a valid gafete.
+    Refusals: no credential at all = 401; a gafete that is not this site's = 403; a session of another
+    site with no gafete = 403."""
     session = await asyncio.to_thread(_live, request.cookies.get(SESSION_COOKIE))
     if session is not None and (session.is_admin or session.site == site):
         return session
@@ -295,7 +290,7 @@ async def guard_session_or_key(request: Request, site: str) -> Session | None:
         if await asyncio.to_thread(site_key_ok, site, key):
             return None
         log.info("gafete refused site=%s", site)
-        raise HTTPException(status_code=403, detail=f"este dispositivo no está inscrito para el sitio {site}")
+        raise HTTPException(status_code=403, detail=f"gafete incorrecto para el sitio {site}")
     if session is not None:
         raise HTTPException(status_code=403, detail=f"sitio fuera de tu alcance: {site}")
     raise HTTPException(status_code=401, detail="sesión o gafete requeridos")
@@ -312,8 +307,8 @@ async def may_read_site(request: Request, site: str) -> bool:
 
 async def guard_known(request: Request) -> None:
     """Any credential this api knows: a live session, or a gafete some active site owns. Else 401 (none
-    presented) or 403 (a gafete no active site owns: enroll again). The door before a one-row read,
-    so a stranger never learns which ids exist."""
+    presented) or 403 (a gafete no active site owns). The door before a one-row read, so a stranger
+    never learns which ids exist."""
     if await asyncio.to_thread(_live, request.cookies.get(SESSION_COOKIE)) is not None:
         return
     key = device_key_from(request)
@@ -321,7 +316,82 @@ async def guard_known(request: Request) -> None:
         raise HTTPException(status_code=401, detail="sesión o gafete requeridos")
     if await asyncio.to_thread(site_of_key, key) is None:
         log.info("gafete not recognized")
-        raise HTTPException(status_code=403, detail="este dispositivo no está inscrito en ningún sitio activo")
+        raise HTTPException(status_code=403, detail="gafete de ningún sitio activo")
+
+
+# --- the phone's pass (Section 3.13.2) -----------------------------------------------
+
+def pase_hash(token: str) -> str:
+    """What the database keeps of a pass: its sha256 (the token itself is never stored or logged)."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def pase_token(request: Request) -> str | None:
+    """The pass this browser presents (the lpq_pase cookie), or None."""
+    token = (request.cookies.get(PASE_COOKIE) or "").strip()
+    return token or None
+
+
+def new_pase() -> str:
+    return secrets.token_urlsafe(PASE_BYTES)
+
+
+def set_pase(response: Response, token: str) -> None:
+    """Give (or refresh) a phone its pass: httponly, so no script on the page can read it."""
+    response.set_cookie(PASE_COOKIE, token, max_age=PASE_COOKIE_DAYS * 86400, httponly=True, samesite="lax", path="/")
+
+
+def phone_of(pase: str) -> dict[str, Any] | None:
+    """The phone row behind a pass's sha256, with whether its sites are active. Reads the database: call it off
+    the event loop."""
+    with q.connect() as conn:
+        return conn.execute(q.SELECT_TELEFONO_BY_PASE, {"pase": pase}).fetchone()
+
+
+def note_fuera(pase: str, why: str) -> None:
+    """Remember for a day why the phone of this pass lost its camera (or its request): its page says it."""
+    with _LOCK:
+        now = time.monotonic()
+        for doomed in [p for p, (_, until) in _FUERA.items() if until < now]:
+            _FUERA.pop(doomed, None)
+        _FUERA[pase] = (why, now + FUERA_TTL_S)
+
+
+def fuera_of(pase: str | None) -> str | None:
+    if pase is None:
+        return None
+    with _LOCK:
+        entry = _FUERA.get(pase)
+    return entry[0] if entry and entry[1] >= time.monotonic() else None
+
+
+def forget_fuera(pase: str) -> None:
+    with _LOCK:
+        _FUERA.pop(pase, None)
+
+
+async def guard_capture(request: Request, site: str, camera: str | None) -> int | None:
+    """The capture lane's door (the frame push, upload_burst; Section 3.13.2): THAT site's gafete in the header (a
+    machine, answers None) or the pass of the phone accepted on THAT camera of an active site (answers the phone's
+    id). A session alone opens nothing here. Refusals: nothing presented 401; a gafete that is not this site's 403;
+    a pass whose phone is not on this camera 403, with the reason (the page then asks /api/captura/yo)."""
+    key = device_key_from(request)
+    if key is not None:
+        if await asyncio.to_thread(site_key_ok, site, key):
+            return None
+        log.info("gafete refused site=%s", site)
+        raise HTTPException(status_code=403, detail=f"gafete incorrecto para el sitio {site}")
+    token = pase_token(request)
+    if token is None:
+        raise HTTPException(status_code=401, detail="este teléfono no tiene cámara: abre el enlace de tu cámara")
+    phone = await asyncio.to_thread(phone_of, pase_hash(token))
+    if phone is None or phone["site"] is None:
+        raise HTTPException(status_code=403, detail="este teléfono no tiene cámara: abre el enlace de tu cámara")
+    if not phone["site_active"]:
+        raise HTTPException(status_code=403, detail=f"el sitio {phone['site']} está desactivado")
+    if (phone["site"], phone["camera"]) != (site, camera):
+        raise HTTPException(status_code=403, detail=f"este teléfono es la cámara {phone['camera']} de {phone['site']}")
+    return int(phone["id"])
 
 
 # --- the endpoints --------------------------------------------------------------------
@@ -380,45 +450,6 @@ async def session_info(request: Request) -> dict:
     """Who am I: lets a page restore its locked site chip and its machine grant after a reload; 401 when none."""
     session = await asyncio.to_thread(require_session, request)
     return _whoami(session)
-
-
-@router.get("/api/device/status")
-async def device_status(request: Request) -> dict:
-    """/captura's first question (Section 3.12): which site is this device enrolled in? Read from the
-    gafete it presents (the page's header copy first, else the device cookie); the answer never carries
-    the gafete. A gafete no active site owns (regenerated, or its site deactivated) answers stale:
-    enroll again."""
-    key = device_key_from(request)
-    site = await asyncio.to_thread(site_of_key, key)
-    if site is not None:
-        return {"enrolled": True, "site": site}
-    if key is not None:
-        log.info("device status: gafete not recognized")
-        return {"enrolled": False, "stale": True}
-    return {"enrolled": False}
-
-
-@router.post("/api/device/enroll")
-async def enroll(body: EnrollRequest, response: Response) -> dict:
-    """/captura presents its site's gafete ONCE: the server answers with a long-lived httponly device
-    cookie (exempt from Safari's 7-day purge of script storage; the page keeps its own header copy)."""
-    site = body.site.strip()
-    key = body.key.strip()
-    if not await asyncio.to_thread(site_key_ok, site, key):
-        log.info("device enroll refused site=%s", site)
-        raise HTTPException(status_code=403, detail="gafete incorrecto para ese sitio")
-    response.set_cookie(
-        DEVICE_COOKIE, key, max_age=DEVICE_COOKIE_DAYS * 86400, httponly=True, samesite="lax", path="/"
-    )
-    log.info("device enrolled site=%s", site)
-    return {"site": site, "enrolled": True}
-
-
-@router.post("/api/device/forget")
-async def forget(response: Response) -> dict:
-    """Clear this device's enrollment (a regenerated gafete means enrolling again)."""
-    response.delete_cookie(DEVICE_COOKIE, path="/")
-    return {"enrolled": False}
 
 
 @router.post("/api/account/password")

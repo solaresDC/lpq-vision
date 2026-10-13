@@ -1,4 +1,4 @@
-"""LPQ_VISION bot/main.py: la voz, @LPQ_vision_bot on python-telegram-bot 22.8 (SPEC 1.5 and 1.8; Sections 3.11, 3.13.1).
+"""LPQ_VISION bot/main.py: la voz, @LPQ_vision_bot on python-telegram-bot 22.8 (SPEC 1.5 and 1.8; Sections 3.11 to 3.13.2).
 
 Commands, answered in the group that asked: /id (this chat's number, to paste in the mostrador), /cola (that
 site's queue and its last finished plate), /foto (what that site's camera sees now), /extender (moves tonight's
@@ -16,11 +16,14 @@ database and the api; each rule is a pure function of the round's inputs and the
 messages to send. The vigilantes judge each site in its own timezone and horario (the midnight law; that day's
 one-day changes included): 📵 a camera with no frames, counted from the later of its last frame (the api's boot
 standing in when it has none) and the opening; 🕶️ a covered camera (black_for_s, which the api measures to the
-LAST frame); the dirty lens; the alignment notices. Nothing judges a site in mantenimiento. Machine families:
-the backlog, the failures (a cursor on finished_at: a retried job's second failure is announced too), the
-silent worker ("cola en pausa" while the queue is paused), the ventanilla and the forensic river. A read-only
-cursor over the bitácora announces the relevo, the forensic river's auto-off, the workers' reconvergence and
-an account about to be erased: the action, never the name of who acted.
+LAST frame); the dirty lens; the alignment notices. A Pi camera's 📵 says a phone can take its place with the
+camera's link (Section 3.13.2). Nothing judges a site in mantenimiento. Machine families: the backlog, the
+failures (a cursor on finished_at: a retried job's second failure is announced too), the silent worker ("cola en
+pausa" while the queue is paused), the ventanilla and the forensic river. A read-only cursor over the bitácora
+(its last BITACORA_LOOKBACK ids read again each round, so a row committed late is still announced once)
+announces the relevo, a phone asking to be a camera (Section 3.13.2: its name, in that site's group), the forensic
+river's auto-off, the workers' reconvergence and an account about to be erased: the action, never the name of the
+account that acted.
 
 Where a message goes is brain.validator.textos.destinations (the routing law); every text comes from
 textos.yaml or its factory default. The api calls carry the "lpq-bot" User-Agent and, for a site's camera, that
@@ -75,6 +78,8 @@ DIA_PALABRAS = {"hoy": 0, "mañana": 1, "manana": 1}   # the only days a one-day
 FUENTES = {"phone": "teléfono", "pi": "Pi"}
 QUIEN_MAX = 60                               # the Telegram name kept in an hour change's bitácora row
 BITACORA_HORARIO = "horario.cambio"          # the bitácora action of every hour change (/extender's included)
+BITACORA_LOOKBACK = 200                      # bitácora ids read again every round: a row whose transaction commits
+                                             # after a newer row's (its id taken first) is still announced, once
 
 _HORA_RE = re.compile(r"^(\d{1,2}):(\d{2})\Z")
 _MAS_RE = re.compile(r"^\+(?:(\d{1,2})h(?:(\d{1,2})m?)?|(\d{1,4})m)\Z")
@@ -453,7 +458,7 @@ class DbState:
     last_done_at: datetime | None = None
     failed: list[dict[str, Any]] = field(default_factory=list)    # failures after the cursor, oldest first
     failed_newest: tuple[datetime | None, int] = (None, 0)       # the cursor's origin (baseline reads)
-    log_rows: list[dict[str, Any]] = field(default_factory=list)  # bitácora rows after the cursor
+    log_rows: list[dict[str, Any]] = field(default_factory=list)  # bitácora rows of the lookback window and after
     log_max_id: int = 0
     sites: list[dict[str, Any]] = field(default_factory=list)     # every sites row
     keys: dict[str, str] = field(default_factory=dict)            # site -> gafete (never logged)
@@ -483,6 +488,7 @@ class CamJudge:
     black_for_s: float | None
     black_timer_s: int
     cooldown: timedelta                # alerts.sharpness_cooldown_min (this site's value)
+    pi: bool = False                   # a Pi camera: its 📵 says a phone can take its place (Section 3.13.2)
 
 
 # --- the bot's RAM (disposable by construction; a restart restarts every clock) --------------
@@ -492,6 +498,8 @@ class BotState:
     baseline_ready: bool = False        # set by the first SUCCESSFUL db read: the cursors' origin
     failed_cursor: tuple[datetime | None, int] = (None, 0)
     log_cursor: int = 0
+    log_floor: int = 0                  # the baseline's last id minus the lookback: older rows are never announced
+    log_seen: set[int] = field(default_factory=set)   # the ids already handled inside the lookback window
     backlog_active: bool = False
     worker_quiet: bool = False
     api_down_since: datetime | None = None
@@ -615,7 +623,8 @@ def rule_align(state: BotState, api: ApiState) -> list[Msg]:
 
 def rule_silent_site(state: BotState, judged: Iterable[CamJudge], now: datetime) -> list[Msg]:
     """📵 once when a camera sends nothing for its window inside the horario; 🟢 when frames flow again. The clock
-    starts at the later of its last frame (or the api's boot) and the opening; outside the horario it is reset."""
+    starts at the later of its last frame (or the api's boot) and the opening; outside the horario it is reset. A
+    Pi camera's 📵 is pi_callada: a phone can take its place with the camera's link."""
     out: list[Msg] = []
     for cam in judged:
         key = (cam.site, cam.camera)
@@ -630,8 +639,9 @@ def rule_silent_site(state: BotState, judged: Iterable[CamJudge], now: datetime)
         quiet = now - max(cam.last_frame_at or cam.boot_at, cam.opened)
         if key not in state.silent and quiet > cam.window:
             state.silent.add(key)
-            out.append(Msg("sitio_callado", {"sitio": cam.site, "camara": cam.camera,
-                                             "minutos": int(quiet.total_seconds() // 60)}, site=cam.site))
+            out.append(Msg("pi_callada" if cam.pi else "sitio_callado", {
+                "sitio": cam.site, "camara": cam.camera, "minutos": int(quiet.total_seconds() // 60),
+            }, site=cam.site))
     return out
 
 
@@ -678,6 +688,24 @@ def fecha_es(moment: datetime, zone: ZoneInfo) -> str:
     return f"{local.day} {MESES[local.month - 1]} {local.year}"
 
 
+def take_log_baseline(state: BotState, db: DbState) -> None:
+    """The bitácora cursor's origin at the first good read: no row already there is ever announced, and a row of the
+    lookback window whose transaction commits after the start still is."""
+    state.log_cursor = db.log_max_id
+    state.log_floor = db.log_max_id - BITACORA_LOOKBACK
+    state.log_seen = {int(r["id"]) for r in db.log_rows}
+
+
+def take_log_rows(state: BotState, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The bitácora rows of this round's read not handled yet, a row committed late (below the cursor) included;
+    moves the cursor and remembers what the lookback window still holds."""
+    fresh = [r for r in rows if int(r["id"]) not in state.log_seen]
+    if rows:
+        state.log_cursor = max(state.log_cursor, max(int(r["id"]) for r in rows))
+    state.log_seen = {int(r["id"]) for r in rows if int(r["id"]) > state.log_cursor - BITACORA_LOOKBACK}
+    return fresh
+
+
 def rule_bitacora(rows: Iterable[Mapping[str, Any]], cfg: Config, now: datetime) -> list[Msg]:
     """The bitácora rows the bot announces: the action and its detail, never who acted."""
     out: list[Msg] = []
@@ -686,10 +714,13 @@ def rule_bitacora(rows: Iterable[Mapping[str, Any]], cfg: Config, now: datetime)
         if action == "relevo":
             source = detail.get("source")
             fuente = FUENTES.get(source, source)
-            if source == "phone" and detail.get("road") == "captura":
+            if source == "phone" and detail.get("road") == "enlace":
                 fuente = "teléfono de emergencia"
             out.append(Msg("relevo", {"sitio": detail.get("site"), "camara": detail.get("camera"), "fuente": fuente},
                            site=detail.get("site")))
+        elif action == "telefono.pide" and detail.get("aviso", True):    # aviso false: the same phone asked again soon
+            out.append(Msg("telefono_pide", {"sitio": detail.get("site"), "camara": detail.get("camera"),
+                                             "nombre": detail.get("nombre")}, site=detail.get("site")))
         elif action == "raw_logging.auto_off":
             out.append(Msg("forense_apagado"))
         elif action == "workers.reconverge":
@@ -767,11 +798,16 @@ def read_db(cfg: Config, state: BotState) -> DbState:
         if state.baseline_ready:
             after_at, after_id = state.failed_cursor
             db.failed = conn.execute(q.BOT_FAILED_AFTER, {"after_at": after_at, "after_id": after_id}).fetchall()
-            db.log_rows = conn.execute(q.ADMIN_LOG_AFTER, {"after_id": state.log_cursor}).fetchall()
+            db.log_rows = conn.execute(q.ADMIN_LOG_AFTER, {
+                "after_id": max(state.log_floor, state.log_cursor - BITACORA_LOOKBACK),
+            }).fetchall()
         else:
             newest = conn.execute(q.BOT_FAILED_CURSOR).fetchone()
             db.failed_newest = (newest["finished_at"], int(newest["id"])) if newest else (None, 0)
             db.log_max_id = int(conn.execute(q.ADMIN_LOG_MAX_ID).fetchone()["id"])
+            db.log_rows = conn.execute(q.ADMIN_LOG_BETWEEN, {
+                "after_id": db.log_max_id - BITACORA_LOOKBACK, "upto": db.log_max_id,
+            }).fetchall()
         for row in conn.execute(q.SELECT_RECENT_HORARIO, {"window": HORARIO_LOOKBACK}).fetchall():
             db.cambios.setdefault(row["site"], []).append(row)
         for row in db.sites:
@@ -1038,12 +1074,13 @@ class Bot:
             window = timedelta(minutes=knobs.effective(cfg, "alerts.silent_site_min", site))
             timer = knobs.effective(cfg, "alerts.black_timer_s", site)
             cooldown = timedelta(minutes=knobs.effective(cfg, "alerts.sharpness_cooldown_min", site))
-            for camera in cfg.sites[site].cameras:
+            for camera, camera_cfg in cfg.sites[site].cameras.items():
                 cam = api.cameras.get((site, camera), CamState())
                 last = now - timedelta(seconds=cam.age_s) if cam.age_s is not None else None
                 judged.append(CamJudge(site=site, camera=camera, inside=is_inside, opened=opened, last_frame_at=last,
                                        boot_at=boot_at, window=window, fresh=last is not None and now - last <= window,
-                                       black_for_s=cam.black_for_s, black_timer_s=timer, cooldown=cooldown))
+                                       black_for_s=cam.black_for_s, black_timer_s=timer, cooldown=cooldown,
+                                       pi=camera_cfg.source == "pi"))
         return judged
 
     async def round(self, app: Application, now: datetime | None = None) -> list[Msg]:
@@ -1077,14 +1114,13 @@ class Bot:
             if not state.baseline_ready:
                 # The cursors start at the first SUCCESSFUL read: old failures, old bitácora rows and later closes
                 # that already ended are never announced, even when the first rounds fail.
-                state.failed_cursor, state.log_cursor = db.failed_newest, db.log_max_id
+                state.failed_cursor = db.failed_newest
+                take_log_baseline(state, db)
                 state.baseline_ready = True
                 rule_extension_end(state, nights, now, announce=False)
             else:
                 messages += rule_failures(state, db)
-                messages += rule_bitacora(db.log_rows, cfg, now)
-                if db.log_rows:
-                    state.log_cursor = max(int(r["id"]) for r in db.log_rows)
+                messages += rule_bitacora(take_log_rows(state, db.log_rows), cfg, now)
                 messages += rule_extension_end(state, nights, now)
             messages += rule_backlog(state, db, cfg)
             messages += rule_silent_worker(state, db, cfg, now)

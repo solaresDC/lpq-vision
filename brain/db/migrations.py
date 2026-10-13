@@ -38,6 +38,9 @@ Fase 3 (table steps are gated on to_regclass, column steps on information_schema
     from before have none and are ignored.
 20. horario_extensiones.abre_at TIMESTAMPTZ: that day's opening after the change (NULL when cerrado).
 21. horario_extensiones.cerrado BOOLEAN NOT NULL DEFAULT false: closed all day.
+22. camara_enlaces: one live link per camera, its code and how long it lasts (Section 3.13.2).
+23. telefonos: the phones that capture a camera or wait for the admin's Aceptar; the DB keeps only the sha256 of
+    each phone's pass (Section 3.13.2).
 
 Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or ADDs a missing column.
 """
@@ -145,6 +148,8 @@ MIGRATIONS: tuple[ColumnMigration | TableMigration, ...] = (
     ColumnMigration(
         name="horario_extensiones.cerrado", table="horario_extensiones", column="cerrado", statement=q.ADD_HORARIO_CERRADO,
     ),
+    TableMigration(name="camara_enlaces", table="camara_enlaces", statement=q.CREATE_CAMARA_ENLACES_TABLE),
+    TableMigration(name="telefonos", table="telefonos", statement=q.CREATE_TELEFONOS_TABLE),
 )
 
 

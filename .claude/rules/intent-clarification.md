@@ -16,7 +16,7 @@ My shorthand → precise meaning (FASE 3 era: the admin module is THE CURRENT WO
 | "la escotilla" | Hetzner web Console emergency access (NEVER used by you) |
 | "el bot" / "la voz" | @LPQ_vision_bot, `bot/main.py` (commands, alert families, vigilantes, /extender and the one-day hours) |
 | "la cara" / "the face" | `frontend/` (captura, panel, review, galeria, camara + admin, maquinas) |
-| "la mirilla" | `/camara`: foto-al-toque + vista viva (RAM copies, never stored) |
+| "la mirilla" | `/camara`: foto-al-toque + vista viva (RAM copies, never stored); in Sitios y cuentas, each camera's Mirilla window (3.13.2) |
 | "el modo alineación" / "la cuerda" | the alignment pause on `/camara` and its mandatory timeout |
 | "el borde-cocina" | `kitchen_edge` of a `both` camera in config.yaml |
 | "las fotos de referencia" / "los originales" | universal (brand, `brand_dish_photos`) and local (per site) photos; each a PAIR: the original under `.../original/` (what the panels show) and the light copy under `photos/reference/<dish>/` (what the model reads) |
@@ -27,7 +27,9 @@ My shorthand → precise meaning (FASE 3 era: the admin module is THE CURRENT WO
 | "el registro" / "las perillas" | `brain/validator/knobs.py`: the knob whitelist with the three helps |
 | "la cascada de perillas" | global → `sites.<site>.overrides.<knob>` → session layer (NOT the model `cascade`, which stays "off") |
 | "la bitácora" | the `admin_log` table |
-| "el gafete" | the per-site device key (`sites.device_key`; header `X-Device-Key` or the `lpq_device` cookie) |
+| "el gafete" | the per-site key of the MACHINES (the bot, the Pi): `sites.device_key`, header `X-Device-Key` only; since 3.13.2 never a cookie, and phones never use it |
+| "el enlace" | a camera's link `/captura#CODE` (table `camara_enlaces`; the 8-character code shown 4-4, sent in the X-Enlace header): how a phone asks to be that camera |
+| "el pase" | a phone's own pass: the httponly cookie `lpq_pase` (400 days); the server keeps only its sha256 in `telefonos` |
 | "la papelera" | discarded plates (`review_status='discarded'`) and their retention purge |
 | "el mayordomo" / "el buzón" | the host butler `butler/lpq_butler.py` and its unix-socket mailbox `/run/lpq-butler/butler.sock` |
 | "el censo" | the running worker count read from the compose network's DNS |

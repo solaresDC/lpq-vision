@@ -1,30 +1,40 @@
 """LPQ_VISION api/admin_sites.py: sites and accounts in the mostrador (SPEC 1.3, 1.5; a family of the admin hub).
 
-GET  /api/admin/sites?site=                          the visible sites: DB row + config block + the auditor
+GET  /api/admin/sites?site=                          the visible sites: DB row + config block + the auditor, and per
+                                                     camera its light, its phone, the phones waiting and its link
 POST /api/admin/sites                                Crear restaurante (admin): ALL OR NOTHING across DB and config
 POST /api/admin/sites/{site}/edit                    active / ingestion (admin; deactivating asks for the double confirm)
 POST /api/admin/sites/{site}/funciones               the site's two function switches
-POST /api/admin/sites/{site}/cameras                 add one camera, or change its source and role
-POST /api/admin/sites/{site}/cameras/{camera}/delete remove one camera (double confirm; never the last one)
-POST /api/admin/sites/{site}/cameras/{camera}/source the relevo, the mostrador's road
-POST /api/admin/sites/{site}/cameras/{camera}/takeover the relevo, /captura's emergency road (site login, double confirm)
-POST /api/admin/sites/{site}/gafete/reveal           show the site's gafete to enroll a device (admin)
-POST /api/admin/sites/{site}/gafete/regenerate       a new gafete; every enrolled device enrolls again (admin, double confirm)
+POST /api/admin/sites/{site}/cameras                 add one camera, or change its role (admin)
+POST /api/admin/sites/{site}/cameras/{camera}/delete remove one camera with its link, its phone and its requests
+                                                     (admin; double confirm; never the last one)
+POST /api/admin/sites/{site}/cameras/{camera}/source Relevo a Pi: a phone camera goes back to its Pi; its phone leaves
+POST /api/admin/sites/{site}/cameras/{camera}/enlace Dame el enlace: the live link, a new one when none or expired
+POST /api/admin/sites/{site}/cameras/{camera}/enlace/nuevo    Cambiar enlace: a new code (only the admin picks its life)
+POST /api/admin/sites/{site}/cameras/{camera}/enlace/duracion the same code, its life counted again from now (admin)
+POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/aceptar  the phone becomes that camera; on a Pi
+                                                     camera, the relevo (admin; never on a deactivated site)
+POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/rechazar its request for that camera goes (admin)
+POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/sacar    the phone leaves that camera
+POST /api/admin/sites/{site}/gafete/reveal           show the site's gafete, the machines' key (admin)
+POST /api/admin/sites/{site}/gafete/regenerate       a new gafete for the machines (admin, double confirm)
 GET  /api/admin/users                                the accounts and the "Eliminadas" (admin; never the machine row)
 POST /api/admin/users                                create an account (admin)
 POST /api/admin/users/{usuario}/password|active|role new password, activate or deactivate, role and site (admin)
 POST /api/admin/users/{usuario}/delete               delete: typed name + double confirm; recoverable (admin)
 POST /api/admin/users/{usuario}/recover              Recuperar a deleted account (admin)
 
-A manager sees and edits ONLY its own site's functions and cameras (and its relevo); the gafete, the active
-switch, Crear restaurante and the accounts are the admin's. Every write leaves a bitácora row carrying the
-actor's name AND permanent account number (users.uid, never reused). A write that spans the database and
-config.yaml is all or nothing (_db_and_config). Accounts (owner ruling 3.9.2, amending SPEC §3): deleting
-one asks for its exact name, then the double confirm; it closes at once, stays recoverable for
-USER_RECOVERY_DAYS with its name reserved, and the worker's sweep erases it after warning the admin chat.
-Never yourself, never the last active admin, never the machine row; a deleted account can't be edited until
-it is recovered; any change to an account drops its open sessions. A gafete is never logged and never
-written to the bitácora: it reaches only the admin's screen, on request.
+A manager sees ONLY its own site and edits its functions; of its cameras it gets the light, the mirilla, the
+links, Sacar and Relevo a Pi (Section 3.13.2: cameras are added, removed and re-roled by the admin, and Aceptar
+and Rechazar are the admin's); the gafete, the active switch, Crear restaurante and the accounts are the
+admin's. Every write leaves a bitácora row carrying the actor's name AND permanent account number (users.uid,
+never reused). A write that spans the database and config.yaml is all or nothing (_db_and_config). Accounts
+(owner ruling 3.9.2, amending SPEC §3): deleting one asks for its exact name, then the double confirm; it closes
+at once, stays recoverable for USER_RECOVERY_DAYS with its name reserved, and the worker's sweep erases it after
+warning the admin chat. Never yourself, never the last active admin, never the machine row; a deleted account
+can't be edited until it is recovered; any change to an account drops its open sessions. A gafete is never
+logged and never written to the bitácora: it reaches only the admin's screen, on request. A link's code never
+reaches a log or the bitácora either, and a phone's pass reaches neither: only its sha256 lives in telefonos.
 """
 
 from __future__ import annotations
@@ -43,16 +53,24 @@ from psycopg import errors as pg_errors
 from psycopg.types.json import Jsonb
 
 from api import config_writer as cw
+from api import routes as lane
 from api.admin import log_action, propose, require_admin, require_mostrador, write_scope
-from api.auth import ROLE_MACHINE, Session, drop_sessions_of, make_hash
+from api.auth import ROLE_MACHINE, Session, drop_sessions_of, forget_fuera, make_hash, note_fuera
 from brain.db import queries as q
 from brain.db.init import DEVICE_KEY_BYTES
 from brain.validator.models import (
     DEFAULT_TIMEZONE,
+    DURACION_DEFAULT,
+    DURACIONES,
+    ENLACE_ALFABETO,
+    ENLACE_LARGO,
     USER_RECOVERY_DAYS,
+    CameraConfig,
     CameraUpsertRequest,
     Config,
     ConfirmNameRequest,
+    EnlaceDuracionRequest,
+    EnlaceNuevoRequest,
     Funciones,
     PasswordRequest,
     SiteConfig,
@@ -71,8 +89,8 @@ router = APIRouter()
 
 SOURCE_WORDS = {"phone": "teléfono", "pi": "Pi"}
 ROLE_WORDS = {"return": "regreso", "outgoing": "salida", "both": "ambas"}
-EDGE_WORDS = {"top": "arriba", "bottom": "abajo", "left": "izquierda", "right": "derecha"}
 MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+CODIGO_INTENTOS = 3                # a new link's code collides with another (1 in 10^11): try a fresh one
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -116,9 +134,12 @@ async def _write(ops: list[cw.Op]) -> None:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
-def _db_and_config_sync(db_work: Callable[[psycopg.Connection], Any], ops: list[cw.Op]) -> Any:
+def _db_and_config_sync(db_work: Callable[[psycopg.Connection], Any], ops: list[cw.Op],
+                        check: Callable[[Config], None] | None = None) -> Any:
     written: cw.WriteResult | None = None
     try:
+        if check is not None:
+            check(load_config())                   # the config the ops were built on, read again under the lock
         with q.connect() as conn, conn.transaction():
             value = db_work(conn)
             written = cw.apply_ops(ops)
@@ -129,11 +150,13 @@ def _db_and_config_sync(db_work: Callable[[psycopg.Connection], Any], ops: list[
         raise
 
 
-async def _db_and_config(db_work: Callable[[psycopg.Connection], Any], ops: list[cw.Op]) -> Any:
-    """All or nothing across the database and config.yaml, under the one writer's lock."""
+async def _db_and_config(db_work: Callable[[psycopg.Connection], Any], ops: list[cw.Op],
+                         check: Callable[[Config], None] | None = None) -> Any:
+    """All or nothing across the database and config.yaml, under the one writer's lock. check(config), when given,
+    runs first under the same lock and raises when the config changed since the ops were built from it."""
     async with cw.LOCK:
         try:
-            return await asyncio.to_thread(_db_and_config_sync, db_work, ops)
+            return await asyncio.to_thread(_db_and_config_sync, db_work, ops, check)
         except cw.WriterError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         except pg_errors.UniqueViolation:
@@ -174,7 +197,47 @@ def audit(site_cfg: SiteConfig) -> list[str]:
     return notes
 
 
-def _site_view(row: dict[str, Any], site_cfg: SiteConfig | None) -> dict[str, Any]:
+def _enlace_view(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "codigo": row["codigo"],
+        "dias": row["dias"],
+        "vence": row["vence_at"].isoformat() if row["vence_at"] else None,
+        "vencido": bool(row["vencido"]),
+    }
+
+
+def _camera_view(site: str, name: str, cam: CameraConfig, cfg: Config, phones: list[dict[str, Any]],
+                 links: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any]:
+    """One camera as the mostrador shows it (Section 3.13.2): its light, the phone that captures it, the phones
+    waiting for the admin (oldest first; viene_de = the camera of this site such a phone leaves when accepted,
+    otro_sitio = it leaves a camera of another site, never named) and its link. Only values that change with an
+    event: the live re-read compares this JSON."""
+    holder = next((p for p in phones if p["site"] == site and p["camera"] == name), None)
+    waiting = [p for p in phones if p["pide_site"] == site and p["pide_camera"] == name]
+    link = links.get((site, name))
+    return {
+        "name": name,
+        "source": cam.source,
+        "role": cam.role,
+        "kitchen_edge": cam.kitchen_edge,
+        "luz": lane.luz(site, name, cam.source, holder["id"] if holder else None, cfg),
+        "telefono": {"id": holder["id"], "nombre": holder["nombre"]} if holder else None,
+        "pendientes": [
+            {
+                "id": p["id"],
+                "nombre": p["nombre"],
+                "at": p["pide_at"].isoformat(),
+                "viene_de": p["camera"] if p["site"] == site else None,
+                "otro_sitio": p["site"] is not None and p["site"] != site,
+            }
+            for p in waiting
+        ],
+        "enlace": _enlace_view(link) if link else None,
+    }
+
+
+def _site_view(row: dict[str, Any], site_cfg: SiteConfig | None, cfg: Config, phones: list[dict[str, Any]],
+               links: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any]:
     view: dict[str, Any] = {
         "site": row["site"],
         "active": bool(row["active"]),
@@ -187,29 +250,43 @@ def _site_view(row: dict[str, Any], site_cfg: SiteConfig | None) -> dict[str, An
     else:
         view.update({
             "funciones": site_cfg.funciones.model_dump(),
-            "cameras": [
-                {"name": name, "source": cam.source, "role": cam.role, "kitchen_edge": cam.kitchen_edge}
-                for name, cam in site_cfg.cameras.items()
-            ],
+            "cameras": [_camera_view(row["site"], name, cam, cfg, phones, links) for name, cam in site_cfg.cameras.items()],
             "auditor": audit(site_cfg),
         })
     return view
 
 
+def _phones_and_links(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
+    phones = conn.execute(q.SELECT_TELEFONOS_ALL).fetchall()
+    links = {(r["site"], r["camera"]): r for r in conn.execute(q.SELECT_ENLACES_ALL).fetchall()}
+    return phones, links
+
+
 async def _view_of(site: str) -> dict[str, Any]:
     cfg = await _config()
-    row = await asyncio.to_thread(_read, lambda c: c.execute(q.SELECT_SITE, {"site": site}).fetchone())
+
+    def work(conn: psycopg.Connection) -> tuple[Any, list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
+        return (conn.execute(q.SELECT_SITE, {"site": site}).fetchone(), *_phones_and_links(conn))
+
+    row, phones, links = await asyncio.to_thread(_read, work)
     if row is None:
         raise HTTPException(status_code=404, detail=f"sitio desconocido: {site}")
-    return _site_view(row, cfg.sites.get(site))
+    return _site_view(row, cfg.sites.get(site), cfg, phones, links)
 
 
 @router.get("/api/admin/sites")
 async def list_sites(site: str | None = None, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
     scope = (site or None) if session.is_admin else session.site
     cfg = await _config()
-    rows = await asyncio.to_thread(_read, lambda c: c.execute(q.SELECT_SITES_ALL).fetchall())
-    views = [_site_view(r, cfg.sites.get(r["site"])) for r in rows if scope is None or r["site"] == scope]
+
+    def work(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
+        return (conn.execute(q.SELECT_SITES_ALL).fetchall(), *_phones_and_links(conn))
+
+    rows, phones, links = await asyncio.to_thread(_read, work)
+    views = [
+        _site_view(r, cfg.sites.get(r["site"]), cfg, phones, links)
+        for r in rows if scope is None or r["site"] == scope
+    ]
     return {"sites": views}
 
 
@@ -282,8 +359,8 @@ async def edit_site(site: str, body: SiteEditRequest, session: Session = Depends
             action="desactivar el sitio " + site,
             diff={
                 "resumen": (
-                    f"El sitio {site} deja de recibir fotos y sus dispositivos quedan fuera (su gafete deja de abrir). "
-                    "Sus datos no se borran y se puede volver a activar."
+                    f"El sitio {site} deja de recibir fotos: su gafete y los pases de sus teléfonos dejan de abrir. "
+                    "Sus datos no se borran y se puede volver a activar (sus teléfonos vuelven solos)."
                 ),
                 "cambios": [{"que": "activo", "antes": True, "despues": False}],
             },
@@ -292,7 +369,7 @@ async def edit_site(site: str, body: SiteEditRequest, session: Session = Depends
     return await apply()
 
 
-# --- functions and cameras (own site for a manager) --------------------------------------------
+# --- functions (own site for a manager) and cameras (admin) ------------------------------------
 
 @router.post("/api/admin/sites/{site}/funciones")
 async def set_funciones(site: str, body: Funciones, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
@@ -303,48 +380,129 @@ async def set_funciones(site: str, body: Funciones, session: Session = Depends(r
     return await _view_of(target)
 
 
+def _camera_or_404(site_cfg: SiteConfig, site: str, camera: str) -> CameraConfig:
+    cam = site_cfg.cameras.get(camera)
+    if cam is None:
+        raise HTTPException(status_code=404, detail=f"La cámara {camera} no existe en {site}.")
+    return cam
+
+
+def _release(conn: psycopg.Connection, phone: dict[str, Any], why: str) -> tuple[str, str]:
+    """The phone leaves its camera, inside the caller's transaction: its row goes, unless it still waits for another
+    camera. Answers (its pass, why) for the memo, noted once the transaction landed."""
+    conn.execute(q.UNBIND_TELEFONO if phone["pide_site"] is not None else q.DELETE_TELEFONO, {"id": phone["id"]})
+    return phone["pase"], why
+
+
+def _drop_request(conn: psycopg.Connection, phone: dict[str, Any], why: str) -> tuple[str, str]:
+    """The phone's request goes, inside the caller's transaction: its row too, unless it captures a camera."""
+    conn.execute(q.CLEAR_TELEFONO_PIDE if phone["site"] is not None else q.DELETE_TELEFONO, {"id": phone["id"]})
+    return phone["pase"], why
+
+
+def _note_all(notes: list[tuple[str, str]]) -> None:
+    for pase, why in notes:
+        note_fuera(pase, why)
+
+
+def _active_or_409(conn: psycopg.Connection, site: str) -> None:
+    """A deactivated site takes no new phone and no new link (Sacar and Relevo a Pi still work: they only remove)."""
+    row = conn.execute(q.SELECT_SITE, {"site": site}).fetchone()
+    if row is None or not row["active"]:
+        raise HTTPException(status_code=409, detail=f"El sitio {site} está desactivado: actívalo primero.")
+
+
+def _same_camera(site: str, camera: str, cam: CameraConfig, gone_pi: bool = False) -> Callable[[Config], None]:
+    """The check run under the writer's lock: the camera still is what the ops were built from (a relevo or a
+    calibration in between would make them wrong). gone_pi: a camera already back on its Pi says so."""
+    def check(cfg: Config) -> None:
+        site_cfg = cfg.sites.get(site)
+        now = site_cfg.cameras.get(camera) if site_cfg is not None else None
+        if now is None:
+            raise HTTPException(status_code=404, detail=f"La cámara {camera} no existe en {site}.")
+        if gone_pi and now.source == "pi":
+            raise HTTPException(status_code=409, detail=f"{camera} ya volvió a su Pi.")
+        if (now.source, now.kitchen_edge) != (cam.source, cam.kitchen_edge):
+            raise HTTPException(status_code=409, detail=f"La cámara {camera} cambió mientras tanto: mira la tarjeta otra vez.")
+    return check
+
+
 @router.post("/api/admin/sites/{site}/cameras")
-async def upsert_camera(site: str, body: CameraUpsertRequest, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
-    target = write_scope(session, site)
-    site_cfg = _site_cfg(await _config(), target)
+async def upsert_camera(site: str, body: CameraUpsertRequest, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Add a camera (nueva: a name the site already has answers 409), or change the role of one (admin only, Section
+    3.13.2). Its source changes only by the relevo: Relevo a Pi, or the admin's Aceptar of a phone."""
+    site_cfg = _site_cfg(await _config(), site)
     existing = site_cfg.cameras.get(body.name)
-    base = ("sites", target, "cameras", body.name)
+    base = ("sites", site, "cameras", body.name)
+    if existing is not None and body.nueva:
+        raise HTTPException(status_code=409, detail=f"Ya hay una cámara {body.name} en {site}: su rol se cambia en su propia fila.")
     if existing is None:
         ops = [cw.set_op(base, {"source": body.source, "role": body.role}, flow=False)]
         action = "camera.add"
     else:
-        ops = [cw.set_op(base + ("source",), body.source), cw.set_op(base + ("role",), body.role)]
-        # A calibration is only true for the device that made it and only means something for role 'both'.
-        if existing.kitchen_edge is not None and (body.role != "both" or body.source != existing.source):
+        if body.source != existing.source:
+            raise HTTPException(
+                status_code=409,
+                detail=f"La fuente de {body.name} cambia con «Relevo a Pi» o aceptando un teléfono en su enlace.",
+            )
+        ops = [cw.set_op(base + ("role",), body.role)]
+        # A calibration only means something for role 'both'.
+        if existing.kitchen_edge is not None and body.role != "both":
             ops.append(cw.delete_op(base + ("kitchen_edge",)))
         action = "camera.edit"
     await _write(ops)
     await asyncio.to_thread(log_action, session.user, action, {
-        "site": target, "camera": body.name, "source": body.source, "role": body.role,
+        "site": site, "camera": body.name, "source": body.source, "role": body.role,
     }, session.uid)
-    return await _view_of(target)
+    return await _view_of(site)
 
 
 @router.post("/api/admin/sites/{site}/cameras/{camera}/delete")
-async def delete_camera(site: str, camera: str, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
-    target = write_scope(session, site)
-    site_cfg = _site_cfg(await _config(), target)
-    cam = site_cfg.cameras.get(camera)
-    if cam is None:
-        raise HTTPException(status_code=404, detail=f"La cámara {camera} no existe en {target}.")
+async def delete_camera(site: str, camera: str, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Remove a camera (admin only, double confirm, never the last one): its link stops opening, its phone leaves
+    and the phones waiting for it hear that it is gone. One write across the database and config.yaml."""
+    site_cfg = _site_cfg(await _config(), site)
+    cam = _camera_or_404(site_cfg, site, camera)
     if len(site_cfg.cameras) == 1:
         raise HTTPException(status_code=400, detail="Un sitio necesita al menos una cámara: agrega otra antes de quitar esta.")
 
     async def run() -> dict[str, Any]:
-        await _write([cw.delete_op(("sites", target, "cameras", camera))])
-        await asyncio.to_thread(log_action, session.user, "camera.delete", {"site": target, "camera": camera}, session.uid)
-        return await _view_of(target)
+        def still_there(cfg: Config) -> None:
+            # Confirmed later, so checked again under the writer's lock: the camera still exists and is not the last.
+            cams = cfg.sites[site].cameras if site in cfg.sites else {}
+            if camera not in cams:
+                raise HTTPException(status_code=404, detail=f"La cámara {camera} ya no existe en {site}.")
+            if len(cams) == 1:
+                raise HTTPException(status_code=400, detail="Un sitio necesita al menos una cámara: agrega otra antes de quitar esta.")
 
+        def db_work(conn: psycopg.Connection) -> list[tuple[str, str]]:
+            notes: list[tuple[str, str]] = []
+            gone = f"{camera} ya no existe: se quitó en el mostrador."
+            conn.execute(q.LOCK_CAMARA, {"site": site, "camera": camera})
+            for phone in conn.execute(q.LOCK_TELEFONOS_DE_CAMARA, {"site": site, "camera": camera}).fetchall():
+                if (phone["site"], phone["camera"]) == (site, camera):
+                    notes.append(_release(conn, phone, gone))
+                else:
+                    notes.append(_drop_request(conn, phone, gone))
+            conn.execute(q.DELETE_ENLACE, {"site": site, "camera": camera})
+            _bitacora(conn, session, "camera.delete", {"site": site, "camera": camera})
+            return notes
+
+        _note_all(await _db_and_config(db_work, [cw.delete_op(("sites", site, "cameras", camera))], still_there))
+        log.info("camera deleted %s/%s user=%s", site, camera, session.user)
+        return await _view_of(site)
+
+    holder = await asyncio.to_thread(
+        _read, lambda c: c.execute(q.SELECT_TELEFONO_DE_CAMARA, {"site": site, "camera": camera}).fetchone())
+    extra = f" Su teléfono «{holder['nombre']}» sale de la cámara." if holder else ""
     return propose(
         session,
-        action="quitar la cámara " + camera + " de " + target,
+        action="quitar la cámara " + camera + " de " + site,
         diff={
-            "resumen": f"La cámara {camera} deja de existir en {target}; sus fotos ya guardadas no se borran.",
+            "resumen": (
+                f"La cámara {camera} deja de existir en {site}; sus fotos ya guardadas no se borran y su enlace deja "
+                "de servir." + extra
+            ),
             "cambios": [{
                 "que": camera,
                 "antes": SOURCE_WORDS.get(cam.source, cam.source) + ", " + ROLE_WORDS.get(cam.role, cam.role),
@@ -355,68 +513,241 @@ async def delete_camera(site: str, camera: str, session: Session = Depends(requi
     )
 
 
-async def relevo(site: str, camera: str, source: str, actor: Session | None, road: str) -> dict[str, Any]:
-    """The ONE relevo, shared by both roads: the mostrador's switch, and /captura's emergency road through
-    camera_takeover below (behind a login of the site, so the bitácora names who took over). The camera's
-    source flips, and its kitchen_edge goes with the old device (calibrate again). One write, one bitácora
-    row; the bot announces the relevo from that row (road "captura" reads "teléfono de emergencia")."""
-    site_cfg = _site_cfg(await _config(), site)
-    cam = site_cfg.cameras.get(camera)
-    if cam is None:
-        raise HTTPException(status_code=404, detail=f"La cámara {camera} no existe en {site}.")
-    if cam.source == source:
-        return {"site": site, "camera": camera, "source": source, "changed": False}
-    base = ("sites", site, "cameras", camera)
-    ops = [cw.set_op(base + ("source",), source)]
-    if cam.kitchen_edge is not None:
-        ops.append(cw.delete_op(base + ("kitchen_edge",)))
-    await _write(ops)
-    await asyncio.to_thread(log_action, actor.user if actor else None, "relevo", {
-        "site": site, "camera": camera, "source": source, "road": road,
-        "calibracion_borrada": cam.kitchen_edge is not None,
-    }, actor.uid if actor else None)
-    log.info("relevo %s/%s -> %s road=%s", site, camera, source, road)
-    return {"site": site, "camera": camera, "source": source, "changed": True}
-
-
 @router.post("/api/admin/sites/{site}/cameras/{camera}/source")
 async def camera_source(site: str, camera: str, body: SourceRequest, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
+    """Relevo a Pi (the admin, or the site's manager): a phone camera goes back to its Pi, its calibration goes with
+    the phone, and the phone leaves the camera (its page says it stopped). One write across the database and
+    config.yaml, with its bitácora row; the bot announces the relevo from that row. Toward the phone there is no
+    switch: a Pi camera becomes a phone's when the admin accepts a phone in its link."""
     target = write_scope(session, site)
-    return await relevo(target, camera, body.source, session, "mostrador")
-
-
-@router.post("/api/admin/sites/{site}/cameras/{camera}/takeover")
-async def camera_takeover(site: str, camera: str, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
-    """/captura's emergency road (SPEC 1.5, the 8pm protocol): the phone in hand takes the place of a Pi
-    camera, behind a login of that site and the double confirm with its visible diff. Only toward the
-    phone: the way back to the Pi is the mostrador's switch. Step 2 runs the same relevo() with road
-    "captura"."""
-    target = write_scope(session, site)
-    cam = _site_cfg(await _config(), target).cameras.get(camera)
-    if cam is None:
-        raise HTTPException(status_code=404, detail=f"La cámara {camera} no existe en {target}.")
-    if cam.source == "phone":
-        raise HTTPException(status_code=409, detail=f"La cámara {camera} ya es de teléfono: no hace falta el relevo.")
-    cambios = [{"que": camera, "antes": SOURCE_WORDS.get(cam.source, cam.source), "despues": "teléfono (de emergencia)"}]
+    if body.source != "pi":
+        raise HTTPException(
+            status_code=400,
+            detail="Una cámara pasa a teléfono cuando el admin acepta un teléfono en su enlace (Dame el enlace).",
+        )
+    cam = _camera_or_404(_site_cfg(await _config(), target), target, camera)
+    if cam.source == "pi":
+        return {"site": target, "camera": camera, "source": "pi", "changed": False}
+    base = ("sites", target, "cameras", camera)
+    ops = [cw.set_op(base + ("source",), "pi")]
     if cam.kitchen_edge is not None:
-        cambios.append({
-            "que": "calibración",
-            "antes": "borde-cocina " + EDGE_WORDS.get(cam.kitchen_edge, cam.kitchen_edge),
-            "despues": "sin calibrar (calíbrala en /camara)",
+        ops.append(cw.delete_op(base + ("kitchen_edge",)))
+
+    def db_work(conn: psycopg.Connection) -> list[tuple[str, str]]:
+        notes: list[tuple[str, str]] = []
+        detail: dict[str, Any] = {
+            "site": target, "camera": camera, "source": "pi", "road": "mostrador",
+            "calibracion_borrada": cam.kitchen_edge is not None,
+        }
+        conn.execute(q.LOCK_CAMARA, {"site": target, "camera": camera})
+        for phone in conn.execute(q.LOCK_TELEFONOS_DE_CAMARA, {"site": target, "camera": camera}).fetchall():
+            if (phone["site"], phone["camera"]) == (target, camera):
+                detail["telefono"] = phone["nombre"]
+                notes.append(_release(conn, phone, f"{camera} volvió a su Pi: este teléfono dejó de capturarla."))
+        _bitacora(conn, session, "relevo", detail)
+        return notes
+
+    _note_all(await _db_and_config(db_work, ops, _same_camera(target, camera, cam, gone_pi=True)))
+    log.info("relevo %s/%s -> pi road=mostrador user=%s", target, camera, session.user)
+    return {"site": target, "camera": camera, "source": "pi", "changed": True}
+
+
+# --- the camera links (Section 3.13.2): the admin and the site's manager ------------------------
+
+def _nuevo_codigo() -> str:
+    return "".join(secrets.choice(ENLACE_ALFABETO) for _ in range(ENLACE_LARGO))
+
+
+def _link_camera_now(conn: psycopg.Connection, site: str, camera: str) -> None:
+    """A link write holds the camera's lock (the one Quitar la cámara takes) and looks at the camera again under it:
+    a camera removed meanwhile answers 404, so no link outlives its camera."""
+    _active_or_409(conn, site)
+    conn.execute(q.LOCK_CAMARA, {"site": site, "camera": camera})
+    _camera_or_404(_site_cfg(load_config(), site), site, camera)
+
+
+async def _link_tx(work: Callable[[psycopg.Connection, str], Any]) -> Any:
+    """Run a link write with a fresh code, again with another one if the code collides (CODIGO_INTENTOS)."""
+    for attempt in range(CODIGO_INTENTOS):
+        try:
+            return await asyncio.to_thread(_tx, lambda conn: work(conn, _nuevo_codigo()))
+        except pg_errors.UniqueViolation:
+            if attempt == CODIGO_INTENTOS - 1:
+                raise HTTPException(status_code=409, detail="No se pudo crear un código nuevo: vuelve a intentarlo.") from None
+    return None
+
+
+@router.post("/api/admin/sites/{site}/cameras/{camera}/enlace")
+async def dame_enlace(site: str, camera: str, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
+    """Dame el enlace: the camera's live link; when it has none or it expired, a new code (an expired link keeps its
+    duration; a first link lasts DURACION_DEFAULT). Its bitácora row only when a code is born (never the code)."""
+    target = write_scope(session, site)
+    _camera_or_404(_site_cfg(await _config(), target), target, camera)
+
+    def work(conn: psycopg.Connection, codigo: str) -> tuple[dict[str, Any], bool]:
+        key = {"site": target, "camera": camera}
+        _link_camera_now(conn, target, camera)
+        row = conn.execute(q.LOCK_ENLACE, key).fetchone()
+        if row is not None and not row["vencido"]:
+            return row, False
+        dias = row["dias"] if row is not None else DURACIONES[DURACION_DEFAULT]
+        if row is None:
+            fresh = conn.execute(q.INSERT_ENLACE, {**key, "codigo": codigo, "dias": dias}).fetchone()
+            if fresh is None:                        # someone else made it a moment ago: that one is the link
+                return conn.execute(q.LOCK_ENLACE, key).fetchone(), False
+        else:
+            fresh = conn.execute(q.UPSERT_ENLACE, {**key, "codigo": codigo, "dias": dias}).fetchone()
+        _bitacora(conn, session, "enlace.crea", {**key, "dias": dias})
+        return fresh, True
+
+    row, nuevo = await _link_tx(work)
+    if nuevo:
+        log.info("link created %s/%s user=%s", target, camera, session.user)
+    return {"site": target, "camera": camera, "nuevo": nuevo, "enlace": _enlace_view(row)}
+
+
+@router.post("/api/admin/sites/{site}/cameras/{camera}/enlace/nuevo")
+async def cambiar_enlace(site: str, camera: str, body: EnlaceNuevoRequest,
+                         session: Session = Depends(require_mostrador)) -> dict[str, Any]:
+    """Cambiar enlace: a new code now; the old one stops opening at once, the phones already inside stay and the
+    requests already made wait as they were. The admin may choose its duration; a manager keeps the current one."""
+    target = write_scope(session, site)
+    if body.duracion is not None and not session.is_admin:
+        raise HTTPException(status_code=403, detail="Solo el admin elige cuánto dura un enlace.")
+    _camera_or_404(_site_cfg(await _config(), target), target, camera)
+
+    def work(conn: psycopg.Connection, codigo: str) -> dict[str, Any]:
+        key = {"site": target, "camera": camera}
+        _link_camera_now(conn, target, camera)
+        row = conn.execute(q.LOCK_ENLACE, key).fetchone()
+        if body.duracion is not None:
+            dias = DURACIONES[body.duracion]
+        else:
+            dias = row["dias"] if row is not None else DURACIONES[DURACION_DEFAULT]
+        fresh = conn.execute(q.UPSERT_ENLACE, {**key, "codigo": codigo, "dias": dias}).fetchone()
+        _bitacora(conn, session, "enlace.cambia", {**key, "dias": dias})
+        return fresh
+
+    row = await _link_tx(work)
+    log.info("link changed %s/%s user=%s", target, camera, session.user)
+    return {"site": target, "camera": camera, "nuevo": True, "enlace": _enlace_view(row)}
+
+
+@router.post("/api/admin/sites/{site}/cameras/{camera}/enlace/duracion")
+async def duracion_enlace(site: str, camera: str, body: EnlaceDuracionRequest,
+                          session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """The admin's duration of a camera's link: the same code, its life counted again from now."""
+    _camera_or_404(_site_cfg(await _config(), site), site, camera)
+    dias = DURACIONES[body.duracion]
+
+    def work(conn: psycopg.Connection) -> dict[str, Any]:
+        _link_camera_now(conn, site, camera)
+        row = conn.execute(q.SET_ENLACE_DIAS, {"site": site, "camera": camera, "dias": dias}).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"{camera} aún no tiene enlace: pide uno con «Dame el enlace».")
+        _bitacora(conn, session, "enlace.duracion", {"site": site, "camera": camera, "dias": dias})
+        return row
+
+    row = await asyncio.to_thread(_tx, work)
+    return {"site": site, "camera": camera, "nuevo": False, "enlace": _enlace_view(row)}
+
+
+# --- the phones (Section 3.13.2): Aceptar and Rechazar (admin), Sacar ---------------------------
+
+CHANGED = "Ese pedido cambió mientras tanto: mira la tarjeta otra vez."
+
+
+@router.post("/api/admin/sites/{site}/cameras/{camera}/telefonos/{phone_id}/aceptar")
+async def aceptar_telefono(site: str, camera: str, phone_id: int, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """The phone becomes the camera it asked for, the one whose row was clicked (a request that changed since the
+    card was drawn answers 409): the camera it captured until now (if any) is free from this moment, and the other
+    phones waiting for this camera hear that it has its phone. On a Pi camera it is also the relevo: the camera
+    passes to that phone and its calibration goes with the Pi (road "enlace": the bot announces a teléfono de
+    emergencia). One write across the database and config.yaml; never on a deactivated site."""
+    cam = _camera_or_404(_site_cfg(await _config(), site), site, camera)
+    pre = await asyncio.to_thread(_read, lambda c: c.execute(q.SELECT_TELEFONO, {"id": phone_id}).fetchone())
+    if pre is None:
+        raise HTTPException(status_code=404, detail="Ese pedido ya no existe (¿lo atendió alguien más?).")
+    if (pre["pide_site"], pre["pide_camera"]) != (site, camera):
+        raise HTTPException(status_code=409, detail=CHANGED)
+    relevo = cam.source != "phone"
+    base = ("sites", site, "cameras", camera)
+    ops: list[cw.Op] = []
+    if relevo:
+        ops.append(cw.set_op(base + ("source",), "phone"))
+        if cam.kitchen_edge is not None:
+            ops.append(cw.delete_op(base + ("kitchen_edge",)))
+
+    def db_work(conn: psycopg.Connection) -> tuple[str, list[tuple[str, str]]]:
+        _active_or_409(conn, site)
+        conn.execute(q.LOCK_CAMARA, {"site": site, "camera": camera})
+        others = conn.execute(q.LOCK_TELEFONOS_DE_CAMARA, {"site": site, "camera": camera}).fetchall()   # by id
+        phone = next((r for r in others if r["id"] == phone_id), None)
+        if phone is None or (phone["pide_site"], phone["pide_camera"]) != (site, camera):
+            raise HTTPException(status_code=409, detail=CHANGED)
+        if any((r["site"], r["camera"]) == (site, camera) for r in others):
+            raise HTTPException(status_code=409, detail=f"{camera} ya tiene teléfono: sácalo primero.")
+        antes = f"{phone['site']}/{phone['camera']}" if phone["site"] is not None else None
+        conn.execute(q.BIND_TELEFONO, {"id": phone_id, "site": site, "camera": camera})
+        notes = [_drop_request(conn, r, f"{camera} ya tiene teléfono.") for r in others if r["id"] != phone_id]
+        _bitacora(conn, session, "telefono.acepta", {
+            "site": site, "camera": camera, "nombre": phone["nombre"], "telefono": phone_id, "antes": antes,
         })
+        if relevo:
+            _bitacora(conn, session, "relevo", {
+                "site": site, "camera": camera, "source": "phone", "road": "enlace",
+                "calibracion_borrada": cam.kitchen_edge is not None, "telefono": phone["nombre"],
+            })
+        return phone["pase"], notes
 
-    async def run() -> dict[str, Any]:
-        return await relevo(target, camera, "phone", session, "captura")
+    pase, notes = await _db_and_config(db_work, ops, _same_camera(site, camera, cam))
+    forget_fuera(pase)
+    _note_all(notes)
+    log.info("phone accepted %s/%s telefono=%d relevo=%s user=%s", site, camera, phone_id, relevo, session.user)
+    return await _view_of(site)
 
-    return propose(
-        session,
-        action="relevo de emergencia: " + camera + " de " + target + " pasa a teléfono",
-        diff={
-            "resumen": f"La cámara {camera} deja la Pi y pasa a este teléfono; el bot lo anuncia como teléfono de emergencia.",
-            "cambios": cambios,
-        },
-        run=run,
-    )
+
+@router.post("/api/admin/sites/{site}/cameras/{camera}/telefonos/{phone_id}/rechazar")
+async def rechazar_telefono(site: str, camera: str, phone_id: int, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """The phone's request for the clicked camera goes (it may ask again by opening the link); a phone that captures
+    a camera keeps it. A request that changed since the card was drawn answers 409."""
+
+    def work(conn: psycopg.Connection) -> tuple[str, str]:
+        phone = conn.execute(q.LOCK_TELEFONO, {"id": phone_id}).fetchone()
+        if phone is None:
+            raise HTTPException(status_code=404, detail="Ese pedido ya no existe (¿lo atendió alguien más?).")
+        if (phone["pide_site"], phone["pide_camera"]) != (site, camera):
+            raise HTTPException(status_code=409, detail=CHANGED)
+        _bitacora(conn, session, "telefono.rechaza", {
+            "site": site, "camera": camera, "nombre": phone["nombre"], "telefono": phone_id,
+        })
+        return _drop_request(conn, phone, f"No te aceptaron en {camera}.")
+
+    _note_all([await asyncio.to_thread(_tx, work)])
+    log.info("phone refused %s telefono=%d user=%s", site, phone_id, session.user)
+    return await _view_of(site)
+
+
+@router.post("/api/admin/sites/{site}/cameras/{camera}/telefonos/{phone_id}/sacar")
+async def sacar_telefono(site: str, camera: str, phone_id: int, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
+    """Sacar (the site's manager, or the admin): the phone leaves the clicked camera; to come back it opens the link
+    again and waits for the admin's Aceptar. A phone that is no longer on that camera answers 409."""
+    target = write_scope(session, site)
+
+    def work(conn: psycopg.Connection) -> tuple[str, str]:
+        phone = conn.execute(q.LOCK_TELEFONO, {"id": phone_id}).fetchone()
+        if phone is None or phone["site"] != target:
+            raise HTTPException(status_code=404, detail=f"Ese teléfono ya no está en ninguna cámara de {target}.")
+        if phone["camera"] != camera:
+            raise HTTPException(status_code=409, detail=f"Ese teléfono ya no es la cámara {camera}: mira la tarjeta otra vez.")
+        _bitacora(conn, session, "telefono.saca", {
+            "site": target, "camera": camera, "nombre": phone["nombre"], "telefono": phone_id,
+        })
+        return _release(conn, phone, f"Te sacaron de {camera}: para volver, abre el enlace de la cámara.")
+
+    _note_all([await asyncio.to_thread(_tx, work)])
+    log.info("phone out %s telefono=%d user=%s", target, phone_id, session.user)
+    return await _view_of(target)
 
 
 # --- the gafete (admin) ------------------------------------------------------------------------
@@ -453,8 +784,8 @@ async def regenerate_gafete(site: str, session: Session = Depends(require_admin)
         action="generar un gafete nuevo para " + site,
         diff={
             "resumen": (
-                f"Cada teléfono o Pi inscrito en {site} deja de entrar hasta inscribirse con el gafete nuevo "
-                "(instalar primero, inscribir después)."
+                f"Las máquinas de {site} usan el gafete nuevo: el bot lo lee solo; una Pi deja de entrar hasta que "
+                "tenga el nuevo. Los teléfonos no usan gafete: siguen con su pase."
             ),
             "cambios": [{"que": "gafete", "antes": "el actual", "despues": "uno nuevo"}],
         },

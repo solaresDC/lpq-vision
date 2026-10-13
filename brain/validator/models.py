@@ -10,13 +10,15 @@ Fase 3 adds: the config shapes of the admin era (timezone, horario, the machine 
 the site layer with mantenimiento and overrides), each with a factory default so an older live
 config.yaml loads as it is; the two prompt lanes; and the ONE shared contender table (the
 bake-off and the machine room's keyless selector both read it here). Site overrides are checked
-against the knob registry (brain/validator/knobs.py) at load.
+against the knob registry (brain/validator/knobs.py) at load. Section 3.13.2 adds the camera links'
+code alphabet and durations and the name a phone gives (enlace_codigo, nombre_telefono).
 """
 
 from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -80,12 +82,22 @@ ETIQUETA_MAX_CHARS = 60           # a component's visible label
 PORCION_MAX_G = 5000              # one component's standard portion, in grams
 COMPONENTES_MAX = 20              # components per dish
 NOTAS_MAX_CHARS = 1000            # "notas para el modelo", per dish
+# The camera links (Section 3.13.2): a code only lets a phone ASK to be that camera; the admin's Aceptar decides.
+ENLACE_ALFABETO = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"   # no 0 O 1 I L: a code read aloud or typed by hand
+ENLACE_LARGO = 8                  # characters of a code (shown as two groups of 4)
+DURACIONES: dict[str, int | None] = {"1d": 1, "7d": 7, "30d": 30, "permanente": None}   # a link's life, in days
+DURACION_DEFAULT = "7d"           # a camera's first link lasts a week (owner, 11 Oct)
+NOMBRE_TELEFONO_MAX = 30          # the name a phone gives when it asks to be a camera
+# Letters and signs that show as nothing (Hangul fillers, the blank Braille cell, Khmer inherent vowels): a name
+# drops them like control characters.
+NOMBRE_BLANCOS = frozenset({0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0})
 
 SITE_SLUG_RE = re.compile(r"^[a-z][a-z0-9_-]{1,23}\Z")
 USER_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,31}\Z")
 CAMERA_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,23}\Z")
 CHAT_ID_RE = re.compile(r"^-?\d{1,20}\Z")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d\Z")
+Duracion = Literal["1d", "7d", "30d", "permanente"]
 
 # --- presentation lane constants (SPEC section 4 / 1.7) --------------------------------
 PRESENTATION_PASS_SCORE = 80
@@ -139,6 +151,33 @@ def check_timezone(name: str) -> str:
     except (ZoneInfoNotFoundError, ValueError):
         raise ValueError(f"unknown timezone {name!r}: use an IANA name like {DEFAULT_TIMEZONE}") from None
     return name
+
+
+def enlace_codigo(raw: Any) -> str | None:
+    """A link's code as a person may type it (any case, with spaces or the dash of 7KQ2-M9XP), or None when it
+    cannot be one: exactly ENLACE_LARGO characters of ENLACE_ALFABETO."""
+    if not isinstance(raw, str):
+        return None
+    code = raw.replace("-", "").replace(" ", "").strip().upper()
+    if len(code) != ENLACE_LARGO or any(ch not in ENLACE_ALFABETO for ch in code):
+        return None
+    return code
+
+
+def nombre_telefono(raw: Any) -> str:
+    """The name a phone gives: NFC, no control or format characters, spaces collapsed, 1 to NOMBRE_TELEFONO_MAX,
+    with at least one visible letter, digit or sign (accents alone show as nothing). Raises ValueError with the
+    sentence the phone shows."""
+    if not isinstance(raw, str):
+        raise ValueError("Escribe tu nombre: así te reconoce el admin.")
+    text = unicodedata.normalize("NFC", raw)
+    text = " ".join("".join(ch for ch in text
+                            if unicodedata.category(ch)[0] != "C" and ord(ch) not in NOMBRE_BLANCOS).split())
+    if not any(unicodedata.category(ch)[0] in "LNPS" for ch in text):
+        raise ValueError("Escribe tu nombre: así te reconoce el admin.")
+    if len(text) > NOMBRE_TELEFONO_MAX:
+        raise ValueError(f"El nombre puede tener hasta {NOMBRE_TELEFONO_MAX} letras.")
+    return text
 
 
 # --------------------------------------------------------------------------- the prompts
@@ -749,11 +788,24 @@ class OwnPasswordRequest(_Body):
     password: str = Field(min_length=PASSWORD_MIN_CHARS, max_length=200)
 
 
-class EnrollRequest(_Body):
-    """POST /api/device/enroll: /captura presents the site's gafete once; the server sets the device cookie."""
+class PedirRequest(_Body):
+    """POST /api/captura/pedir (Section 3.13.2): a phone asks to be a camera with that camera's link code and a
+    name. The api normalizes both (enlace_codigo, nombre_telefono) and answers a refusal in plain words."""
 
-    site: str = Field(min_length=1)
-    key: str = Field(min_length=16, max_length=200)
+    enlace: str = Field(min_length=1, max_length=40)
+    nombre: str = Field(max_length=200)
+
+
+class EnlaceNuevoRequest(_Body):
+    """Cambiar enlace: a new code. duracion absent = the camera's current one (only the admin chooses another)."""
+
+    duracion: Duracion | None = None
+
+
+class EnlaceDuracionRequest(_Body):
+    """The admin's duración of a camera's link: the same code, counted again from now."""
+
+    duracion: Duracion
 
 
 class KnobWriteRequest(_Body):
@@ -855,6 +907,7 @@ class CameraUpsertRequest(_Body):
     name: str
     source: CameraSource
     role: CameraRole
+    nueva: bool = False            # Agregar cámara (Section 3.13.2): a name the site already has answers 409, never an edit
 
     @field_validator("name", mode="before")
     @classmethod
@@ -916,7 +969,8 @@ class SiteEditRequest(_Body):
 
 
 class SourceRequest(_Body):
-    """The relevo: a camera's source flips (mostrador switch or /captura's emergency road)."""
+    """The relevo from the mostrador: a phone camera goes back to its Pi (Section 3.13.2: a Pi camera becomes a
+    phone's only when the admin accepts a phone in its link)."""
 
     source: CameraSource
 

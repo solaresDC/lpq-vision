@@ -153,7 +153,8 @@ export function requireLogin() {
 
 // --- header --------------------------------------------------------------------------
 
-const NAV = [["panel", "Panel"], ["review", "Review"], ["galeria", "Galería"], ["camara", "Cámara"], ["captura", "Captura"]];
+// /captura is not a tab (Section 3.13.2): a phone reaches it only through its camera's link.
+const NAV = [["panel", "Panel"], ["review", "Review"], ["galeria", "Galería"], ["camara", "Cámara"]];
 
 // mountHeader(title, sess): the top bar with nav, the locked site chip for a site account,
 // and Salir. sess may be null (no session yet): the chip is simply absent.

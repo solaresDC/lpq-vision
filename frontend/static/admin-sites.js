@@ -1,19 +1,26 @@
 // LPQ_VISION admin-sites.js: the Sitios y cuentas tab (family admin_sites; SPEC 1.3, 1.5; owner ruling 3.10.3).
 // Each visible site: the auditor (do the cameras' roles add up to the functions?), its two functions, its
-// cameras (add, change role, relevo, remove) and, for the admin, its gafete and its active switch. The admin
-// also gets Crear restaurante (site, cameras, functions, gafete, Telegram group, menu photos and manager: all
-// or nothing; the group's chat can be tested before creating, and the knobs the new restaurant inherits are
-// shown read-only) and Cuentas (create; password change through a window and a "¿seguro?"; activate; role and
-// site; delete with the typed name; recover). Every editable field shows its three helps (admin-kit's
-// fieldHelp). New passwords go through admin-kit's newPassword() or passwordDialog(): viewable with "ver" while
-// typed, never copyable. Nobody can SEE a stored password; the page never keeps one. A gafete appears only
-// after "Mostrar gafete".
+// cameras and, for the admin, its gafete (the machines' key) and its active switch. Each camera (Section 3.13.2):
+// its light (🟢 Pi conectada, 🟢 Teléfono conectado: «nombre», 🔴 Nada conectado), Mirilla (a window on this
+// page), its link ("Dame el enlace" and "Cambiar enlace": the admin and the site's manager; only the admin picks
+// how long it lasts), its phone with Sacar, the phones waiting with Aceptar and Rechazar (the admin's) and
+// Relevo a Pi; a Pi that sends nothing shows its link, so a phone can take its place. Cameras are added,
+// re-roled and removed by the admin only (new ones are Pi by default). The admin also gets Crear restaurante
+// (site, cameras, functions, gafete, Telegram group, menu photos and manager: all or nothing; the group's chat
+// can be tested before creating, and the knobs the new restaurant inherits are shown read-only) and Cuentas
+// (create; password change through a window and a "¿seguro?"; activate; role and site; delete with the typed
+// name; recover). Every editable field shows its three helps (admin-kit's fieldHelp). New passwords go through
+// admin-kit's newPassword() or passwordDialog(): viewable with "ver" while typed, never copyable. Nobody can SEE
+// a stored password; the page never keeps one. A gafete appears only after "Mostrar gafete".
 // Live (Section 3.13.1): every LIVE_MS the tab re-reads its sites (and, for the admin, the accounts) and rebuilds
 // in place each card whose data changed, so a relevo made from a phone or another window shows up by itself.
 // A card someone is using waits, with a note, until it is free: a field with the cursor in it, a value typed or
-// chosen and not saved, a button still working, a gafete on screen (until "ocultar"), or an open window. A site
-// added or removed elsewhere rebuilds the whole tab on the same terms, checked again right before it happens. The
-// re-read never opens the login (an expired session waits for the next click) and dies with the tab.
+// chosen and not saved, a button still working or still being pressed, a gafete on screen (until "ocultar"), or
+// an open window. A site added or removed elsewhere rebuilds the whole tab on the same terms, checked again right
+// before it happens. The re-read never opens the login (an expired session waits for the next click) and dies with
+// the tab. An action inside a site's card rebuilds that card alone (Section 3.13.2): what is typed in the other
+// cards stays, and so does a value typed or chosen and not saved in that same card (it is carried into the new
+// one). Every read carries a ticket: an answer older than what a card already shows never rolls it back.
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import {
@@ -30,10 +37,19 @@ const CHECK = "width: auto; min-height: 0; margin: 0;";
 const CHECK_LABEL = "display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--ink); font-size: 15px;";
 const MAX_CAMERAS = 8;
 const LIVE_MS = 5000;           // the tab re-reads itself this often while it is on screen (owner ruling 3.13.1)
+const PRESS_MAX_MS = 10000;     // a finger or a button held down keeps its card still at most this long...
+const PRESS_AFTER_MS = 300;     // ...and until this long after its click, so a rebuild never eats a click
+const HOLD_RETRY_MS = 1000;     // a card held by a press or a working button is read again this often until it is free
 const FIELD_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA"]);
 const LIVE_NOTE_CARD = "Hay cambios nuevos en esta tarjeta: aparecen en cuanto termines lo que estás editando.";
 const LIVE_NOTE_HOLD = "Hay cambios nuevos en esta tarjeta: aparecen en cuanto ocultes el gafete.";
 const LIVE_NOTE_TAB = "Se agregó o se quitó un sitio en otra ventana: la pestaña se actualiza en cuanto termines lo que estás editando.";
+const LUZ = { pi: "🟢 Pi conectada", telefono: "🟢 Teléfono conectado", nada: "🔴 Nada conectado" };
+const DURACIONES = [["1d", "1 día"], ["7d", "1 semana"], ["30d", "1 mes"], ["permanente", "permanente"]];
+const DIAS_KEY = { 1: "1d", 7: "7d", 30: "30d" };   // a link's days back to its choice; none = permanente
+const CAM_BLOCK = "border-top: 1px solid var(--line); padding: 10px 0; display: grid; gap: 6px;";
+const LIGHT_ON = "font-weight: 600; color: var(--ok);";
+const LIGHT_OFF = "font-weight: 600; color: var(--bad);";
 
 // The three helps of this tab's fields (owner ruling 3.10.3): the example is also the field's gray placeholder.
 const AYUDAS = {
@@ -49,9 +65,15 @@ const AYUDAS = {
     recomendacion: "Minúsculas y sin espacios, con número si hay varias: barra-1, barra-2.",
   },
   fuente: {
-    que_es: "Qué aparato toma las fotos: el teléfono con la página de captura, o una Raspberry Pi.",
-    ejemplo: "teléfono",
-    recomendacion: "teléfono. «Relevo» cambia la fuente de una cámara que ya existe.",
+    que_es: "Qué aparato toma las fotos: una Raspberry Pi, o un teléfono que entra con el enlace de la cámara.",
+    ejemplo: "Pi",
+    recomendacion: "Pi. Si la Pi no manda imagen, un teléfono toma su lugar con el enlace de la cámara (Dame el enlace) cuando el admin lo acepta.",
+    copiar: false,
+  },
+  duracion: {
+    que_es: "Cuánto tiempo sirve el enlace para que un teléfono nuevo pida entrar. Los teléfonos que ya entraron siguen aunque venza o cambie.",
+    ejemplo: "1 semana",
+    recomendacion: "1 semana. Si el enlace se compartió de más, «Cambiar enlace»: el anterior deja de servir y nadie sale.",
     copiar: false,
   },
   rol: {
@@ -150,14 +172,21 @@ function sitePath(site) {
   return "/api/admin/sites/" + enc(site);
 }
 
+// A phone's actions name the camera of the row clicked: a phone that moved since the card was drawn answers 409.
+function phonePath(s, c, id) {
+  return sitePath(s.site) + "/cameras/" + enc(c.name) + "/telefonos/" + id;
+}
+
 export async function render(ctx) {
   const data = await api("/api/admin/sites" + qs({ site: ctx.site }));
-  const view = { names: siteNames(data), note: el("div", { class: "kit-note hidden" }), cards: new Map(), parts: [], users: null };
+  const view = {
+    names: siteNames(data), note: el("div", { class: "kit-note hidden" }), cards: new Map(), parts: [], users: null, ticket: 0,
+  };
   const box = el("div", {}, view.note);
   if (!data.sites.length) box.append(card("Sitios", el("p", { class: "muted", text: "No hay sitios que mostrar." })));
   for (const s of data.sites) {
-    const node = remember(siteCard(s, ctx));
-    view.cards.set(s.site, { node: node, sig: JSON.stringify(s) });
+    const node = remember(siteCard(s, ctx, view));
+    view.cards.set(s.site, { node: node, sig: JSON.stringify(s), ticket: 0 });
     box.append(node);
   }
   if (ctx.sess.admin) {
@@ -190,15 +219,19 @@ function valueOf(field) {
 
 function remember(node) {
   BASELINES.set(node, [...node.querySelectorAll("input, select, textarea")].map((f) => [f, valueOf(f)]));
+  node.addEventListener("pointerdown", () => { node.dataset.pressUntil = String(Date.now() + PRESS_MAX_MS); });
+  node.addEventListener("click", () => { node.dataset.pressUntil = String(Date.now() + PRESS_AFTER_MS); });
   return node;
 }
 
 // In use: a window is open, the cursor is in one of its fields, a value was typed or chosen and not saved, a
-// button is still working (busy() disables it until its answer lands, error line included), or a gafete is on
-// screen. A field added after the card was built (another camera row) counts once it holds anything. A card in
-// use is never rebuilt under someone's hands.
+// button is still working (busy() disables it until its answer lands, error line included) or still being
+// pressed (from the press until just after its click), or a gafete is on screen. A field added after the card
+// was built (another camera row) counts once it holds anything. A card in use is never rebuilt under someone's
+// hands.
 function inUse(node) {
   if (document.querySelector(".overlay")) return true;
+  if (Number(node.dataset.pressUntil || 0) > Date.now()) return true;
   const active = document.activeElement;
   if (active && node.contains(active) && FIELD_TAGS.has(active.tagName)) return true;
   if (node.querySelector("[data-live-hold], button:disabled")) return true;
@@ -245,6 +278,7 @@ function liveTick(ctx, view) {
     if (running || view.gone) return;       // a slow answer never stacks a second round on top
     running = true;
     try {
+      const ticket = ++view.ticket;
       const data = await liveGet("/api/admin/sites" + qs({ site: ctx.site }));
       if (!data || view.gone) return;
       if (siteNames(data) !== view.names) {
@@ -265,13 +299,12 @@ function liveTick(ctx, view) {
       for (const s of data.sites) {
         const entry = view.cards.get(s.site);
         const sig = JSON.stringify(s);
-        if (!entry) continue;
+        if (!entry || entry.ticket > ticket) continue;     // the card was read again after this answer left
         if (entry.sig === sig) { unflag(entry.node); continue; }
         if (inUse(entry.node)) { flag(entry.node); continue; }
-        const fresh = remember(siteCard(s, ctx));
+        const fresh = remember(siteCard(s, ctx, view));
         entry.node.replaceWith(fresh);
-        entry.node = fresh;
-        entry.sig = sig;
+        Object.assign(entry, { node: fresh, sig: sig, ticket: ticket });
       }
       if (view.users) {
         const accounts = await liveGet("/api/admin/users");
@@ -293,9 +326,60 @@ function liveTick(ctx, view) {
   };
 }
 
+// After an action inside a site's card, that card alone is read again and rebuilt (the other cards keep what is
+// being typed in them); the live re-read then finds it current. A value typed or chosen and not saved in the card
+// itself is carried into the new one (its field's data-key), so it still counts as unsaved, and so is the card's
+// error line. A gafete on screen holds the card until "ocultar"; a button still pressed or still working holds it
+// until it is free (then it is read again). A site that is gone rebuilds the whole tab.
+async function refreshCard(ctx, view, site) {
+  const ticket = ++view.ticket;
+  const data = await liveGet("/api/admin/sites" + qs({ site: site }));
+  const entry = view.cards.get(site);
+  if (!data || view.gone || !entry || entry.ticket > ticket) return;   // a hiccup: the next live round brings it
+  const s = data.sites.find((x) => x.site === site);
+  if (!s) { ctx.refresh(); return; }
+  if (entry.node.querySelector("[data-live-hold]")) { flag(entry.node); return; }
+  if (Number(entry.node.dataset.pressUntil || 0) > Date.now() || entry.node.querySelector("button:disabled")) {
+    setTimeout(() => refreshCard(ctx, view, site), HOLD_RETRY_MS);   // never under a finger or a working button
+    return;
+  }
+  const kept = unsaved(entry.node);
+  const said = errorLine(entry.node).textContent;
+  const fresh = remember(siteCard(s, ctx, view));
+  restore(fresh, kept);
+  errorLine(fresh).textContent = said;
+  entry.node.replaceWith(fresh);
+  Object.assign(entry, { node: fresh, sig: JSON.stringify(s), ticket: ticket });
+}
+
+// A site card's own error line: the last one directly in the card (the windows have their own).
+function errorLine(node) {
+  const lines = node.querySelectorAll(":scope > .kit-error");
+  return lines.length ? lines[lines.length - 1] : el("div", {});
+}
+
+// The card's keyed fields whose value is not the one the card was built with: [key, value] pairs.
+function unsaved(node) {
+  const base = new Map(BASELINES.get(node) || []);
+  return [...node.querySelectorAll("[data-key]")]
+    .filter((f) => base.has(f) && valueOf(f) !== base.get(f))
+    .map((f) => [f.dataset.key, valueOf(f)]);
+}
+
+function restore(node, kept) {
+  for (const [key, value] of kept) {
+    const f = [...node.querySelectorAll("[data-key]")].find((x) => x.dataset.key === key);
+    if (!f) continue;                                 // its camera is gone: nothing to carry
+    if (f.type === "checkbox" || f.type === "radio") f.checked = value === "true"; else f.value = value;
+  }
+}
+
 // --- one site --------------------------------------------------------------------------------
 
-function siteCard(s, ctx) {
+// here: the ctx its own actions use, whose refresh() rebuilds this card alone. Activar and Desactivar keep the
+// whole tab's refresh (the site list above changes with them).
+function siteCard(s, ctx, view) {
+  const here = { ...ctx, refresh: () => refreshCard(ctx, view, s.site) };
   const error = el("div", { class: "kit-error" });
   const parts = [
     el("div", { class: "kit-head" },
@@ -307,8 +391,9 @@ function siteCard(s, ctx) {
       : el("p", { class: "kit-reco", text: "Cámaras y funciones en orden." }),
   ];
   if (s.in_config) {
-    parts.push(el("h3", { text: "Funciones" }), funcionesRow(s, ctx, error), fieldHelp(AYUDAS.funciones));
-    parts.push(el("h3", { text: "Cámaras" }), camerasTable(s, ctx, error), addCameraRow(s, ctx, error), cameraHelps());
+    parts.push(el("h3", { text: "Funciones" }), funcionesRow(s, here, error), fieldHelp(AYUDAS.funciones));
+    parts.push(el("h3", { text: "Cámaras" }), camerasBlock(s, here, error));
+    if (ctx.sess.admin) parts.push(addCameraRow(s, here, error), cameraHelps());
   }
   if (ctx.sess.admin) parts.push(el("h3", { text: "Gafete y estado" }), adminRow(s, ctx, error));
   parts.push(error);
@@ -318,6 +403,8 @@ function siteCard(s, ctx) {
 function funcionesRow(s, ctx, error) {
   const merma = checkbox("Merma (platos que regresan)", s.funciones.merma);
   const pres = checkbox("Emplatado (platos que salen)", s.funciones.presentacion);
+  merma.box.dataset.key = "merma";                    // data-key: a card rebuilt after an action keeps it if unsaved
+  pres.box.dataset.key = "presentacion";
   const save = wire(btn("Guardar funciones", "primary"), error, async () => {
     await api(sitePath(s.site) + "/funciones", {
       method: "POST", json: { merma: merma.box.checked, presentacion: pres.box.checked },
@@ -328,26 +415,113 @@ function funcionesRow(s, ctx, error) {
   return el("div", { class: "kit-edit" }, merma.node, pres.node, save);
 }
 
-function camerasTable(s, ctx, error) {
+function camerasBlock(s, ctx, error) {
   if (!s.cameras.length) return el("p", { class: "muted", text: "Sin cámaras." });
-  return el("table", {},
-    el("thead", {}, el("tr", {}, ["Cámara", "Fuente", "Rol", "Borde-cocina", ""].map((h) => el("th", { text: h })))),
-    el("tbody", {}, s.cameras.map((c) => cameraRow(s, c, ctx, error))));
+  return el("div", {}, s.cameras.map((c) => cameraBlock(s, c, ctx, error)));
 }
 
-function cameraRow(s, c, ctx, error) {
+// One camera (Section 3.13.2). A phone camera always offers its link; a Pi camera only while its Pi sends
+// nothing (then a phone can take its place).
+function cameraBlock(s, c, ctx, error) {
+  const piDown = c.source === "pi" && c.luz !== "pi";
+  const light = c.luz === "telefono" && c.telefono ? LUZ.telefono + ": «" + c.telefono.nombre + "»" : LUZ[c.luz];
+  const edge = c.role === "both" ? " · " + (c.kitchen_edge ? "cocina: " + EDGES[c.kitchen_edge] : "sin calibrar") : "";
+  const parts = [
+    el("div", { class: "kit-head" },
+      el("span", { class: "kit-name", text: c.name }),
+      el("span", { class: "muted", text: word(SOURCES, c.source) + " · " + word(ROLES, c.role) + edge })),
+    el("div", { style: c.luz === "nada" ? LIGHT_OFF : LIGHT_ON, text: light }),
+  ];
+  if (piDown) {
+    parts.push(el("div", { class: "kit-note", text: "La Pi no manda imagen: un teléfono puede tomar su lugar con el enlace de esta cámara." }));
+  }
+  if (c.telefono) parts.push(phoneLine(s, c, ctx, error));
+  for (const p of c.pendientes) parts.push(pendingLine(s, c, p, ctx, error));
+  const offersLink = c.source === "phone" || piDown;
+  if (offersLink) parts.push(el("div", { class: "muted", text: linkText(c.enlace) }));
+  const buttons = [wire(btn("Mirilla"), error, () => openMirilla(s.site, c.name))];
+  if (offersLink) {
+    buttons.push(wire(btn("Dame el enlace", "primary"), error, async () => {
+      const answer = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace", { method: "POST" });
+      const changed = await linkDialog(s, c, ctx, answer.enlace, answer.nuevo ? "Enlace nuevo." : "");
+      if (answer.nuevo || changed) ctx.refresh();        // the same link, untouched: the card already shows it
+    }));
+    buttons.push(wire(btn("Cambiar enlace"), error, async () => {
+      const ask = "El enlace de " + c.name + " cambia: el anterior deja de servir para entrar. Los teléfonos que ya "
+        + "entraron siguen. ¿Cambiar?";
+      if (!window.confirm(ask)) return;
+      const answer = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace/nuevo", { method: "POST", json: {} });
+      await linkDialog(s, c, ctx, answer.enlace, "Enlace nuevo: el anterior ya no sirve.");
+      ctx.refresh();
+    }));
+  }
+  if (c.source === "phone") {
+    buttons.push(wire(btn("Relevo a Pi"), error, async () => {
+      const who = c.telefono ? " El teléfono «" + c.telefono.nombre + "» deja de capturarla y sale de la cámara." : "";
+      const lost = c.kitchen_edge ? " Pierde su calibración (borde-cocina)." : "";
+      if (!window.confirm("La cámara " + c.name + " vuelve a su Pi." + who + lost + " ¿Seguir?")) return;
+      await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/source", { method: "POST", json: { source: "pi" } });
+      toast("relevo hecho: " + c.name + " ahora es Pi", "ok");
+      ctx.refresh();
+    }));
+  }
+  parts.push(el("div", { class: "kit-edit" }, buttons));
+  if (ctx.sess.admin) parts.push(cameraAdminRow(s, c, ctx, error));
+  return el("div", { style: CAM_BLOCK }, parts);
+}
+
+function codeText(code) {
+  return code.slice(0, 4) + "-" + code.slice(4);
+}
+
+function linkText(link) {
+  if (!link) return "Sin enlace todavía: «Dame el enlace» crea uno.";
+  const life = link.vence ? (link.vencido ? "venció el " : "vence el ") + fmtDate(link.vence) : "permanente";
+  return "Enlace: " + codeText(link.codigo) + " · " + life + (link.vencido ? " («Dame el enlace» crea uno nuevo)" : "");
+}
+
+function phoneLine(s, c, ctx, error) {
+  const nombre = c.telefono.nombre;
+  const out = wire(btn("Sacar", "bad"), error, async () => {
+    if (!window.confirm("¿Sacar a «" + nombre + "» de " + c.name + "? Para volver tendrá que abrir el enlace y esperar a que el admin lo acepte.")) return;
+    await api(phonePath(s, c, c.telefono.id) + "/sacar", { method: "POST" });
+    toast("«" + nombre + "» salió de " + c.name, "ok");
+    ctx.refresh();
+  });
+  return el("div", { class: "kit-edit" }, el("span", { text: "📱 Teléfono de la cámara: «" + nombre + "»" }), out);
+}
+
+function pendingLine(s, c, p, ctx, error) {
+  const from = p.viene_de ? " (ahora es " + p.viene_de + ")" : p.otro_sitio ? " (ahora es una cámara de otro sitio)" : "";
+  const text = "⏳ «" + p.nombre + "»" + from + " pide entrar · " + fmtDate(p.at);
+  if (!ctx.sess.admin) return el("div", { class: "kit-note", text: text + ". Lo acepta el admin." });
+  const accept = wire(btn("Aceptar", "ok"), error, async () => {
+    const notes = [];
+    if (c.source === "pi") {
+      notes.push("La cámara " + c.name + " deja la Pi y pasa al teléfono «" + p.nombre + "»" + (c.kitchen_edge ? " (pierde su calibración)" : "") + ".");
+    }
+    if (p.viene_de) notes.push("«" + p.nombre + "» deja " + p.viene_de + ", que queda libre.");
+    else if (p.otro_sitio) notes.push("«" + p.nombre + "» deja su cámara de otro sitio, que queda libre.");
+    if (notes.length && !window.confirm(notes.join(" ") + " ¿Seguir?")) return;
+    await api(phonePath(s, c, p.id) + "/aceptar", { method: "POST" });
+    toast("«" + p.nombre + "» es ahora la cámara " + c.name, "ok");
+    ctx.refresh();
+  });
+  const reject = wire(btn("Rechazar"), error, async () => {
+    await api(phonePath(s, c, p.id) + "/rechazar", { method: "POST" });
+    toast("pedido de «" + p.nombre + "» rechazado", "ok");
+    ctx.refresh();
+  });
+  return el("div", { class: "kit-edit" }, el("span", { text: text }), accept, reject);
+}
+
+// The admin's own row of a camera: its role, and Quitar (the double confirm).
+function cameraAdminRow(s, c, ctx, error) {
   const role = choice(ROLES, c.role);
+  role.dataset.key = "rol:" + c.name;
   const saveRole = wire(btn("Guardar rol"), error, async () => {
     await api(sitePath(s.site) + "/cameras", { method: "POST", json: { name: c.name, source: c.source, role: role.value } });
     toast("cámara guardada", "ok");
-    ctx.refresh();
-  });
-  const other = c.source === "phone" ? "pi" : "phone";
-  const relevo = wire(btn("Relevo a " + word(SOURCES, other)), error, async () => {
-    const lost = c.kitchen_edge ? " y pierde su calibración (borde-cocina)" : "";
-    if (!window.confirm("La cámara " + c.name + " pasa a fuente «" + word(SOURCES, other) + "»" + lost + ". ¿Seguir?")) return;
-    await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/source", { method: "POST", json: { source: other } });
-    toast("relevo hecho: " + c.name + " ahora es " + word(SOURCES, other), "ok");
     ctx.refresh();
   });
   const remove = wire(btn("Quitar", "bad"), error, async () => {
@@ -358,23 +532,153 @@ function cameraRow(s, c, ctx, error) {
       ctx.refresh();
     }
   });
-  const edge = c.role === "both" ? (c.kitchen_edge ? EDGES[c.kitchen_edge] : "sin calibrar") : "no aplica";
-  return el("tr", {},
-    el("td", { class: "kit-name", text: c.name }),
-    el("td", { text: word(SOURCES, c.source) }),
-    el("td", {}, el("span", { class: "kit-edit" }, role, saveRole)),
-    el("td", { text: edge }),
-    el("td", {}, el("span", { class: "kit-edit" }, relevo, remove)));
+  return el("div", { class: "kit-edit" }, el("span", { class: "muted", text: "Rol" }), role, saveRole, remove);
+}
+
+// --- windows on this page: the link and the mirilla (Section 3.13.2) ------------------------------
+// Both are overlays: while one is open the tab's live re-read waits (inUse), and Escape or Cerrar closes it.
+
+function overlayWindow(title, ...body) {
+  const close = el("button", { class: "primary", type: "button", text: "Cerrar" });
+  const overlay = el("div", { class: "overlay kit-dialog", role: "dialog", "aria-modal": "true" },
+    el("div", { class: "card", style: "max-height: 90vh; overflow: auto; max-width: 720px;" },
+      el("h2", { text: title }), ...body, el("div", { class: "kit-actions" }, close)));
+  return new Promise((resolve) => {
+    const onKey = (ev) => { if (ev.key === "Escape") done(); };
+    function done() {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve();
+    }
+    close.addEventListener("click", done);
+    document.addEventListener("keydown", onKey);
+    document.body.append(overlay);
+    close.focus();
+  });
+}
+
+// The link's code goes after the # (it never reaches a server's logs). Resolves, once closed, with whether the
+// admin changed its duration (the card then shows the new date). After "Guardar duración" the window shows the link
+// as the server has it now (if someone changed it meanwhile, the new code: the old one no longer opens anything).
+async function linkDialog(s, c, ctx, link, note) {
+  let url = "";
+  let current = "";
+  let changed = false;
+  const shown = el("code", { style: "word-break: break-all;" });
+  const code = el("strong", {});
+  const life = el("div", {});
+  const paint = (l) => {
+    current = l.codigo;
+    url = location.origin + "/captura#" + l.codigo;
+    shown.textContent = url;
+    code.textContent = codeText(l.codigo);
+    life.textContent = l.vence ? "Vence: " + fmtDate(l.vence) : "Permanente: no vence.";
+  };
+  paint(link);
+  const copy = el("button", { class: "kit-copy", type: "button", text: "copiar" });
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("enlace copiado", "ok");
+    } catch {
+      toast("no se pudo copiar: selecciónalo a mano", "bad");
+    }
+  });
+  // A phone opens the camera only with https; and "localhost" on a phone is the phone itself.
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+  const warning = local
+    ? "Abriste el mostrador en esta computadora (" + location.host + "): en un teléfono ese enlace no abre nada. Abre el "
+      + "mostrador con la dirección https del club para dar enlaces."
+    : "Abriste el mostrador sin https, así que el enlace también: en el teléfono la cámara no abrirá. Abre el mostrador "
+      + "con la dirección https del club para dar enlaces.";
+  const body = [
+    note ? el("p", { class: "kit-reco", text: note }) : null,
+    el("div", {}, shown, copy),
+    el("p", {}, el("span", { class: "muted", text: "Código: " }), code),
+    life,
+    local || location.protocol !== "https:" ? el("p", { class: "kit-note", text: warning }) : null,
+    el("p", {
+      class: "muted",
+      text: "Mándalo por WhatsApp al teléfono que va a ser " + c.name + ". Lo abre en su navegador (con Tailscale encendido), "
+        + "escribe su nombre y espera a que el admin lo acepte. Cada día, el mismo enlace lo lleva directo a su cámara, "
+        + "si lo abre siempre en el mismo navegador: cada navegador del teléfono (Safari, Chrome, el de WhatsApp) guarda "
+        + "su propio pase.",
+    }),
+  ];
+  if (ctx.sess.admin) {
+    const error = el("div", { class: "kit-error" });
+    const pick = choice(DURACIONES, link.dias === null ? "permanente" : DIAS_KEY[link.dias] || "7d");
+    const save = wire(btn("Guardar duración"), error, async () => {
+      const answer = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace/duracion", {
+        method: "POST", json: { duracion: pick.value },
+      });
+      const moved = answer.enlace.codigo !== current;
+      paint(answer.enlace);
+      changed = true;
+      toast(moved ? "duración guardada; el enlace había cambiado: la ventana muestra el de ahora" : "duración guardada: cuenta desde ahora", "ok");
+    });
+    body.push(el("div", { class: "kit-edit" }, el("span", { class: "muted", text: "Duración" }), pick, save),
+      fieldHelp(AYUDAS.duracion), error);
+  }
+  await overlayWindow("Enlace de " + c.name + " (" + s.site + ")", ...body.filter(Boolean));
+  return changed;
+}
+
+async function openMirilla(site, camera) {
+  const st = await api("/api/camera/state?site=" + enc(site));
+  const img = el("img", { alt: "", class: "hidden", style: "width: 100%; display: block; border-radius: 8px; background: #000;" });
+  const empty = el("p", { class: "muted", text: "pidiendo la copia…" });
+  const info = el("p", { class: "muted" });
+  let url = null;
+  const tick = async () => {
+    const res = await fetch("/api/camera/frame?site=" + enc(site) + "&camera=" + enc(camera) + "&_=" + Date.now(),
+      { credentials: "same-origin", cache: "no-store" });
+    if (res.status === 404) {
+      img.classList.add("hidden");
+      empty.classList.remove("hidden");
+      empty.textContent = "Sin copia fresca: nada está mandando imagen de esta cámara.";
+      info.textContent = "";
+      return;
+    }
+    if (!res.ok) { empty.textContent = "No se pudo leer la copia (HTTP " + res.status + ")."; return; }
+    const sharp = parseFloat(res.headers.get("X-Sharpness"));
+    const age = parseFloat(res.headers.get("X-Frame-Age-S"));
+    const blob = await res.blob();
+    if (url) URL.revokeObjectURL(url);
+    url = URL.createObjectURL(blob);
+    img.src = url;
+    img.classList.remove("hidden");
+    empty.classList.add("hidden");
+    const stale = Number.isFinite(age) && age > 3 * st.frame_poll_s;
+    info.textContent = (stale ? "Copia vieja: la cámara no está mandando. " : "") + "Copia de hace "
+      + (Number.isFinite(age) ? Math.round(age) : "?") + " s · nitidez " + (Number.isFinite(sharp) ? sharp : "?")
+      + " (piso " + st.sharpness_min + ").";
+  };
+  const stop = poll(tick, st.frame_poll_s * 1000);
+  await overlayWindow("Mirilla · " + camera + " (" + site + ")", img, empty, info,
+    el("p", { class: "muted", text: "Se actualiza sola cada " + st.frame_poll_s + " s mientras está abierta. Para alinear o calibrar: pestaña Cámara." }));
+  stop();
+  if (url) URL.revokeObjectURL(url);
 }
 
 function addCameraRow(s, ctx, error) {
-  const name = el("input", { type: "text", autocomplete: "off", placeholder: AYUDAS.camara.ejemplo, style: INLINE });
-  const source = choice(SOURCES, "phone");
+  const name = el("input", { type: "text", autocomplete: "off", placeholder: AYUDAS.camara.ejemplo, style: INLINE, "data-key": "nueva:nombre" });
+  const source = choice(SOURCES, "pi");
   const role = choice(ROLES, "both");
+  source.dataset.key = "nueva:fuente";
+  role.dataset.key = "nueva:rol";
   const add = wire(btn("Agregar cámara"), error, async () => {
+    const wanted = name.value.trim();
+    // A name the site already has is refused here at once, and by the server too (nueva: never an edit of it).
+    if (s.cameras.some((c) => c.name === wanted)) {
+      throw new Error("Ya hay una cámara " + wanted + " en " + s.site + ": su rol se cambia en su propia fila.");
+    }
     await api(sitePath(s.site) + "/cameras", {
-      method: "POST", json: { name: name.value.trim(), source: source.value, role: role.value },
+      method: "POST", json: { name: wanted, source: source.value, role: role.value, nueva: true },
     });
+    name.value = "";                                   // saved: the row goes back to empty, not carried as unsaved
+    source.value = "pi";
+    role.value = "both";
     toast("cámara agregada", "ok");
     ctx.refresh();
   });
@@ -401,9 +705,8 @@ function showKey(box, key) {
     el("div", {}, el("span", { class: "muted", text: "Gafete: " }), el("code", { text: key }), copy, hide),
     el("div", {
       class: "kit-note",
-      text: "Para inscribir un teléfono: instala /captura en su pantalla de inicio, ábrela desde ese ícono y pega "
-        + "este gafete (instalar primero, inscribir después). Puedes abrir el mostrador en ese mismo teléfono para "
-        + "copiarlo. No lo compartas por chat.",
+      text: "El gafete es la llave de las máquinas del sitio (el bot lo lee solo; una Pi lo lleva). Un teléfono no lo usa: "
+        + "entra con el enlace de su cámara. No lo compartas por chat.",
     })));
 }
 
@@ -417,7 +720,7 @@ function adminRow(s, ctx, error) {
     const result = await confirmFlow(() => api(sitePath(s.site) + "/gafete/regenerate", { method: "POST" }));
     if (result) {
       showKey(shown, result.gafete);
-      toast("gafete nuevo creado: inscribe otra vez cada dispositivo", "ok");
+      toast("gafete nuevo creado: la Pi necesita el nuevo; el bot lo lee solo", "ok");
     }
   });
   const active = s.active
@@ -443,7 +746,7 @@ function adminRow(s, ctx, error) {
 
 function camInputs() {
   const name = el("input", { type: "text", autocomplete: "off", placeholder: "barra-1", style: INLINE });
-  const source = choice(SOURCES, "phone");
+  const source = choice(SOURCES, "pi");
   const role = choice(ROLES, "both");
   return {
     node: el("div", { class: "kit-edit", style: "margin-bottom: 6px;" }, name, source, role),

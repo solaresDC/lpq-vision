@@ -6,9 +6,9 @@ Rows come back as dicts (row_factory=dict_row) so callers read columns by name.
 
 Fase 3 adds every statement of the admin era at once: the migrations' table steps, accounts,
 the bitácora, the one-day hour changes (Section 3.13.1; the one-night extension was the first kind),
-the gafete, the papelera, the usage write and the spend dashboard, menu editing and reference photos,
-and the bot's new cursors. The shared plate filter now leaves 'discarded' rows out of review, stats
-and gallery: only the papelera lists them.
+the gafete, the camera links and the phones (Section 3.13.2), the papelera, the usage write and the
+spend dashboard, menu editing and reference photos, and the bot's new cursors. The shared plate filter
+now leaves 'discarded' rows out of review, stats and gallery: only the papelera lists them.
 """
 
 from __future__ import annotations
@@ -110,6 +110,41 @@ ADD_SITES_DEVICE_KEY = "ALTER TABLE sites ADD COLUMN device_key TEXT"
 ADD_HORARIO_DIA = "ALTER TABLE horario_extensiones ADD COLUMN dia DATE"
 ADD_HORARIO_ABRE_AT = "ALTER TABLE horario_extensiones ADD COLUMN abre_at TIMESTAMPTZ"
 ADD_HORARIO_CERRADO = "ALTER TABLE horario_extensiones ADD COLUMN cerrado BOOLEAN NOT NULL DEFAULT false"
+
+# Section 3.13.2: the camera links. One live link per camera; its code only lets a phone ASK to be that camera (the
+# admin's Aceptar decides). dias NULL and vence_at NULL = permanente.
+CREATE_CAMARA_ENLACES_TABLE = """
+CREATE TABLE camara_enlaces (
+  site      TEXT NOT NULL REFERENCES sites(site),
+  camera    TEXT NOT NULL,
+  codigo    TEXT NOT NULL UNIQUE,
+  dias      INT CHECK (dias IS NULL OR dias > 0),
+  vence_at  TIMESTAMPTZ,
+  creado_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (site, camera)
+)
+"""
+
+# Section 3.13.2: one row per phone while it captures a camera or waits for the admin. pase = the sha256 of the
+# phone's cookie (the cookie itself is never stored); site and camera = the camera it captures, ONE phone per camera
+# (UNIQUE; empty pairs never collide); pide_* = its one request waiting for the admin.
+CREATE_TELEFONOS_TABLE = """
+CREATE TABLE telefonos (
+  id          BIGSERIAL PRIMARY KEY,
+  pase        TEXT NOT NULL UNIQUE,
+  nombre      TEXT NOT NULL,
+  site        TEXT REFERENCES sites(site),
+  camera      TEXT,
+  pide_site   TEXT REFERENCES sites(site),
+  pide_camera TEXT,
+  pide_at     TIMESTAMPTZ,
+  creado_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (site, camera),
+  CHECK ((site IS NULL) = (camera IS NULL)),
+  CHECK ((pide_site IS NULL) = (pide_camera IS NULL) AND (pide_site IS NULL) = (pide_at IS NULL)),
+  CHECK (site IS NOT NULL OR pide_site IS NOT NULL)
+)
+"""
 
 # Owner ruling 3.9.2: accounts can be deleted, recoverable for USER_RECOVERY_DAYS. uid is the permanent
 # account number: born with the row (existing rows get theirs at this migration), never reused.
@@ -416,6 +451,15 @@ WHERE id > %(after_id)s
 ORDER BY id
 """
 
+# The bot's start (Section 3.13.2): the rows of its lookback window already there, which it never announces; a row
+# of that window whose transaction commits later is announced.
+ADMIN_LOG_BETWEEN = """
+SELECT id, ts, action, detail
+FROM admin_log
+WHERE id > %(after_id)s AND id <= %(upto)s
+ORDER BY id
+"""
+
 
 # --------------------------------------------------------------------- the one-day hour changes (Fase 3)
 
@@ -448,6 +492,140 @@ WHERE h.until < now() - %(grace)s
     WHERE o.site = h.site AND o.dia = h.dia AND o.until >= now() - %(grace)s
   )
 """
+
+
+# --------------------------------------------------------------------- camera links and phones (Section 3.13.2)
+
+# Every link with its state now (the mostrador's rows).
+SELECT_ENLACES_ALL = """
+SELECT site, camera, codigo, dias, vence_at, (vence_at IS NOT NULL AND vence_at <= now()) AS vencido
+FROM camara_enlaces
+ORDER BY site, camera
+"""
+
+LOCK_ENLACE = """
+SELECT site, camera, codigo, dias, vence_at, (vence_at IS NOT NULL AND vence_at <= now()) AS vencido
+FROM camara_enlaces
+WHERE site = %(site)s AND camera = %(camera)s
+FOR UPDATE
+"""
+
+# What a phone opened: the link behind a code, with its site's state.
+SELECT_ENLACE_BY_CODIGO = """
+SELECT e.site, e.camera, (e.vence_at IS NOT NULL AND e.vence_at <= now()) AS vencido, s.active
+FROM camara_enlaces AS e
+JOIN sites AS s ON s.site = e.site
+WHERE e.codigo = %(codigo)s
+"""
+
+# Dame el enlace for a camera with no link yet: a link that someone else created a moment before wins (no row back).
+INSERT_ENLACE = """
+INSERT INTO camara_enlaces (site, camera, codigo, dias, vence_at)
+VALUES (%(site)s, %(camera)s, %(codigo)s, %(dias)s,
+        CASE WHEN %(dias)s::int IS NULL THEN NULL ELSE now() + make_interval(days => %(dias)s::int) END)
+ON CONFLICT (site, camera) DO NOTHING
+RETURNING site, camera, codigo, dias, vence_at, false AS vencido
+"""
+
+# A new code for a camera (Dame el enlace when it expired; Cambiar enlace): the old code stops opening at once, and
+# the phones already inside stay. dias NULL = permanente.
+UPSERT_ENLACE = """
+INSERT INTO camara_enlaces (site, camera, codigo, dias, vence_at)
+VALUES (%(site)s, %(camera)s, %(codigo)s, %(dias)s,
+        CASE WHEN %(dias)s::int IS NULL THEN NULL ELSE now() + make_interval(days => %(dias)s::int) END)
+ON CONFLICT (site, camera) DO UPDATE
+SET codigo = EXCLUDED.codigo, dias = EXCLUDED.dias, vence_at = EXCLUDED.vence_at, creado_at = now()
+RETURNING site, camera, codigo, dias, vence_at, false AS vencido
+"""
+
+# The admin's duración: the same code, counted again from now.
+SET_ENLACE_DIAS = """
+UPDATE camara_enlaces
+SET dias = %(dias)s,
+    vence_at = CASE WHEN %(dias)s::int IS NULL THEN NULL ELSE now() + make_interval(days => %(dias)s::int) END
+WHERE site = %(site)s AND camera = %(camera)s
+RETURNING site, camera, codigo, dias, vence_at, false AS vencido
+"""
+
+DELETE_ENLACE = "DELETE FROM camara_enlaces WHERE site = %(site)s AND camera = %(camera)s"
+
+# The phone behind a pass (the sha256 of its cookie), with whether its camera's site and its request's site are active.
+SELECT_TELEFONO_BY_PASE = """
+SELECT t.id, t.nombre, t.site, t.camera, t.pide_site, t.pide_camera, t.pide_at,
+       COALESCE(s.active, false) AS site_active, COALESCE(p.active, false) AS pide_active
+FROM telefonos AS t
+LEFT JOIN sites AS s ON s.site = t.site
+LEFT JOIN sites AS p ON p.site = t.pide_site
+WHERE t.pase = %(pase)s
+"""
+
+LOCK_TELEFONO_BY_PASE = """
+SELECT id, pase, nombre, site, camera, pide_site, pide_camera, pide_at
+FROM telefonos
+WHERE pase = %(pase)s
+FOR UPDATE
+"""
+
+SELECT_TELEFONO = "SELECT id, nombre, site, camera, pide_site, pide_camera, pide_at FROM telefonos WHERE id = %(id)s"
+
+LOCK_TELEFONO = """
+SELECT id, pase, nombre, site, camera, pide_site, pide_camera, pide_at
+FROM telefonos
+WHERE id = %(id)s
+FOR UPDATE
+"""
+
+# The phone that captures a camera (one at most).
+SELECT_TELEFONO_DE_CAMARA = "SELECT id, nombre FROM telefonos WHERE site = %(site)s AND camera = %(camera)s"
+
+# The other phones waiting for one camera (id -1 = count them all).
+COUNT_PEDIDOS_DE_CAMARA = """
+SELECT COUNT(*) AS n FROM telefonos WHERE pide_site = %(site)s AND pide_camera = %(camera)s AND id <> %(id)s
+"""
+
+# One camera's phones change one writer at a time: a request (pedir), Aceptar, Quitar la cámara and Relevo a Pi take
+# this lock first, until their transaction ends. So a request never lands on a camera that just got its phone or was
+# removed, and the wait list keeps its limit. Always before any telefonos row lock (one order: no deadlock).
+LOCK_CAMARA = "SELECT pg_advisory_xact_lock(hashtextextended(%(site)s::text || '/' || %(camera)s::text, 3132))"
+
+# Every phone of one camera, the one capturing it and the ones waiting for it, locked in one order (by id).
+LOCK_TELEFONOS_DE_CAMARA = """
+SELECT id, pase, nombre, site, camera, pide_site, pide_camera, pide_at
+FROM telefonos
+WHERE (site = %(site)s AND camera = %(camera)s) OR (pide_site = %(site)s AND pide_camera = %(camera)s)
+ORDER BY id
+FOR UPDATE
+"""
+
+# Every phone (the mostrador's rows): who captures each camera and who waits for it, oldest request first.
+SELECT_TELEFONOS_ALL = """
+SELECT id, nombre, site, camera, pide_site, pide_camera, pide_at
+FROM telefonos
+ORDER BY pide_at NULLS FIRST, id
+"""
+
+INSERT_TELEFONO_PIDE = """
+INSERT INTO telefonos (pase, nombre, pide_site, pide_camera, pide_at)
+VALUES (%(pase)s, %(nombre)s, %(site)s, %(camera)s, now())
+RETURNING id
+"""
+
+SET_TELEFONO_PIDE = """
+UPDATE telefonos SET nombre = %(nombre)s, pide_site = %(site)s, pide_camera = %(camera)s, pide_at = now()
+WHERE id = %(id)s
+"""
+
+SET_TELEFONO_NOMBRE = "UPDATE telefonos SET nombre = %(nombre)s WHERE id = %(id)s"
+
+# Aceptar: the phone becomes that camera (its previous camera, if any, is free from this moment).
+BIND_TELEFONO = """
+UPDATE telefonos SET site = %(site)s, camera = %(camera)s, pide_site = NULL, pide_camera = NULL, pide_at = NULL
+WHERE id = %(id)s
+"""
+
+CLEAR_TELEFONO_PIDE = "UPDATE telefonos SET pide_site = NULL, pide_camera = NULL, pide_at = NULL WHERE id = %(id)s"
+UNBIND_TELEFONO = "UPDATE telefonos SET site = NULL, camera = NULL WHERE id = %(id)s"
+DELETE_TELEFONO = "DELETE FROM telefonos WHERE id = %(id)s"
 
 
 # --------------------------------------------------------------------- menu editing and reference photos (Fase 3)

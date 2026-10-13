@@ -16,7 +16,7 @@ bot last called; a timer switches the forensic river off at raw_logging_off_at t
 and /api/upload stamps the SELECTED merma prompt's version as the plan of record.
 
 Fase 3 (3.13), the gafete wall (SPEC 1.3): /api/upload needs a session of the site or that site's
-gafete (X-Device-Key or the device cookie), and /api/plates/{id} a session or a gafete that may read
+gafete (the X-Device-Key header; since 3.13.2 never a cookie), and /api/plates/{id} a session or a gafete that may read
 the plate's site; their SHAPES are untouched, and /api/health stays free. /api/upload stores ONE light
 copy of the photo (owner ruling 3.10.1), the same shrink as the burst road.
 """

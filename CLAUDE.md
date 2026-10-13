@@ -20,7 +20,7 @@ THE SYSTEM IS ONE: the demo happens only after this phase's checklist is green.
 | Piece | Choice | Notes |
 |---|---|---|
 | Language | Python | containers on python:3.12.14-slim (pinned at build); host has 3.11.5 |
-| API | FastAPI + uvicorn, ONE process | main.py (the three Fase-1 endpoints), auth.py (users, sessions, grant, gafete), routes.py (capture + human lanes), config_writer.py (the one writer), admin.py hub + six admin_*.py families; RAM sessions, grants, pending confirms, the frame store and the black clocks depend on ONE process |
+| API | FastAPI + uvicorn, ONE process | main.py (the three Fase-1 endpoints), auth.py (users, sessions, grant, gafete, the phones' pass), routes.py (capture + human lanes), config_writer.py (the one writer), admin.py hub + six admin_*.py families; RAM sessions, grants, pending confirms, the frame store and the black clocks depend on ONE process |
 | Validation | pydantic | ALL shapes in brain/validator/models.py; knobs.py = the knob registry (the whitelist); textos.py = bot texts, fichas, renderer, validator, destinations map (pure code) |
 | LLM adapter | LiteLLM, LIBRARY mode, PINNED | model from config (claude-sonnet-5); max_tokens and llm_timeout_s from the machine block; model `cascade` stays "off"; prompt caching on |
 | DB + queue | Postgres 16.15; queue = `jobs` table, FOR UPDATE SKIP LOCKED | NO Redis/broker, ever; ALL SQL in brain/db/queries.py; schema.sql sealed forever; evolution ONLY via migrations.py (existence-gated ADDs of columns and tables, every boot) |
@@ -64,7 +64,8 @@ laptop Docker 27.1.1 + Compose v2.29.1-desktop.1; server Docker 29.8.0 + Compose
    values, passwords, hashes or gafetes. Account hashes live in the users table from Fase 3;
    plaintext passwords are typed only by the human (UI over club HTTPS, or set_password via
    getpass); nothing auth-related is logged beyond the user name. A gafete lives only in the DB and
-   on the enrolled device.
+   on the machines that use it (the bot, the Pi); a phone carries only its own pass (an httponly
+   cookie), and only its sha256 is stored. A camera link's code is never logged.
 3. Sealed architecture is law: broken? fix the implementation, or STOP and flag.
 4. Two-compose design exact; no compose.yaml ever; `-f compose.mac.yaml` always.
 5. Absent-when-off everywhere (overrides, textos, prices, mantenimiento, raw_logging_off_at,
