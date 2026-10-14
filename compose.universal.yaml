@@ -14,6 +14,9 @@ services:
       - ./config:/app/config
       - photos:/data/photos
       - logs:/data/logs
+      # The butler's mailbox (SPEC 1.7): its DIRECTORY, so a restarted butler's new socket shows here too.
+      # fastapi is the ONLY service that mounts it, read-only: it can talk to the butler, never touch its files.
+      - /run/lpq-butler:/run/lpq-butler:ro
     ports:
       - "${BIND_IP:-127.0.0.1}:8000:8000"
     logging:
@@ -67,6 +70,7 @@ services:
     env_file: .env
     volumes:
       - ./config:/app/config
+      - logs:/data/logs
     logging:
       driver: json-file
       options:

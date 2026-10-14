@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.15 (HEAD was 94c8b8e, Section 3.14).
+- Last update: Section 3.16 (HEAD was 2ec4b5b, Section 3.15).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -73,14 +73,19 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   again (only a full engine restart fixed it before 3.4).
 - Another program (Ozzo) uses port 8001 (the owner confirmed it after 3.8.1). If localhost:8000 acts
   strange, use 127.0.0.1:8000.
-- The laptop never runs the butler (CLAUDE.md), so its machine room answers "El mayordomo no responde" to every
-  butler action, and its checklist shows the butler red, by design. The room counts the worker containers by name:
-  while a section's check stops the worker the checklist reads 0 analysts, and a ventanilla that booted in those
+- The laptop never runs the butler as a service (CLAUDE.md), so its machine room answers "El mayordomo no responde" to
+  every butler action, and its checklist shows the butler red, by design. The room counts the worker containers by
+  name: while a section's check stops the worker the checklist reads 0 analysts, and a ventanilla that booted in those
   minutes writes workers.reconverge_fallida (a true row, not a test row). A section's Step 2 waits for the
   reconvergence's log line before it stops the worker.
+- From 3.16 fastapi mounts /run/lpq-butler (read-only); on the laptop that folder lives inside Docker Desktop's Linux VM
+  and stays empty (no butler). A section or a ✋ that tests the butler runs it with --dry-run in a throwaway container
+  (lpq-butler-prueba), started from a Windows shell (Git Bash or PowerShell; a WSL distro's own shell sees another
+  /run/lpq-butler), then stops it with docker stop (it removes its socket) and removes it; a second run needs a
+  fresh one (its lock remembers 10 minutes).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.15; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.16; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -99,6 +104,45 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.16 (built in Section 3.16): the butler
+- The butler (el mayordomo; SPEC 1.7 and 3.16's promise list): butler/lpq_butler.py (standard library only) and
+  butler/lpq-butler.service. A service of the server's host only, installed in 3.18; never a service on the laptop.
+  Built defaults (HQ's standard choices; the owner may change any of them):
+  - The mailbox: /run/lpq-butler/butler.sock, root-only; its folder is bind-mounted into fastapi READ-ONLY and nowhere
+    else (the compose ADD, in both compose files, with the bot's logs volume): fastapi can talk to the butler, never
+    touch its files. One line per connection and one answer: "ok <id>" (the UTC time plus 4 hex; the bitácora row of
+    the act carries it, and so does the butler's log) or "rechazado: <motivo>", in words the room shows as they are.
+    A connection that sends nothing is the probe: closed, never logged. A line must arrive whole within 2 s.
+  - Each line runs ONE exact command, never through a shell, in /opt/lpq_vision with a fixed clean environment:
+    reboot = `/usr/bin/systemctl reboot`; scale worker N = `/usr/bin/docker compose -f compose.mac.yaml up -d
+    --no-deps --no-recreate --no-build --scale worker=N worker`; restart S = `/usr/bin/docker compose -f
+    compose.mac.yaml restart --no-deps S`. Anything else: "no conoce esa orden".
+  - It answers BEFORE it acts; an answer that cannot be delivered means the order is not run (and its lock is given
+    back). A reboot waits 5 s after its "ok", so the api's reboot row lands before the host goes down. The api trusts
+    a reboot the butler took (its "ok" or no word) only if the ventanilla ends within 3 minutes: still alive then,
+    the warned chats hear that it did not happen (an "ok" says the butler took the order, not that the host rebooted).
+  - One order at a time: a line that arrives while one runs is refused ("todavía está con la orden anterior
+    (...)"), and the probe still answers. A command still running after 3 minutes is stopped. A command that fails
+    after its "ok" shows in the butler's log (`journalctl -u lpq-butler`), not in the room.
+  - The lock: reboot and each restart line once per 10 minutes, per full line; scale has none. Its memory is
+    /var/lib/lpq-butler/locks.json (root-only), written whole BEFORE the command runs: a line whose lock cannot be
+    written is refused; an unreadable file counts as empty (said in the log). The lock is judged on the clock, within
+    10 minutes either side of when the line was taken: a clock that jumps back far frees the line instead of locking
+    it for the whole jump (a small step back stretches the lock by that step).
+  - It does not start (the room shows it red) when docker, systemctl or /opt/lpq_vision/compose.mac.yaml is missing,
+    when another butler answers at the mailbox (or cannot be judged), or when something that is not a socket sits
+    there; a socket where a connect is refused is a stale one, and is replaced. A stop (systemctl stop, docker stop)
+    ends it cleanly and removes its own socket: the folder is left empty.
+  - --dry-run: the same answers, lock and one-at-a-time rule, but each command is printed instead of run. The
+    laptop's round trip runs it in a throwaway container (lpq-butler-prueba: the fastapi image, no network, the
+    mailbox folder mounted; the program copied in with docker cp, the road this ledger already proves for Windows
+    paths), then stops it (docker stop) and removes it.
+  - The unit: Type=exec, `python3 -I /usr/local/lib/lpq-butler/lpq_butler.py`, Restart=always,
+    Before=docker.service; the mailbox folder (RuntimeDirectory, 0700) is kept across the butler's restarts
+    (RuntimeDirectoryPreserve: a new folder would hide the socket from fastapi's mount); the lock's folder
+    (StateDirectory, 0700); UMask 0077; IPAddressDeny=any (no IP traffic). No other sandboxing: the three verbs need
+    root's reach, and only the server can prove a stricter unit.
 
 ### 3.15 (built in Section 3.15): the machine room
 - The second floor, /maquinas (SPEC 1.6 and 1.7, and 3.15's promise list). Built defaults (HQ's standard choices; the
@@ -131,10 +175,10 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
     the last one the butler took, while the butler does not answer, or when the database cannot say which chats to
     warn. Otherwise: the notice (aviso_reinicio, editable in Voz del bot) to every chat, 60 s, then the butler's
     reboot. Refused or absent then: the warned chats hear at once the new text aviso_reinicio_cancelado (family all,
-    editable). Taken without a readable answer: it may be rebooting, so nothing is said for 3 minutes; a ventanilla
-    still alive then means it did not happen, and the warned chats hear it. The page follows it: a NEW ventanilla
-    (the sessions are gone) means it happened and the page reloads; the same ventanilla tells why it did not happen,
-    and the checklist says so for an hour.
+    editable). Taken (the butler's "ok", from 3.16, or no readable answer): it may be rebooting, so nothing is said
+    for 3 minutes; a ventanilla still alive then means it did not happen, and the warned chats hear it. The page
+    follows it: a NEW ventanilla (the sessions are gone) means it happened and the page reloads; the same ventanilla
+    tells why it did not happen, and the checklist says so for an hour.
   - The checklist ("Estado: la lista de arranque"), re-read every 5 s: ventanilla (when it started), base de datos,
     migraciones (this boot's report), cola (the mostrador's counts; grey while paused or past the bot's backlog
     threshold), analistas (corriendo de deseados, and when the last plate finished), cámaras (the active sites'
@@ -499,17 +543,16 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
-- 3.16, the butler and the compose ADDs: three verbs, the persistent lock, the probe, --dry-run; the
-  mailbox mount and the bot's logs volume (the bot writes /data/logs/bot.log since 3.11; until the
-  volume exists that file stays inside its container); a laptop round trip in a throwaway container.
-  From 3.15's machine room: the butler answers "ok <id>" BEFORE it acts (a restart of fastapi or a reboot
-  would otherwise kill the answer the page waits for), and a line it took is in its 10-minute lock.
 - 3.17, local closing: the full local checklist and the Fase 1 and 2 regression; the backup also copies
   config.yaml and textos.yaml.
-- 3.18, deploy: a staged copy WITHOUT config.yaml or textos.yaml, built while the old one serves; the
-  butler installed; the one-time copy of the notes and labels (scripts/notas_from_menu.py, once the
-  new code has booted) on the server; the iPhone list and the cleanup (the two "Para 3.18" sections
-  below); then the owner's first real Crear restaurante.
+- 3.18, deploy: a staged copy WITHOUT config.yaml or textos.yaml, built while the old one serves (no Aplicar between
+  the build and up -d); the butler installed BEFORE the new stack's up -d, so fastapi's new mount finds its folder
+  (lpq_butler.py copied to /usr/local/lib/lpq-butler/, lpq-butler.service to /etc/systemd/system/, daemon-reload,
+  enable --now; a later update of the butler is copy plus systemctl restart lpq-butler); then the room's checklist
+  shows it green, and once the boot reconvergence's log line is out (the butler takes one order at a time) one
+  Reiniciar el bot proves the real round trip; the one-time copy of the notes and labels (scripts/notas_from_menu.py,
+  once the new code has booted) on the server; the iPhone list and the cleanup (the two "Para 3.18" sections below);
+  then the owner's first real Crear restaurante.
 - 3.19, the ceremony: the server's own cuarto password; TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH and
   DEMO_PASSWORD_HASH leave both .env files in the SPEC's order; the present/absent proof.
 - 3.20, T-F6 on the server: the full regression, the yes/no checklist against the 14 criteria, the
@@ -550,7 +593,11 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   test camera of 3.13.2's ✋ (its own steps remove them; 3.18 confirms none is left).
 - From 3.14: photos/_smoke/check_314.py and photos/_smoke/smoke_314.py; the smoke plate of 3.14's ✋ (its own
   Eliminar ya deletes it; 3.18 confirms none is left).
-- From 3.15: photos/_smoke/check_315.py (its copy in the fastapi container vanishes at the next rebuild).
+- From 3.15: photos/_smoke/check_315.py (its copy in the fastapi container vanishes at the next rebuild). From 3.16 a
+  reboot the butler took waits its 3 minutes, so that check's F4 and F5 no longer hold: never rerun it as it is.
+- From 3.16: photos/_smoke/check_316.py (its copy in the fastapi container vanishes at the next recreate); no
+  lpq-butler-prueba container left (`docker ps -a`). The /run/lpq-butler folder in Docker Desktop's VM belongs to the
+  compose mount, and is empty once the throwaway butler is stopped: not a residue.
 
 ## Waiting on the owner (no section owns these)
 - 3.13.2's and 3.14's ✋, in one sitting (3.13.2's steps first; both commits were pushed early, on 13 Oct). 3.13.2's,
@@ -564,6 +611,10 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   unlock test); the room's cards; the assert's bounce; max_tokens there and back; every butler action answering "no
   responde" with nothing changed and nobody warned; the checklist (bot and mayordomo red on the laptop, by design);
   the live log viewer; Cerrar el cuarto. Everything put back.
+- 3.16's ✋, on the laptop (no bot bracket): the throwaway butler started by hand (--dry-run), and the room sees it
+  green; Reiniciar el bot taken, then refused by its 10-minute lock; Aplicar 2 and back to 1; its log shows each
+  command printed, never run; the butler stopped and removed (its folder empty) and the room red again. Everything
+  put back.
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never

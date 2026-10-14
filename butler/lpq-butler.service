@@ -1,0 +1,32 @@
+# LPQ_VISION's butler (el mayordomo), SPEC 1.7: the machine room's one hand on the host.
+# Installed on the SERVER only, by the deploy section's listed commands (Section 3.18): the program is copied to
+# /usr/local/lib/lpq-butler/ and this file to /etc/systemd/system/. Never a service on the laptop.
+# Its mailbox is /run/lpq-butler/butler.sock (the folder is bind-mounted into fastapi, read-only, and nowhere else);
+# the lock's memory is /var/lib/lpq-butler/locks.json. Its log: journalctl -u lpq-butler
+
+[Unit]
+Description=LPQ_VISION butler (el mayordomo): reboot, scale worker, restart one service
+# The mailbox directory must exist before Docker starts fastapi, whose bind mount has to find it.
+Before=docker.service
+
+[Service]
+# exec: started once its program runs, so the folders below exist before Docker starts.
+Type=exec
+ExecStart=/usr/bin/python3 -I /usr/local/lib/lpq-butler/lpq_butler.py
+Restart=always
+RestartSec=2
+# /run/lpq-butler: created before the butler starts, root-only, and KEPT when it stops or restarts: a new
+# directory would hide the mailbox from fastapi's bind mount until fastapi is recreated.
+RuntimeDirectory=lpq-butler
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+# /var/lib/lpq-butler: the lock's memory, root-only and outside the mailbox; it survives the reboot it guards.
+StateDirectory=lpq-butler
+StateDirectoryMode=0700
+UMask=0077
+# Deaf to every network: no IP traffic for the butler or the commands it runs (Docker and systemd are reached
+# through their own unix sockets).
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

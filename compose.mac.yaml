@@ -14,6 +14,9 @@ services:
       - ./config:/app/config
       - photos:/data/photos
       - logs:/data/logs
+      # The butler's mailbox (SPEC 1.7): its DIRECTORY, so a restarted butler's new socket shows here too.
+      # fastapi is the ONLY service that mounts it, read-only: it can talk to the butler, never touch its files.
+      - /run/lpq-butler:/run/lpq-butler:ro
     # BIND_IP comes from .env: unset on the laptop -> 127.0.0.1; on the server 100.126.179.123
     # (the Tailscale IP). Docker publishes ports through its own iptables chains and BYPASSES UFW,
     # so this bind IS the exposure control. Never rely on UFW for Docker-published ports.
@@ -72,6 +75,7 @@ services:
     env_file: .env
     volumes:
       - ./config:/app/config
+      - logs:/data/logs
     logging:
       driver: json-file
       options:

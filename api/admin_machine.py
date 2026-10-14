@@ -30,7 +30,8 @@ The running analysts are counted by the compose network's DNS (one address per l
 unknown while postgres resolves): read-only, no docker socket; a lookup that fails is "?", never a guess. At boot,
 after RECONVERGE_SETTLE_S and two equal counts, the api compares the count with machine.workers (the remembered
 desire: 0 running is a difference too) and calls the butler ONCE when they differ: its row workers.reconverge is
-what the bot announces. A butler answer that cannot say whether it acted is never announced as a refusal.
+what the bot announces. A butler answer that cannot say whether it acted is never announced as a refusal, and a
+reboot it took (its "ok" or no word) counts as done only if this process ends within REBOOT_GRACE_S.
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ BUTLER_WINDOW_MIN = 10            # the butler takes one identical reboot or res
 BUTLER_CONNECT_S = 2              # a mailbox that takes no connect in this time is absent
 BUTLER_REPLY_S = 120              # the longest a verb may take to answer (a scale starts containers)
 BUTLER_REPLY_MAX = 512            # bytes of the butler's one reply line
-REBOOT_GRACE_S = 180              # a reboot line the butler took without a word: alive after this = it did not happen
+REBOOT_GRACE_S = 180              # a reboot line the butler took (its ok or no word): alive after this = it did not happen
 RESTART_MARK_S = 300              # how long the ventanilla's own restart, once taken, keeps reboots away
 RECONVERGE_SETTLE_S = 90          # the boot reconvergence waits this long before its first count
 RECONVERGE_RETRY_S = 10           # between two counts
@@ -609,20 +610,21 @@ def _ended(estado: str, motivo: str = "", avisados: int | None = None, de: int |
 
 
 async def _reboot_later(usuario: str, uid: int | None, delay: int, warned: list[str]) -> None:
-    """After the notice's minute: the butler's reboot. Taken = a reboot row (the api dies soon after). Refused or
-    absent = the chats that were warned hear at once that it did not happen (before any row: that message needs no
-    database), then a reboot.fallido row. Taken without a readable answer = the reboot may be under way: a reboot
-    row ("sin respuesta"), and only if this process still lives after REBOOT_GRACE_S do the chats hear it did not
-    happen."""
+    """After the notice's minute: the butler's reboot. Refused or absent = the chats that were warned hear at once that
+    it did not happen (before any row: that message needs no database), then a reboot.fallido row. Taken, with its
+    "ok" or without a readable answer = the reboot is under way: a reboot row at once (the butler waits a few
+    seconds before the host goes down, so it lands), and only if this process still lives after REBOOT_GRACE_S do
+    the chats hear it did not happen (an "ok" says the butler took the order, not that the host rebooted)."""
     try:
         await asyncio.sleep(delay)
         verdict, info = await _butler("reboot")
         if verdict == "ok":
             _ended("tomado")
             await _row(usuario, "reboot", {"mayordomo": info}, uid)
-            log.info("reboot taken by the butler")
-            return
-        if verdict == "sin_respuesta":
+            log.info("reboot taken by the butler: waiting up to %d s for it", REBOOT_GRACE_S)
+            await asyncio.sleep(REBOOT_GRACE_S)
+            motivo = f"el mayordomo tomó la orden, pero el servidor no se reinició en {REBOOT_GRACE_S // 60} min"
+        elif verdict == "sin_respuesta":
             _ended("sin_respuesta", info)
             await _row(usuario, "reboot", {"mayordomo": "sin respuesta"}, uid)
             log.warning("reboot line taken by the butler without a readable answer: waiting %d s", REBOOT_GRACE_S)
