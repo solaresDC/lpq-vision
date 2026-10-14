@@ -111,6 +111,14 @@ ADD_HORARIO_DIA = "ALTER TABLE horario_extensiones ADD COLUMN dia DATE"
 ADD_HORARIO_ABRE_AT = "ALTER TABLE horario_extensiones ADD COLUMN abre_at TIMESTAMPTZ"
 ADD_HORARIO_CERRADO = "ALTER TABLE horario_extensiones ADD COLUMN cerrado BOOLEAN NOT NULL DEFAULT false"
 
+# Section 3.14: deleting a plate (the papelera's purge, Eliminar ya) makes the foreign key look for its jobs; without
+# this index each deleted plate reads the whole jobs table.
+CREATE_JOBS_PLATE_INDEX = "CREATE INDEX idx_jobs_plate ON jobs (plate_id)"
+
+# Section 3.14: the gasto reads the analyzed jobs of the last 7, 30 or 90 days; this index keeps that read the size
+# of the range, not of the whole history.
+CREATE_JOBS_DONE_FINISHED_INDEX = "CREATE INDEX idx_jobs_done_finished ON jobs (finished_at) WHERE status = 'done'"
+
 # Section 3.13.2: the camera links. One live link per camera; its code only lets a phone ASK to be that camera (the
 # admin's Aceptar decides). dias NULL and vence_at NULL = permanente.
 CREATE_CAMARA_ENLACES_TABLE = """
@@ -863,7 +871,8 @@ WHERE id = %(job_id)s
 """
 
 # Reintentar (Fase 3): failed -> pending with attempts reset, the whole scope at once (site NULL =
-# every site: admin only; a manager passes its own). A discarded plate is never retried.
+# every site: admin only; a manager passes its own). A discarded plate is never retried: the plates with a
+# failed job are read FOR SHARE (Section 3.14), so a Descartar committing meanwhile is waited for and seen.
 RETRY_FAILED = """
 UPDATE jobs AS j SET
   status = 'pending', attempts = 0, run_after = now(), last_error = NULL,
@@ -871,12 +880,44 @@ UPDATE jobs AS j SET
 FROM plates AS p
 WHERE p.id = j.plate_id
   AND j.status = 'failed'
-  AND p.review_status <> 'discarded'
-  AND (%(site)s::text IS NULL OR p.site = %(site)s)
+  AND j.plate_id IN (
+    SELECT pl.id FROM plates AS pl
+    WHERE pl.id IN (SELECT plate_id FROM jobs WHERE status = 'failed')
+      AND pl.review_status <> 'discarded'
+      AND (%(site)s::text IS NULL OR pl.site = %(site)s)
+    FOR SHARE OF pl
+  )
+RETURNING j.id, p.site
 """
 
 # The post-reboot checklist's queue depths.
 QUEUE_DEPTHS = "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status ORDER BY status"
+
+# The mostrador's Cola (Section 3.14), scoped through the plate (site NULL = every site), read every 5 s while the
+# tab is open: only jobs not done are read (the claim index serves the status). Fallidos counts what Reintentar
+# would take: a failed job whose plate sits in the papelera is never retried, so it is not counted. A plate
+# discarded while its analysis waits is still analyzed (the claim is the queue's verbatim one): Esperando counts it.
+COLA_COUNTS = """
+SELECT
+  COUNT(*) FILTER (WHERE j.status = 'pending') AS esperando,
+  COUNT(*) FILTER (WHERE j.status = 'working') AS en_proceso,
+  COUNT(*) FILTER (WHERE j.status = 'failed' AND p.review_status <> 'discarded') AS fallidos
+FROM jobs AS j
+JOIN plates AS p ON p.id = j.plate_id
+WHERE j.status IN ('pending', 'working', 'failed')
+  AND (%(site)s::text IS NULL OR p.site = %(site)s)
+"""
+
+COLA_FAILED_LIST = """
+SELECT j.id AS job, j.plate_id AS plate, j.kind, j.attempts, j.last_error, j.finished_at,
+       p.site, p.camera, p.record_type
+FROM jobs AS j
+JOIN plates AS p ON p.id = j.plate_id
+WHERE j.status = 'failed' AND p.review_status <> 'discarded'
+  AND (%(site)s::text IS NULL OR p.site = %(site)s)
+ORDER BY j.finished_at DESC NULLS LAST, j.id DESC
+LIMIT %(limit)s
+"""
 
 
 # --------------------------------------------------------------------- review / stats / gallery (Fase 2, SPEC 1.3)
@@ -1075,6 +1116,15 @@ LIMIT %(limit)s OFFSET %(offset)s
 PAPELERA_RESTORE = f"""
 UPDATE plates SET review_status = 'unreviewed', discarded_at = NULL
 WHERE id = ANY(%(ids)s) AND review_status = 'discarded' AND {_SCOPE}
+RETURNING id
+"""
+
+# Eliminar-ya, step 1: the chosen discarded rows the diff names, one line per plate (Section 3.14).
+PAPELERA_SELECT_IDS = f"""
+SELECT id, site, camera, record_type, discarded_at, dish_predicted, dish_verified
+FROM plates
+WHERE id = ANY(%(ids)s) AND review_status = 'discarded' AND {_SCOPE}
+ORDER BY id
 """
 
 # Eliminar-ya: lock the chosen discarded rows (and read their photos) before deleting them.
@@ -1120,15 +1170,27 @@ GROUP BY 1, 2
 ORDER BY 1 DESC, 2
 """
 
-# The cache hit-rate beside the cache knob: the whole chain's counters since `since`.
-USAGE_TOTALS_SINCE = """
+# Leer ficha's spend (Section 3.14): its tokens live in the menu.ficha bitácora rows (a call that never
+# answered has none), per LOCAL day of the brand's timezone and model.
+GASTO_FICHAS = """
 SELECT
-  COUNT(*) AS jobs,
-  COALESCE(SUM((usage->>'prompt_tokens')::bigint), 0) AS prompt_tokens,
-  COALESCE(SUM((usage->>'cache_creation_input_tokens')::bigint), 0) AS cache_creation_input_tokens,
-  COALESCE(SUM((usage->>'cache_read_input_tokens')::bigint), 0) AS cache_read_input_tokens
-FROM jobs
-WHERE status = 'done' AND usage IS NOT NULL AND finished_at >= %(since)s
+  (ts AT TIME ZONE %(tz)s)::date AS day,
+  detail->>'modelo' AS model,
+  COUNT(*) AS lecturas,
+  COALESCE(SUM((detail->>'prompt_tokens')::bigint), 0) AS prompt_tokens,
+  COALESCE(SUM((detail->>'completion_tokens')::bigint), 0) AS completion_tokens,
+  COALESCE(SUM((detail->>'cache_creation_input_tokens')::bigint), 0) AS cache_creation_input_tokens,
+  COALESCE(SUM((detail->>'cache_read_input_tokens')::bigint), 0) AS cache_read_input_tokens
+FROM admin_log
+WHERE action = 'menu.ficha' AND detail ? 'prompt_tokens' AND ts >= %(since)s
+GROUP BY 1, 2
+ORDER BY 1 DESC, 2
+"""
+
+# A price may be entered for a keyed model, an already priced one, or one a plate or a ficha reading used.
+MODEL_USED = """
+SELECT EXISTS (SELECT 1 FROM plates WHERE model = %(model)s)
+    OR EXISTS (SELECT 1 FROM admin_log WHERE action = 'menu.ficha' AND detail->>'modelo' = %(model)s) AS used
 """
 
 

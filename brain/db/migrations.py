@@ -41,8 +41,13 @@ Fase 3 (table steps are gated on to_regclass, column steps on information_schema
 22. camara_enlaces: one live link per camera, its code and how long it lasts (Section 3.13.2).
 23. telefonos: the phones that capture a camera or wait for the admin's Aceptar; the DB keeps only the sha256 of
     each phone's pass (Section 3.13.2).
+24. idx_jobs_plate ON jobs (plate_id): deleting a plate (the papelera's purge, Eliminar ya) makes the foreign key
+    look for its jobs, and without it each deleted plate reads the whole jobs table (Section 3.14). Gated on
+    to_regclass like a table.
+25. idx_jobs_done_finished ON jobs (finished_at) WHERE status = 'done': the gasto reads only its range of days,
+    however long the history grows (Section 3.14). Gated the same way.
 
-Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or ADDs a missing column.
+Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or index or ADDs a missing column.
 """
 
 from __future__ import annotations
@@ -83,7 +88,16 @@ class TableMigration:
     statement: str
 
 
-MIGRATIONS: tuple[ColumnMigration | TableMigration, ...] = (
+@dataclass(frozen=True)
+class IndexMigration:
+    """One CREATE INDEX step (Section 3.14): gated on the index's absence (to_regclass knows indexes too)."""
+
+    name: str
+    index: str
+    statement: str
+
+
+MIGRATIONS: tuple[ColumnMigration | TableMigration | IndexMigration, ...] = (
     ColumnMigration(
         name="plates.leftovers_verified",
         table="plates",
@@ -150,6 +164,8 @@ MIGRATIONS: tuple[ColumnMigration | TableMigration, ...] = (
     ),
     TableMigration(name="camara_enlaces", table="camara_enlaces", statement=q.CREATE_CAMARA_ENLACES_TABLE),
     TableMigration(name="telefonos", table="telefonos", statement=q.CREATE_TELEFONOS_TABLE),
+    IndexMigration(name="jobs.plate_id index", index="idx_jobs_plate", statement=q.CREATE_JOBS_PLATE_INDEX),
+    IndexMigration(name="jobs.finished_at index", index="idx_jobs_done_finished", statement=q.CREATE_JOBS_DONE_FINISHED_INDEX),
 )
 
 
@@ -172,6 +188,8 @@ def run(conn: psycopg.Connection) -> dict[str, str]:
     for migration in MIGRATIONS:
         if isinstance(migration, TableMigration):
             present = table_present(conn, migration.table)
+        elif isinstance(migration, IndexMigration):
+            present = table_present(conn, migration.index)
         else:
             present = column_present(conn, migration.table, migration.column)
         if present:

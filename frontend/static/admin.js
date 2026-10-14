@@ -168,13 +168,23 @@ async function renderInicio(ctx) {
     for (const knob of list) knobsBox.append(knobRow(knob, { site: paintSite, readOnly: true }));
   }
 
+  const constantsCard = card("Constantes (solo lectura)",
+    el("p", { class: "muted", text: "Cada perilla con sus tres ayudas. Se cambian en su sección; aquí solo se leen." }),
+    constantsTable,
+    knobsBox);
+  // Section 3.14: "Cola, papelera y gasto" links here (#constantes opens Inicio scrolled to this card).
+  constantsCard.id = "constantes";
+  if (location.hash === "#constantes") {
+    setTimeout(() => {
+      const bar = document.querySelector("header.topbar");   // the header stays on top: the card lands just below it
+      constantsCard.style.scrollMarginTop = ((bar ? bar.offsetHeight : 0) + 8) + "px";
+      constantsCard.scrollIntoView({ block: "start" });
+    }, 0);
+  }
   return el("div", {},
     card("Sitios", sitesTable),
     card("Secciones del mostrador", sectionsList),
-    card("Constantes (solo lectura)",
-      el("p", { class: "muted", text: "Cada perilla con sus tres ayudas. Se cambian en su sección; aquí solo se leen." }),
-      constantsTable,
-      knobsBox));
+    constantsCard);
 }
 
 // --- boot ----------------------------------------------------------------------------------

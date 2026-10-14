@@ -27,8 +27,11 @@
   </section>
 </main>
 <script type="module">
-import { api, session, requireLogin, mountHeader, el, $, qs, fmtDate, toast } from "/static/app.js";
+// The gallery (Fase 2). Section 3.14: each caption names the dish by its Menú name (never its clave); the evidence
+// view still shows the row exactly as the database keeps it.
+import { api, session, requireLogin, mountHeader, el, qs, fmtDate, toast } from "/static/app.js";
 
+const pick = (selector) => document.querySelector(selector);
 let sess = await session();
 if (!sess) sess = await requireLogin();
 mountHeader("Galería", sess);
@@ -52,7 +55,7 @@ const fromInput = el("input", { type: "date" });
 const toInput = el("input", { type: "date" });
 const applyBtn = el("button", { class: "primary", text: "Aplicar" });
 if (!sess.admin) { siteInput.value = sess.site; siteInput.disabled = true; }
-$("#filters").append(
+pick("#filters").append(
   el("div", {}, el("label", { text: "Sitio" }), siteInput),
   el("div", {}, el("label", { text: "Platillo" }), dishSelect),
   el("div", {}, el("label", { text: "Flujo" }), typeSelect),
@@ -78,23 +81,23 @@ function params() {
 
 // --- the grid -------------------------------------------------------------------------
 function caption(r) {
-  const dish = r.dish || "sin analizar";
+  const dish = r.nombre || r.dish || "sin analizar";
   const stream = r.record_type === "outgoing" ? "sale" : "regresa";
-  const grade = r.presentation ? ` · ${r.presentation.score}/100` : "";
-  return el("figcaption", {}, el("b", { text: `#${r.id} ${dish}` }), el("br"),
-    `${stream}${grade} · ${STATUS_LABEL[r.review_status] || r.review_status}`, el("br"), fmtDate(r.ts));
+  const grade = r.presentation ? " · " + r.presentation.score + "/100" : "";
+  return el("figcaption", {}, el("b", { text: "#" + r.id + " " + dish }), el("br"),
+    stream + grade + " · " + (STATUS_LABEL[r.review_status] || r.review_status), el("br"), fmtDate(r.ts));
 }
 
 async function load() {
-  const g = await api(`/api/gallery${qs(params())}`);
-  const grid = $("#grid");
+  const g = await api("/api/gallery" + qs(params()));
+  const grid = pick("#grid");
   grid.replaceChildren(...g.rows.map((r) => el("figure", { onclick: () => openDetail(r.id) },
-    el("img", { class: "thumb", src: r.photo_url, loading: "lazy", alt: `plato ${r.id}` }), caption(r))));
+    el("img", { class: "thumb", src: r.photo_url, loading: "lazy", alt: "plato " + r.id }), caption(r))));
   if (!g.rows.length) grid.replaceChildren(el("p", { class: "muted", text: "Sin platos con estos filtros." }));
-  $("#count").textContent = `${g.total} en total`;
+  pick("#count").textContent = g.total + " en total";
   const prev = el("button", { text: "◀ Anterior", disabled: g.page <= 1, onclick: () => { page = g.page - 1; load(); } });
   const next = el("button", { text: "Siguiente ▶", disabled: g.page >= g.pages, onclick: () => { page = g.page + 1; load(); } });
-  $("#pager").replaceChildren(prev, el("span", { class: "muted", text: `página ${g.page} de ${g.pages}` }), next);
+  pick("#pager").replaceChildren(prev, el("span", { class: "muted", text: "página " + g.page + " de " + g.pages }), next);
 }
 
 applyBtn.addEventListener("click", async () => {
@@ -106,11 +109,11 @@ applyBtn.addEventListener("click", async () => {
 // --- the evidence view: the photo + the full row JSON --------------------------------------
 async function openDetail(id) {
   let row;
-  try { row = await api(`/api/plates/${id}`); } catch (err) { toast(err.message, "bad"); return; }
+  try { row = await api("/api/plates/" + id); } catch (err) { toast(err.message, "bad"); return; }
   const close = el("button", { text: "Cerrar" });
   const box = el("div", { class: "card detail" },
-    el("div", { class: "row" }, el("h2", { text: `Plato #${id}` }), el("div", { style: "flex:0" }, close)),
-    el("img", { class: "photo", src: `/api/photo/${id}`, alt: `plato ${id}` }),
+    el("div", { class: "row" }, el("h2", { text: "Plato #" + id }), el("div", { style: "flex:0" }, close)),
+    el("img", { class: "photo", src: "/api/photo/" + id, alt: "plato " + id }),
     el("pre", { class: "json", text: JSON.stringify(row, null, 2) }),
   );
   const overlay = el("div", { class: "overlay" }, box);

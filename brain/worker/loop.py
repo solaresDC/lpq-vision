@@ -41,7 +41,7 @@ from psycopg import errors as pg_errors
 from pydantic import ValidationError
 
 from brain.adapter import llm, raw_log
-from brain.capture.backends import PHOTO_ROOT
+from brain.capture.backends import PHOTO_ROOT, unlink_plate_photo
 from brain.db import queries as q
 from brain.validator import repair
 from brain.validator.models import (
@@ -78,7 +78,6 @@ PURGE_SWEEP_MIN = 60                   # the hourly gate of the papelera + exten
 PURGE_BATCH = 200                      # plates per purge transaction
 EXTENSION_GRACE = timedelta(days=1)    # a day's hour changes this long past their close leave the table
 WORKER_LOG_PRUNE_DAYS = 7              # a replica log file untouched this long is a dead set's: pruned at boot
-REFERENCE_PREFIX = "reference/"        # the sacred folder: a purge never deletes under it
 
 # Anti-stupid asserts: a future edit that breaks the coherence of these constants must
 # fail loudly at startup, with a message that names the real values and the fix. (The live
@@ -419,17 +418,6 @@ def process(job: dict[str, Any], cfg: Config) -> None:
 
 # --- the hourly sweep (Fase 3) --------------------------------------------------------
 
-def _unlink_plate_photo(rel_path: str) -> bool:
-    """Delete one purged plate's photo. Anything under reference/ (the sacred originals and the diet
-    copies) is refused by construction, and so is any path that tries to leave the photos root."""
-    path = Path(rel_path)
-    if rel_path.startswith(REFERENCE_PREFIX) or path.is_absolute() or ".." in path.parts:
-        log.error("purge refused to delete a protected path: %s", rel_path)
-        return False
-    (PHOTO_ROOT / rel_path).unlink(missing_ok=True)
-    return True
-
-
 def purge_papelera(cfg: Config) -> int:
     """Plates discarded more than papelera_dias ago leave for good: their jobs FIRST (the foreign key
     has no cascade and schema.sql stays sealed), then the row, then the photo. Batches of PURGE_BATCH,
@@ -451,7 +439,7 @@ def purge_papelera(cfg: Config) -> int:
         # Files only after the rows are gone for good: a crash in between leaves an orphan file, never
         # a row pointing at a missing photo.
         for row in rows:
-            _unlink_plate_photo(row["photo_path"])
+            unlink_plate_photo(row["photo_path"])     # reference/ and any path outside the root are refused
         total += len(rows)
         if len(rows) < PURGE_BATCH:
             break

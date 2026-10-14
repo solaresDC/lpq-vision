@@ -8,14 +8,35 @@ never changes when a backend is born. Here they are stubs that say so loudly.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 # The photos root inside every container (compose volume photos:/data/photos). Rows store
 # paths RELATIVE to it (<site>/<yyyymmdd>/<uuid>.jpg); the root itself never enters a row.
 PHOTO_ROOT = Path("/data/photos")
+REFERENCE_PREFIX = "reference/"        # the sacred folder: a plate's deletion never touches anything under it
 
 INGESTION_MODES = ("phone_web", "pi_csi", "usb")
+
+log = logging.getLogger("lpq.photos")
+
+
+def unlink_plate_photo(rel_path: str) -> bool:
+    """Delete one plate's photo for good (the worker's purge and the mostrador's eliminar-ya share this ONE
+    guard, Section 3.14). Anything under reference/ (the sacred originals and the light copies) is refused by
+    construction, and so is any path that tries to leave the photos root. A file already gone is fine; one that
+    cannot be deleted (a folder, a permission) is logged and left, so the caller's other work goes on."""
+    path = Path(rel_path)
+    if not path.parts or path.is_absolute() or ".." in path.parts or path.parts[0] + "/" == REFERENCE_PREFIX:
+        log.error("refused to delete a protected path: %s", rel_path)
+        return False
+    try:
+        (PHOTO_ROOT / rel_path).unlink(missing_ok=True)
+    except OSError as exc:
+        log.error("could not delete %s: %s", rel_path, exc.__class__.__name__)
+        return False
+    return True
 
 
 @dataclass(frozen=True)

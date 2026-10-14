@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.13.2 (HEAD was 8f87aa3, Section 3.13.1).
+- Last update: Section 3.14 (HEAD was 1ebe49d, Section 3.13.2).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -75,7 +75,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   strange, use 127.0.0.1:8000.
 
 ## The two machines today
-- Laptop: Fase 3 through 3.13.2; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.14; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -94,6 +94,60 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.14 (built in Section 3.14): Cola, papelera y gasto
+- Names, never claves or keys (owner, 13 Oct): Review, the panel and Galería show each dish by its name and each
+  component by its label; a key with no label, or a dish the menu never had, shows in plain words. /api/dishes items
+  gain etiquetas, /api/review gains nombres and etiquetas, /api/stats components gain etiqueta, /api/gallery rows gain
+  nombre. The evidence view keeps the raw row.
+- The mostrador's last tab, "Cola, papelera y gasto" (SPEC 1.5 and 1.9, and 3.14's promise list), with Review's
+  Descartar and the panel's count. Built defaults (HQ's standard choices; the owner may change any of them):
+  - Cola: the brake is ONE for the whole chain (queue_paused, absent-when-off), the admin's alone, and the page asks
+    before pausing ("TODOS los sitios"). The card shows en marcha or EN PAUSA, Esperando, En proceso and Fallidos
+    (todos), and the failed plates (the 50 newest, each note cut to 160 characters). It re-reads the queue every 5 s
+    while it is on screen ("actualizado" and the time; a re-read that fails or gets no answer in 10 s says so on the
+    card), repaints only the part that changed (the brake's open help stays open while the counts move) and never
+    while a mouse button or a finger is down on it or text is selected in it; that re-read never opens the login.
+    Reintentar sends every failed plate of the scope back to the queue with its attempts at zero (a manager: its own
+    site; the admin: the site it is looking at, or all), after a question (each one is another call to the model). A
+    plate in the papelera is never retried, and Fallidos never counts it. A plate discarded while it still waits is
+    analyzed once anyway (its job is not cancelled) and stays in the papelera.
+  - Papelera: the discarded plates, newest first, 50 per page, each with its photo (the viewer inside the page), its
+    dish by name, the day it was discarded and the day it leaves for good (discarded plus papelera_dias, a Perillas
+    knob). Restaurar: back to Pendientes with its corrections, the clock cleared. Eliminar ya: the double confirm
+    names every plate; the confirm deletes only what is still in the papelera and in scope (the jobs first, then
+    the rows, then the photos). A manager handles its own site's papelera; the admin, every site's. Restaurar and
+    Eliminar ya sit above the list; each thumbnail is a button (the keyboard reaches it) that opens the viewer;
+    when the last page empties, the page before it shows.
+  - One delete guard for plate photos (brain/capture/backends.unlink_plate_photo): the worker's purge and Eliminar ya
+    never delete under reference/ or outside the photos root.
+  - Gasto (the admin's): gasto de filas vivas per site, local day (each site's own timezone; the Leer ficha
+    readings, in the Global view only, by the brand's) and model, over the last 7, 30 (the default) or 90 days.
+    "Tokens que entraron" = every input token however it was billed; "Tokens que salieron" = the answer's; money =
+    each kind of token at its price (USD per million: Entrada, Salida, Escritura de caché, Lectura de caché), only
+    where a price exists, "sin precio" otherwise, "sin gasto" where nothing was spent. No cache number anywhere
+    (owner, 8 Oct): the hit-rate query is deleted. A price is typed by a human from the provider's price page (the
+    card says which column of that page fills each field: Input, Output, 5m writes, Hits and refreshes; this system
+    keeps its caché 5 minutes); refused for a model this system never used, above 1000 per million, or incomplete.
+    "Quitar precio" deletes its line. Saving one model's price keeps what is typed and not saved in the others, with
+    the focus and the caret of the field being typed in. The gasto loads after the other cards, so the Cola never
+    waits for it; a card that cannot load says so inside itself and the rest of the tab works.
+  - Constantes: read in Inicio; the tab links there (#constantes opens Inicio at that card, just under the header).
+  - Review: "🗑 Descartar" in the bulk bar (every tab; it asks first) and in the corrector; a row under its site's
+    confianza_minima carries "bajo el umbral", except on the No-platos tab (/api/review gains minimas: each listed
+    site's level). The panel's "Confianza del modelo" card counts those plates ("Bajo el umbral"). Review's bulk bar
+    no longer shows a stray "null".
+  - The bitácora: cola.pausa and cola.reanuda; cola.reintenta {site, jobs, sitios}; papelera.restaura and
+    papelera.elimina_ya {plates, site}; precio.guarda {modelo, antes, despues} and precio.quita {modelo, antes}; the
+    worker's papelera.purge as before. The bot announces none of them. An action that changes nothing writes no row.
+    A change to config.yaml (the brake, a price) and its row land together under the writer's lock; a row that
+    fails puts the file back.
+  - Migrations 24 and 25, created on boot when missing (the new IndexMigration): the index idx_jobs_plate on jobs
+    (plate_id), so the papelera's deletes and the hourly purge find a plate's jobs without a full scan; and
+    idx_jobs_done_finished on jobs (finished_at) for the analyzed jobs, so the gasto reads only its range of days.
+  - A photo that cannot be deleted (a folder, a permission) is logged and left: Eliminar ya still answers, and the
+    worker's hourly duties go on.
+  - Every mostrador dialog scrolls inside itself when it is taller than the screen (a long Eliminar ya list).
 
 ### 3.13.2 (owner, 11 and 12 Oct 2026; built in Section 3.13.2): camera links and the new captura
 - Each camera in Sitios y cuentas shows its light (🟢 "Pi conectada", 🟢 "Teléfono conectado: «nombre»",
@@ -388,12 +442,6 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
-- 3.14, ops: papelera and retention purge; cola (pause admin-only, retry site-scoped); gasto by site
-  and local day, showing only what was spent (no cache savings number; prices are entered by a human
-  after checking the source, "sin precio" until then), Leer ficha calls included (their tokens are in
-  the menu.ficha bitácora rows); constantes linked to Inicio; review's descartar; the panel's "bajo el
-  umbral" tile. A proposal for the owner's yes: Review and Panel show the component labels instead of
-  the internal keys (today they show keys like pan_multigrano).
 - 3.15, the machine room: the grant gate; active_model (keyed models only); max_tokens and the machine
   block; the worker census and scaling with boot reconvergence (its bitácora row is workers.reconverge
   with detail {deseados, corriendo}: the bot announces it); restart one service; the reboot
@@ -446,13 +494,17 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   laptop browser's leftovers of 3.12 and 3.13 (an inert lpq_device cookie and the stored lpq.gafete,
   lpq.site and lpq.camera of localhost:8000: clear that site's data in the browser); the link, phone and
   test camera of 3.13.2's ✋ (its own steps remove them; 3.18 confirms none is left).
+- From 3.14: photos/_smoke/check_314.py and photos/_smoke/smoke_314.py; the smoke plate of 3.14's ✋ (its own
+  Eliminar ya deletes it; 3.18 confirms none is left).
 
 ## Waiting on the owner (no section owns these)
-- 3.13.2's ✋: on the laptop, inside a bracket of the server's bot: the camera rows; a test Pi camera
-  (prueba-1) and its link window; the laptop opening the link is refused; a phone played by a script
-  asks (posted in the group), Aceptar moves the Pi camera to it (the relevo posted), its light and the
-  Mirilla; a second phone refused; Cambiar enlace kicks nobody; Sacar; the test camera removed;
-  everything put back.
+- 3.13.2's and 3.14's ✋, in one sitting (3.13.2's steps first), then ONE push of both commits. 3.13.2's, on the
+  laptop, inside a bracket of the server's bot: the camera rows; a test Pi camera (prueba-1) and its link window;
+  the laptop opening the link is refused; a phone played by a script asks (posted in the group), Aceptar moves the
+  Pi camera to it (the relevo posted), its light and the Mirilla; a second phone refused; Cambiar enlace kicks
+  nobody; Sacar; the test camera removed. 3.14's: the tab's four cards; the brake on and off; the smoke plate
+  discarded in Review, restored and deleted with Eliminar ya; a price typed from the provider's page and removed;
+  the constantes link; the panel's count. Everything put back.
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never

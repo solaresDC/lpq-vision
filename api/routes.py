@@ -4,8 +4,9 @@ Section 2.6 (this file's birth) is the CAPTURE LANE: /api/upload_burst, the ephe
 store with /api/camera/frame (POST + GET) and /api/camera/state, the alignment mode
 (/api/camera/align/start|stop) and the calibration write (/api/camera/calibration).
 Section 2.7 adds the HUMAN LANE: /api/review (tabs, filters, pagination, verify, not_plate,
-reopen, bulk; discard since 3.13, into the papelera), /api/stats, /api/gallery, /api/photo/{id}
-and /api/dishes.
+reopen, bulk; discard since 3.13, into the papelera; since 3.14 the list also carries each listed
+site's confianza_minima, so the page paints the rows under it), /api/stats, /api/gallery,
+/api/photo/{id} and /api/dishes.
 
 The gafete wall (Section 3.13, SPEC 1.3's enforcement matrix): the capture lane's writes
 (upload_burst, the frame push) need THAT site's gafete (a machine) or, since Section 3.13.2, the
@@ -1003,18 +1004,46 @@ def _execute_count(sql: str, params: dict[str, Any]) -> int:
         return conn.execute(sql, params).rowcount
 
 
+def _readable(key: str) -> str:
+    """A component key in plain words: the label of a component saved before labels existed, or of a key the menu
+    no longer has (an old plate keeps the keys of the menu it was analyzed with)."""
+    return key.replace("_", " ").capitalize()
+
+
+def _dish_name(dish: str, names: dict[str, str]) -> str:
+    """A dish as a person reads it: its name; a dish the menu never had, in plain words; the model's own
+    "desconocido" as it is. Never a clave (Section 3.14)."""
+    if dish in names or dish == UNKNOWN_DISH:
+        return names.get(dish, dish)
+    return _readable(dish)
+
+
+def _labels_of(componentes: list[dict[str, Any]]) -> dict[str, str]:
+    return {c["nombre"]: c.get("etiqueta") or _readable(c["nombre"]) for c in componentes}
+
+
+def _menu_words(conn: Any) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    """Every dish's name and its components' labels, active or not: the pages show names, never claves or keys
+    (Section 3.14)."""
+    rows = conn.execute(q.SELECT_ALL_DISHES).fetchall()
+    return {r["dish_id"]: r["nombre"] for r in rows}, {r["dish_id"]: _labels_of(r["componentes"]) for r in rows}
+
+
 def _active_dishes() -> list[dict[str, Any]]:
     with q.connect() as conn:
         rows = conn.execute(q.SELECT_ACTIVE_DISHES).fetchall()
     return [
-        {"dish_id": r["dish_id"], "nombre": r["nombre"], "componentes": [c["nombre"] for c in r["componentes"]]}
+        {
+            "dish_id": r["dish_id"], "nombre": r["nombre"], "componentes": [c["nombre"] for c in r["componentes"]],
+            "etiquetas": _labels_of(r["componentes"]),
+        }
         for r in rows
     ]
 
 
 @router.get("/api/dishes")
 async def dishes(session: Session = Depends(require_session)) -> Any:
-    """The corrector's universe: active dishes and their component names (from the DATABASE)."""
+    """The corrector's universe: active dishes, their component keys and, since 3.14, each key's label (from the DATABASE)."""
     return await asyncio.to_thread(_active_dishes)
 
 
@@ -1038,21 +1067,29 @@ async def review_list(
         return _error(exc.status, exc.reason)
     page = max(1, page)
 
-    def work() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def work() -> tuple[list[dict[str, Any]], list[dict[str, Any]], tuple[dict[str, str], dict[str, dict[str, str]]]]:
         with q.connect() as conn:
             counts = conn.execute(q.REVIEW_COUNTS, params).fetchall()
             rows = conn.execute(
                 q.REVIEW_LIST, {**params, "status": status, "limit": PAGE_SIZE, "offset": (page - 1) * PAGE_SIZE}
             ).fetchall()
-        return counts, rows
+            words = _menu_words(conn)
+        return counts, rows, words
 
-    count_rows, rows = await asyncio.to_thread(work)
+    count_rows, rows, (names, labels) = await asyncio.to_thread(work)
     by_status = {r["review_status"]: int(r["n"]) for r in count_rows}
     counts = {name: by_status.get(st, 0) for name, st in REVIEW_TABS.items()}
     total = counts[tab]
+    # Section 3.14: each site's confianza_minima, so the page paints the rows under it (the panel's tile counts them).
+    cfg = await asyncio.to_thread(load_config)
+    minimas = {s: knobs.effective(cfg, "confianza_minima", s) for s in sorted({r["site"] for r in rows})}
+    listed = sorted({d for r in rows for d in (r["dish_predicted"], r["dish_verified"]) if d})
     return {
         "tab": tab,
         "counts": counts,
+        "minimas": minimas,
+        "nombres": {d: names[d] for d in listed if d in names},       # the listed dishes' names (3.14: never a clave)
+        "etiquetas": {d: labels[d] for d in listed if d in labels},   # and their components' labels
         "rows": jsonable_encoder(rows),
         "page": page,
         "pages": _pages(total),
@@ -1156,7 +1193,7 @@ async def stats(
         with q.connect() as conn:
             comps = conn.execute(q.STATS_COMPONENTS, params).fetchall()
             dish_counts = conn.execute(q.STATS_DISH_PLATES, params).fetchall()
-            names = {r["dish_id"]: r["nombre"] for r in conn.execute(q.SELECT_DISH_NAMES).fetchall()}
+            names, labels = _menu_words(conn)
             queue = conn.execute(q.STATS_QUEUE, {"site": params["site"]}).fetchone() or {}
             pres = conn.execute(q.STATS_PRESENTATION, params).fetchone() or {}
             in_view = [params["site"]] if params["site"] else [r["site"] for r in conn.execute(q.SELECT_SITES_ALL).fetchall()]
@@ -1173,12 +1210,13 @@ async def stats(
         for r in comps:
             by_dish.setdefault(r["dish_id"], []).append({
                 "component": r["component"],
+                "etiqueta": labels.get(r["dish_id"], {}).get(r["component"]) or _readable(r["component"]),
                 "avg_left_pct": round(float(r["avg_left"]), 1),
                 "return_rate_pct": round(float(r["return_rate"]), 1),
                 "n": int(r["n"]),
             })
         dishes_out = [
-            {"dish_id": r["dish_id"], "nombre": names.get(r["dish_id"], r["dish_id"]), "plates": int(r["plates"]), "components": by_dish.get(r["dish_id"], [])}
+            {"dish_id": r["dish_id"], "nombre": _dish_name(r["dish_id"], names), "plates": int(r["plates"]), "components": by_dish.get(r["dish_id"], [])}
             for r in dish_counts
         ]
         avg_s = queue.get("avg_upload_to_done_s_24h")
@@ -1230,17 +1268,19 @@ async def gallery(
     params["review_status"] = status
     page = max(1, page)
 
-    def work() -> tuple[int, list[dict[str, Any]]]:
+    def work() -> tuple[int, list[dict[str, Any]], dict[str, str]]:
         with q.connect() as conn:
             total = int(conn.execute(q.GALLERY_COUNT, params).fetchone()["n"])
             rows = conn.execute(q.GALLERY_LIST, {**params, "limit": PAGE_SIZE, "offset": (page - 1) * PAGE_SIZE}).fetchall()
-        return total, rows
+            names, _labels = _menu_words(conn)
+        return total, rows, names
 
-    total, rows = await asyncio.to_thread(work)
+    total, rows, names = await asyncio.to_thread(work)
     out_rows = []
     for r in rows:
         item = dict(r)
         item["dish"] = r["dish_verified"] or r["dish_predicted"]
+        item["nombre"] = _dish_name(item["dish"], names) if item["dish"] else None   # 3.14: the caption's name
         item["photo_url"] = f"/api/photo/{r['id']}"
         out_rows.append(item)
     return {"rows": jsonable_encoder(out_rows), "page": page, "pages": _pages(total), "page_size": PAGE_SIZE, "total": total}

@@ -46,7 +46,7 @@ const STYLE = `
 .kit-value { font-weight: 600; font-variant-numeric: tabular-nums; }
 .kit-error { color: var(--bad); font-size: 14px; min-height: 18px; margin-top: 4px; }
 .kit-note { font-size: 13px; color: var(--warn); margin-top: 4px; }
-.kit-dialog .card { max-width: 560px; }
+.kit-dialog .card { max-width: 560px; max-height: 90vh; overflow-y: auto; }
 .kit-dialog table { margin: 10px 0; }
 .kit-countdown { font-size: 13px; color: var(--muted); }
 .kit-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }

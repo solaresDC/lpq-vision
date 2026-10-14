@@ -38,8 +38,12 @@
   </section>
 </main>
 <script type="module">
-import { api, session, requireLogin, mountHeader, el, $, qs, fmtDate, toast } from "/static/app.js";
+// Review (Fase 2's human lane). Section 3.14: Descartar (in the bulk bar and in the corrector) sends plates to the
+// papelera; a row under its site's confianza_minima carries "bajo el umbral"; dishes and components show their names
+// from the Menú, never a clave or an internal key.
+import { api, session, requireLogin, mountHeader, el, qs, fmtDate, toast } from "/static/app.js";
 
+const pick = (selector) => document.querySelector(selector);
 let sess = await session();
 if (!sess) sess = await requireLogin();
 mountHeader("Review", sess);
@@ -50,11 +54,35 @@ const BUCKET = 10;
 let tab = "pendientes";
 let page = 1;
 let selected = new Set();
-let dishes = [];           // [{dish_id, nombre, componentes: [...]}]
+let dishes = [];           // [{dish_id, nombre, componentes: [keys], etiquetas: {key: label}}]
 let currentRows = [];
+let minimas = {};          // each listed site's confianza_minima: rows under it are painted
+let nombres = {};          // the listed dishes' names, active or not
+let etiquetas = {};        // and their components' labels
+const RANK = { alta: 3, media: 2, baja: 1 };
+function underMin(r) {
+  const min = minimas[r.site];
+  return Boolean(r.confidence && min && (RANK[r.confidence] || 0) < RANK[min]);
+}
 
 try { dishes = await api("/api/dishes"); } catch (err) { toast(err.message, "bad"); }
 const dishById = Object.fromEntries(dishes.map((d) => [d.dish_id, d]));
+
+// --- names, never claves or keys ----------------------------------------------------------
+function readable(key) {
+  const words = String(key).replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+function dishName(id) {
+  if (!id) return "sin analizar";
+  if (id === UNKNOWN) return UNKNOWN;
+  return nombres[id] || (dishById[id] && dishById[id].nombre) || readable(id);
+}
+function labelOf(dish, key) {
+  const listed = etiquetas[dish] && etiquetas[dish][key];
+  const menu = dishById[dish] && dishById[dish].etiquetas && dishById[dish].etiquetas[key];
+  return listed || menu || readable(key);
+}
 
 // --- filters --------------------------------------------------------------------------
 const siteInput = el("input", { placeholder: "todos los sitios" });
@@ -67,7 +95,7 @@ const fromInput = el("input", { type: "date" });
 const toInput = el("input", { type: "date" });
 const applyBtn = el("button", { class: "primary", text: "Aplicar" });
 if (!sess.admin) { siteInput.value = sess.site; siteInput.disabled = true; }
-$("#filters").append(
+pick("#filters").append(
   el("div", {}, el("label", { text: "Sitio" }), siteInput),
   el("div", {}, el("label", { text: "Flujo" }), typeSelect),
   el("div", {}, el("label", { text: "Desde" }), fromInput),
@@ -92,36 +120,38 @@ const FLAG_TEXT = {
   unparseable: "respuesta ilegible", dish_not_in_menu: "platillo fuera del menú", unknown_component: "componente desconocido",
   direccion_dudosa: "dirección dudosa", no_parece_recien_emplatado: "no parece recién emplatado",
 };
-function chip(text, kind = "warn") { return el("span", { class: `chip ${kind}`, text }); }
+function chip(text, kind = "warn") { return el("span", { class: "chip " + kind, text }); }
 function chips(r) {
   const node = el("div", { class: "chips" });
   for (const f of flagsOf(r)) node.append(chip(FLAG_TEXT[f] || f));
-  if (r.dish_verified && r.dish_verified !== r.dish_predicted) node.append(chip(`corregido: ${r.dish_verified}`, "ok"));
+  if (r.dish_verified && r.dish_verified !== r.dish_predicted) node.append(chip("corregido: " + dishName(r.dish_verified), "ok"));
   if (r.leftovers_verified) node.append(chip("porcentajes corregidos", "ok"));
   return node;
 }
 function effectivePct(r) { return r.leftovers_verified || r.leftovers || {}; }
+// The dish whose components effectivePct names: the human's when the human corrected the percentages.
+function pctDish(r) { return r.leftovers_verified ? (r.dish_verified || r.dish_predicted) : r.dish_predicted; }
+function gradeText(p) {
+  if (p.flags && p.flags.length) return "a revisar";
+  const issues = p.issues && p.issues.length ? " · " + p.issues.join(", ") : "";
+  return p.score + "/100 " + (p.pass ? "✔" : "✘") + issues;
+}
 function resultText(r) {
-  if (r.record_type === "outgoing") {
-    if (!r.presentation) return "sin calificar";
-    const p = r.presentation;
-    return p.flags && p.flags.length ? "a revisar" : `${p.score}/100 ${p.pass ? "✔" : "✘"}${p.issues && p.issues.length ? ` · ${p.issues.join(", ")}` : ""}`;
-  }
-  const pct = effectivePct(r);
-  const parts = Object.entries(pct).map(([k, v]) => `${k} ${v}%`);
+  if (r.record_type === "outgoing") return r.presentation ? gradeText(r.presentation) : "sin calificar";
+  const dish = pctDish(r);
+  const parts = Object.entries(effectivePct(r)).map(([k, v]) => labelOf(dish, k) + " " + v + "%");
   return parts.length ? parts.join(" · ") : "sin analizar";
 }
-function dishText(r) { return r.dish_verified || r.dish_predicted || "—"; }
 
 // --- tabs, list, pager, bulk bar ------------------------------------------------------
 function renderTabs(counts) {
-  $("#tabs").replaceChildren(...TABS.map(([key, label]) =>
-    el("button", { class: key === tab ? "current" : "", text: `${label} (${counts[key]})`, onclick: () => { tab = key; page = 1; load(); } })));
+  pick("#tabs").replaceChildren(...TABS.map(([key, label]) =>
+    el("button", { class: key === tab ? "current" : "", text: label + " (" + counts[key] + ")", onclick: () => { tab = key; page = 1; load(); } })));
 }
 
 function renderList(rows) {
   currentRows = rows;
-  const node = $("#list");
+  const node = pick("#list");
   if (!rows.length) { node.replaceChildren(el("p", { class: "muted", text: "Nada en esta pestaña con estos filtros." })); return; }
   const all = el("input", { type: "checkbox", onchange: (ev) => { selected = ev.target.checked ? new Set(rows.map((r) => r.id)) : new Set(); renderList(rows); renderBulk(); } });
   all.checked = rows.length > 0 && rows.every((r) => selected.has(r.id));
@@ -137,11 +167,11 @@ function renderList(rows) {
       return el("tr", { class: selected.has(r.id) ? "selected" : "" },
         el("td", { class: "pick" }, box),
         el("td", { text: r.id }),
-        el("td", {}, el("img", { class: "thumb-sm", src: `/api/photo/${r.id}`, loading: "lazy", alt: "" })),
+        el("td", {}, el("img", { class: "thumb-sm", src: "/api/photo/" + r.id, loading: "lazy", alt: "" })),
         el("td", { text: r.record_type === "outgoing" ? "sale" : "regresa" }),
-        el("td", { text: dishText(r) }),
+        el("td", { text: dishName(r.dish_verified || r.dish_predicted) }),
         el("td", { text: resultText(r) }),
-        el("td", { text: r.confidence || "" }),
+        el("td", {}, r.confidence || "", tab !== "no_platos" && underMin(r) ? el("div", {}, chip("bajo el umbral")) : null),
         el("td", {}, chips(r)),
         el("td", { text: fmtDate(r.ts) }),
         el("td", {}, el("button", { class: "primary", text: "Corregir", onclick: () => openCorrector(r) })),
@@ -152,30 +182,48 @@ function renderList(rows) {
 }
 
 function renderPager(d) {
-  $("#pager").replaceChildren(
+  pick("#pager").replaceChildren(
     el("button", { text: "◀ Anterior", disabled: d.page <= 1, onclick: () => { page = d.page - 1; load(); } }),
-    el("span", { class: "muted", text: `página ${d.page} de ${d.pages} · ${d.total} en total` }),
+    el("span", { class: "muted", text: "página " + d.page + " de " + d.pages + " · " + d.total + " en total" }),
     el("button", { text: "Siguiente ▶", disabled: d.page >= d.pages, onclick: () => { page = d.page + 1; load(); } }),
   );
 }
 
 function renderBulk() {
   const n = selected.size;
-  const bar = $("#bulkbar");
+  const bar = pick("#bulkbar");
   const mk = (text, action, cls) => el("button", { class: cls || "", text, disabled: n === 0, onclick: () => bulk(action) });
-  bar.replaceChildren(
-    el("span", { class: "muted", text: n ? `${n} seleccionado${n === 1 ? "" : "s"}` : "Selecciona platos para actuar en lote" }),
+  bar.replaceChildren(...[       // the buttons a tab does not offer are left out (no stray "null" in the bar)
+    el("span", { class: "muted", text: n ? n + " seleccionado" + (n === 1 ? "" : "s") : "Selecciona platos para actuar en lote" }),
     tab === "pendientes" ? mk("✔ Correcto (verificar tal cual)", "verify_as_is", "ok") : null,
     tab !== "no_platos" ? mk("✘ No es plato", "not_plate", "bad") : null,
     tab !== "pendientes" ? mk("↩ Regresar a pendientes", "reopen") : null,
-  );
+    el("button", { class: "warn", text: "🗑 Descartar", disabled: n === 0, onclick: discardSelected }),
+  ].filter(Boolean));
+}
+
+// Descartar sends the selection to the papelera; the mostrador restores it while it waits there.
+async function discardSelected() {
+  const ids = [...selected];
+  const one = ids.length === 1;
+  const what = one ? "1 plato" : ids.length + " platos";
+  const where = one ? " Se restaura desde el Mostrador (Cola, papelera y gasto) mientras espera ahí."
+    : " Se restauran desde el Mostrador (Cola, papelera y gasto) mientras esperan ahí.";
+  if (!window.confirm("¿Mandar " + what + " a la papelera?" + where)) return;
+  try {
+    const r = await api("/api/review/bulk", { method: "POST", json: { ids, action: "discard" } });
+    toast((r.updated === 1 ? "1 plato a la papelera: se restaura" : r.updated + " platos a la papelera: se restauran")
+      + " desde el Mostrador", "ok");
+    selected = new Set();
+    await load();
+  } catch (err) { toast(err.message, "bad"); }
 }
 
 async function bulk(action) {
   const ids = [...selected];
   try {
     const r = await api("/api/review/bulk", { method: "POST", json: { ids, action } });
-    toast(`${r.updated} de ${r.requested} actualizados`, "ok");
+    toast(r.updated + " de " + r.requested + " actualizados", "ok");
     selected = new Set();
     await load();
   } catch (err) { toast(err.message, "bad"); }
@@ -183,8 +231,11 @@ async function bulk(action) {
 
 async function load() {
   try {
-    const d = await api(`/api/review${qs(params())}`);
+    const d = await api("/api/review" + qs(params()));
     selected = new Set([...selected].filter((id) => d.rows.some((r) => r.id === id)));
+    minimas = d.minimas || {};
+    nombres = d.nombres || {};
+    etiquetas = d.etiquetas || {};
     renderTabs(d.counts);
     renderList(d.rows);
     renderPager(d);
@@ -202,9 +253,9 @@ function openCorrector(r) {
   let dish = r.dish_verified || r.dish_predicted || UNKNOWN;
 
   const dishSelect = el("select", {},
-    dishes.map((d) => el("option", { value: d.dish_id, text: `${d.nombre} (${d.dish_id})` })),
+    dishes.map((d) => el("option", { value: d.dish_id, text: d.nombre })),
     el("option", { value: UNKNOWN, text: "desconocido (no está en el menú)" }));
-  if (![...dishSelect.options].some((o) => o.value === dish)) dishSelect.append(el("option", { value: dish, text: `${dish} (no activo)` }));
+  if (![...dishSelect.options].some((o) => o.value === dish)) dishSelect.append(el("option", { value: dish, text: dishName(dish) + " (no activo)" }));
   dishSelect.value = dish;
 
   const steppers = el("div");
@@ -213,10 +264,10 @@ function openCorrector(r) {
     const comps = dish === UNKNOWN ? [] : (dishById[dish] ? dishById[dish].componentes : Object.keys(base));
     for (const c of comps) {
       if (!(c in pct)) pct[c] = bucket(c in base ? base[c] : 100);
-      const val = el("div", { class: "val", text: `${pct[c]} %` });
-      const set = (v) => { pct[c] = bucket(v); val.textContent = `${pct[c]} %`; };
+      const val = el("div", { class: "val", text: pct[c] + " %" });
+      const set = (v) => { pct[c] = bucket(v); val.textContent = pct[c] + " %"; };
       steppers.append(el("div", { class: "stepper" },
-        el("div", { class: "name", text: c }),
+        el("div", { class: "name", text: labelOf(dish, c) }),
         el("button", { text: "−", onclick: () => set(pct[c] - BUCKET) }),
         val,
         el("button", { text: "+", onclick: () => set(pct[c] + BUCKET) }),
@@ -227,23 +278,25 @@ function openCorrector(r) {
   dishSelect.addEventListener("change", () => { dish = dishSelect.value; for (const k of Object.keys(pct)) delete pct[k]; buildSteppers(); });
   if (isReturn) buildSteppers();
 
+  const draft = Object.entries(r.leftovers || {}).map(([k, v]) => labelOf(r.dish_predicted, k) + " " + v + "%").join(" · ");
   const info = el("div", { class: "muted" },
-    `Modelo: ${r.dish_predicted || "sin analizar"}${r.confidence ? ` · confianza ${r.confidence}` : ""}`, el("br"),
-    isReturn ? `Borrador del modelo: ${Object.entries(r.leftovers || {}).map(([k, v]) => `${k} ${v}%`).join(" · ") || "ninguno"}` : `Emplatado: ${resultText(r)}`);
+    "Modelo: " + dishName(r.dish_predicted) + (r.confidence ? " · confianza " + r.confidence : ""), el("br"),
+    isReturn ? "Borrador del modelo: " + (draft || "ninguno") : "Emplatado: " + resultText(r));
 
   const save = el("button", { class: "ok", text: "✔ Guardar y verificar" });
   const notPlate = el("button", { class: "bad", text: "✘ No es plato" });
+  const discard = el("button", { class: "warn", text: "🗑 Descartar" });
   const cancel = el("button", { text: "Cancelar" });
   const box = el("div", { class: "card corrector" },
-    el("h2", { text: `Plato #${r.id} · ${isReturn ? "regresa (merma)" : "sale (emplatado)"} · ${fmtDate(r.ts)}` }),
+    el("h2", { text: "Plato #" + r.id + " · " + (isReturn ? "regresa (merma)" : "sale (emplatado)") + " · " + fmtDate(r.ts) }),
     el("div", { class: "cols" },
-      el("div", {}, el("img", { class: "photo", src: `/api/photo/${r.id}`, alt: `plato ${r.id}` })),
+      el("div", {}, el("img", { class: "photo", src: "/api/photo/" + r.id, alt: "plato " + r.id })),
       el("div", {},
         chips(r), info,
         el("label", { text: "Platillo" }), dishSelect,
         isReturn ? el("label", { text: "Qué QUEDÓ en el plato, por componente (0 = nada, 100 = intacto)" }) : null,
         isReturn ? steppers : null,
-        el("div", { class: "actions" }, save, notPlate, cancel),
+        el("div", { class: "actions" }, save, notPlate, discard, cancel),
       ),
     ),
   );
@@ -260,15 +313,24 @@ function openCorrector(r) {
     }
     save.disabled = true;
     try {
-      await api(`/api/review/${r.id}/verify`, { method: "POST", json: body });
+      await api("/api/review/" + r.id + "/verify", { method: "POST", json: body });
       toast(body.leftovers_verified ? "Corrección guardada" : "Verificado tal cual", "ok");
       overlay.remove();
       await load();
     } catch (err) { toast(err.message, "bad"); save.disabled = false; }
   });
   notPlate.addEventListener("click", async () => {
-    try { await api(`/api/review/${r.id}/not_plate`, { method: "POST" }); toast("Marcado como no-plato", "ok"); overlay.remove(); await load(); }
+    try { await api("/api/review/" + r.id + "/not_plate", { method: "POST" }); toast("Marcado como no-plato", "ok"); overlay.remove(); await load(); }
     catch (err) { toast(err.message, "bad"); }
+  });
+  discard.addEventListener("click", async () => {
+    discard.disabled = true;
+    try {
+      await api("/api/review/" + r.id + "/discard", { method: "POST" });
+      toast("A la papelera: se restaura desde el Mostrador", "ok");
+      overlay.remove();
+      await load();
+    } catch (err) { toast(err.message, "bad"); discard.disabled = false; }
   });
   document.body.append(overlay);
 }

@@ -10,6 +10,7 @@
   .tile { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; }
   .tile .label { font-size: 13px; color: var(--muted); }
   tr.dish td { background: var(--bg); font-weight: 600; }
+  td.component { padding-left: 28px; }
 </style>
 </head>
 <body>
@@ -22,6 +23,10 @@
     <h2>Cola de análisis <span class="muted" id="queue-note"></span></h2>
     <div class="tiles" id="queue"></div>
   </section>
+  <section class="card">
+    <h2>Confianza del modelo</h2>
+    <div class="tiles" id="confianza"></div>
+  </section>
   <section class="card hidden" id="presentation-card">
     <h2>Emplatado (platos que salen)</h2>
     <div class="tiles" id="presentation"></div>
@@ -32,8 +37,11 @@
   </section>
 </main>
 <script type="module">
-import { api, session, requireLogin, mountHeader, poll, el, $, qs, fmtAgo, toast } from "/static/app.js";
+// The panel (Fase 2). Section 3.14: the "Bajo el umbral" count, and dishes and components by their Menú names
+// (never a clave or an internal key).
+import { api, session, requireLogin, mountHeader, poll, el, qs, toast } from "/static/app.js";
 
+const pick = (selector) => document.querySelector(selector);
 let sess = await session();
 if (!sess) sess = await requireLogin();
 mountHeader("Panel", sess);
@@ -44,7 +52,7 @@ const fromInput = el("input", { type: "date" });
 const toInput = el("input", { type: "date" });
 const applyBtn = el("button", { class: "primary", text: "Aplicar" });
 if (!sess.admin) { siteInput.value = sess.site; siteInput.disabled = true; }
-$("#filters").append(
+pick("#filters").append(
   el("div", {}, el("label", { text: "Sitio" }), siteInput),
   el("div", {}, el("label", { text: "Desde" }), fromInput),
   el("div", {}, el("label", { text: "Hasta" }), toInput),
@@ -61,7 +69,7 @@ async function refreshFunction() {
   const site = params().site || (sess.site || "");
   if (!site) { presentacionOn = false; return; }
   try {
-    const state = await api(`/api/camera/state?site=${encodeURIComponent(site)}`);
+    const state = await api("/api/camera/state?site=" + encodeURIComponent(site));
     presentacionOn = Boolean(state.funciones && state.funciones.presentacion);
   } catch { presentacionOn = false; }
 }
@@ -71,36 +79,46 @@ function tile(label, value, extra) {
   return el("div", { class: "tile" }, el("div", { class: "label", text: label }), el("div", { class: "big", text: value }), extra ? el("div", { class: "muted", text: extra }) : null);
 }
 
+function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+
 function renderQueue(qd) {
-  const node = $("#queue");
-  node.replaceChildren(
+  const avg = qd.avg_upload_to_done_s_24h;
+  pick("#queue").replaceChildren(
     tile("Pendientes", qd.pending),
     tile("En proceso", qd.working),
     tile("Listos (24 h)", qd.done_24h),
     tile("Fallidos (24 h)", qd.failed_24h),
-    tile("Foto → resultado", qd.avg_upload_to_done_s_24h === null || qd.avg_upload_to_done_s_24h === undefined ? "—" : `${qd.avg_upload_to_done_s_24h} s`, "promedio 24 h"),
+    tile("Foto → resultado", avg === null || avg === undefined ? "sin dato" : avg + " s", "promedio 24 h"),
   );
-  $("#queue-note").textContent = `actualizado ${new Date().toLocaleTimeString("es-MX")}`;
+  pick("#queue-note").textContent = "actualizado " + new Date().toLocaleTimeString("es-MX");
+}
+
+// The plates that came back with a confidence under their site's confianza_minima (Review paints them).
+function renderConfianza(c) {
+  const node = pick("#confianza");
+  if (!c) { node.replaceChildren(); return; }
+  const rule = c.minima ? "confianza menor que «" + c.minima + "»" : "bajo el umbral de cada sitio";
+  node.replaceChildren(tile("Bajo el umbral", c.bajo_umbral, rule + ": Review los marca"));
 }
 
 function renderPresentation(p) {
-  const card = $("#presentation-card");
+  const card = pick("#presentation-card");
   const show = presentacionOn || (p.graded + p.flagged) > 0;
   card.classList.toggle("hidden", !show);
   if (!show) return;
-  $("#presentation").replaceChildren(
+  pick("#presentation").replaceChildren(
     tile("Calificados", p.graded),
-    tile("Promedio", p.avg_score === null ? "—" : `${p.avg_score}`, "parecido a la referencia, 0-100"),
-    tile("Aprobados", p.pass_rate_pct === null ? "—" : `${p.pass_rate_pct} %`, "score de 80 o más"),
+    tile("Promedio", p.avg_score === null ? "sin dato" : String(p.avg_score), "parecido a la referencia, 0-100"),
+    tile("Aprobados", p.pass_rate_pct === null ? "sin dato" : p.pass_rate_pct + " %", "score de 80 o más"),
     tile("A revisar", p.flagged, "no parecían recién emplatados"),
   );
 }
 
 function renderDishes(dishes) {
-  const node = $("#dishes");
+  const node = pick("#dishes");
   if (!dishes.length) {
     node.replaceChildren(el("p", { class: "muted", text: "Sin platos que regresaron en este rango." }));
-    $("#dishes-note").textContent = "";
+    pick("#dishes-note").textContent = "";
     return;
   }
   const table = el("table", {},
@@ -114,28 +132,29 @@ function renderDishes(dishes) {
   const body = el("tbody");
   for (const d of dishes) {
     body.append(el("tr", { class: "dish" },
-      el("td", { text: `${d.nombre} (${d.dish_id})` }),
-      el("td", { class: "num", colspan: 2, text: `${d.plates} plato${d.plates === 1 ? "" : "s"}` }),
+      el("td", { text: d.nombre }),
+      el("td", { class: "num", colspan: 2, text: plural(d.plates, "plato", "platos") }),
       el("td", { class: "num", text: "" }),
     ));
     for (const c of d.components) {
       body.append(el("tr", {},
-        el("td", { text: `    ${c.component}` }),
-        el("td", { class: "num", text: `${c.avg_left_pct} %` }),
-        el("td", { class: "num", text: `${c.return_rate_pct} %` }),
+        el("td", { class: "component", text: c.etiqueta || c.component }),
+        el("td", { class: "num", text: c.avg_left_pct + " %" }),
+        el("td", { class: "num", text: c.return_rate_pct + " %" }),
         el("td", { class: "num", text: c.n }),
       ));
     }
   }
   table.append(body);
   node.replaceChildren(table);
-  $("#dishes-note").textContent = `${dishes.length} platillo${dishes.length === 1 ? "" : "s"}`;
+  pick("#dishes-note").textContent = plural(dishes.length, "platillo", "platillos");
 }
 
 // --- the live loop: one call to /api/stats every 5 s while the tab is visible -----------
 async function refresh() {
-  const s = await api(`/api/stats${qs(params())}`);
+  const s = await api("/api/stats" + qs(params()));
   renderQueue(s.queue);
+  renderConfianza(s.confianza);
   renderPresentation(s.presentation);
   renderDishes(s.dishes);
 }
