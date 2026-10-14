@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.16 (HEAD was 2ec4b5b, Section 3.15).
+- Last update: Section 3.17 (HEAD was a782a4a, Section 3.16).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -27,7 +27,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - Files: LF, a final newline, UTF-8 without BOM; check with `git ls-files --eol`. JavaScript syntax is
   checked with `node --check` on .mjs copies (node reads a .js file as CommonJS).
 - Blocks never contain the dollar sign (the chat's renderer eats it): a new regex ends with \Z instead,
-  a line that must keep one is copied from git, and every block scans its added lines with chr(36).
+  a line that must keep one is copied from git, and every block scans its added lines with chr(36). A file that
+  needs the sign itself (a shell script, 3.17) travels with each one written as @DOLLAR@, and a listed one-liner
+  turns them back into chr(36) before the fingerprints.
 - Blocks carry no backslash-u escape and no decomposed character (3.13.1's lesson): your tool calls turn
   a backslash-u escape into the character itself, and your Edit tool composes characters (NFC) before
   matching. Code that needs such a character builds it with chr().
@@ -85,7 +87,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   fresh one (its lock remembers 10 minutes).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.16; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.17; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -104,6 +106,30 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.17 (built in Section 3.17): the local closing
+- The backup (scripts/pg_backup.sh; the server's lpq-backup timer runs the file in place every night at 03:30 UTC):
+  beside each dump, a copy of config.yaml and of textos.yaml under the same stamp (lpq_<stamp>.dump,
+  lpq_<stamp>.config.yaml, lpq_<stamp>.textos.yaml), each written whole and then renamed. Built defaults (HQ's standard
+  choices; the owner may change any of them):
+  - A textos.yaml that does not exist yet (no bot text edited: the factory texts) is said in the log, not copied; a
+    missing config.yaml keeps the dump and the retention, and ends the run failed (the timer shows it).
+  - The copies live and die with the dumps: KEEP_DAYS (14 on the server), in BACKUP_DIR itself (never a folder inside
+    it); a .part a crashed run left goes the same way.
+  - Every file the backup writes is its owner's only (umask 077): the dump holds the password hashes and the gafetes,
+    config.yaml the chat ids. Files written before 3.17 keep their modes.
+  - A restore: the dump through pg_restore reading stdin (rule 20); the two copies go back into config/ under their own
+    names, with the stack stopped.
+- The local checklist, the gate before 3.18 (the full local checklist and the Fase 1 and 2 regression): 16 rows run by
+  Claude Code on the laptop; any red row holds the commit. Its throwaway check (photos/_smoke/check_317.py) runs inside
+  the fastapi container against the LIVE stack, with about 4 calls to the model: the curl road (a new photo becomes a
+  validated row in under 60 s; the wall; the duplicate), a burst choosing its sharp frame, the express lane (the 20 s
+  bar is the server's, 3.20), the frame store and the capped rope on a test Pi camera, the seven pages, Review and the
+  papelera (its plates leave through Descartar and Eliminar ya), the menu seed (insert-only), the bake-off (read-only),
+  the mostrador's first reads and the one writer. The host's rows: the repo, the containers (the bot stopped), the
+  boot, the backup with a restore into a scratch database, and a scan of every log for secrets.
+- The owner's tests (owner, 14 Oct): the ✋ lists of 3.13.2, 3.14, 3.15 and 3.16 are ONE list, 3.17's ✋, run in one
+  sitting after 3.17's commit and ending with one push of 3.15, 3.16 and 3.17. Every test passes before 3.18.
 
 ### 3.16 (built in Section 3.16): the butler
 - The butler (el mayordomo; SPEC 1.7 and 3.16's promise list): butler/lpq_butler.py (standard library only) and
@@ -543,16 +569,17 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
-- 3.17, local closing: the full local checklist and the Fase 1 and 2 regression; the backup also copies
-  config.yaml and textos.yaml.
 - 3.18, deploy: a staged copy WITHOUT config.yaml or textos.yaml, built while the old one serves (no Aplicar between
   the build and up -d); the butler installed BEFORE the new stack's up -d, so fastapi's new mount finds its folder
   (lpq_butler.py copied to /usr/local/lib/lpq-butler/, lpq-butler.service to /etc/systemd/system/, daemon-reload,
   enable --now; a later update of the butler is copy plus systemctl restart lpq-butler); then the room's checklist
   shows it green, and once the boot reconvergence's log line is out (the butler takes one order at a time) one
-  Reiniciar el bot proves the real round trip; the one-time copy of the notes and labels (scripts/notas_from_menu.py,
-  once the new code has booted) on the server; the iPhone list and the cleanup (the two "Para 3.18" sections below);
-  then the owner's first real Crear restaurante.
+  Reiniciar el bot proves the real round trip; the backup script arrives with the staged copy and is made executable
+  there (the lpq-backup timer runs /opt/lpq_vision/scripts/pg_backup.sh in place; the copy never touches
+  /opt/lpq_vision/backups), and one run of lpq-backup.service by hand shows the dump with its config.yaml copy
+  beside it, both -rw-------; the one-time copy of the notes and labels (scripts/notas_from_menu.py, once the new
+  code has booted) on the server; the iPhone list and the cleanup (the two "Para 3.18" sections below); then the
+  owner's first real Crear restaurante.
 - 3.19, the ceremony: the server's own cuarto password; TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH and
   DEMO_PASSWORD_HASH leave both .env files in the SPEC's order; the present/absent proof.
 - 3.20, T-F6 on the server: the full regression, the yes/no checklist against the 14 criteria, the
@@ -598,23 +625,29 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - From 3.16: photos/_smoke/check_316.py (its copy in the fastapi container vanishes at the next recreate); no
   lpq-butler-prueba container left (`docker ps -a`). The /run/lpq-butler folder in Docker Desktop's VM belongs to the
   compose mount, and is empty once the throwaway butler is stopped: not a residue.
+- From 3.17: photos/_smoke/check_317.py (its copy, and /tmp/smoke_diet.jpg, in the fastapi container vanish at the next
+  recreate). The backup test's folder (photos/backups_317) and its scratch database (lpq_restore_317) are removed by
+  their own steps; 3.18 confirms neither is left.
 
 ## Waiting on the owner (no section owns these)
-- 3.13.2's and 3.14's ✋, in one sitting (3.13.2's steps first; both commits were pushed early, on 13 Oct). 3.13.2's,
-  on the laptop, inside a bracket of the server's bot: the camera rows; a test Pi camera (prueba-1) and its link window;
-  the laptop opening the link is refused; a phone played by a script asks (posted in the group), Aceptar moves the
-  Pi camera to it (the relevo posted), its light and the Mirilla; a second phone refused; Cambiar enlace kicks
-  nobody; Sacar; the test camera removed. 3.14's: the tab's four cards; the brake on and off; the smoke plate
-  discarded in Review, restored and deleted with Eliminar ya; a price typed from the provider's page and removed;
-  the constantes link; the panel's count. Everything put back.
-- 3.15's ✋, on the laptop (no bot bracket): the door with a wrong and then the real cuarto password (the positive
-  unlock test); the room's cards; the assert's bounce; max_tokens there and back; every butler action answering "no
-  responde" with nothing changed and nobody warned; the checklist (bot and mayordomo red on the laptop, by design);
-  the live log viewer; Cerrar el cuarto. Everything put back.
-- 3.16's ✋, on the laptop (no bot bracket): the throwaway butler started by hand (--dry-run), and the room sees it
-  green; Reiniciar el bot taken, then refused by its 10-minute lock; Aplicar 2 and back to 1; its log shows each
-  command printed, never run; the butler stopped and removed (its folder empty) and the room red again. Everything
-  put back.
+- 3.17's ✋, ONE list in one sitting after 3.17's commit (owner, 14 Oct: the earlier ✋ lists merged), ending with one
+  push of 3.15, 3.16 and 3.17:
+  - 3.13.2's steps first (pushed early, on 13 Oct, with 3.14's), on the laptop, inside a bracket of the server's bot:
+    the camera rows; a test Pi camera (prueba-1) and its link window; the laptop opening the link is refused; a phone
+    played by a script asks (posted in the group), Aceptar moves the Pi camera to it (the relevo posted), its light
+    and the Mirilla; a second phone refused; Cambiar enlace kicks nobody; Sacar; the test camera removed.
+  - 3.14's, after the bracket: the tab's four cards; the brake on and off; the smoke plate discarded in Review,
+    restored and deleted with Eliminar ya; a price typed from the provider's page and removed; the constantes link;
+    the panel's count.
+  - 3.15's (no bot bracket): the door with a wrong and then the real cuarto password (the positive unlock test); the
+    room's cards; the assert's bounce; max_tokens there and back; every butler action answering "no responde" with
+    nothing changed and nobody warned; the checklist (bot and mayordomo red on the laptop, by design); the live log
+    viewer; Cerrar el cuarto.
+  - 3.16's (no bot bracket): the throwaway butler started by hand (--dry-run), and the room sees it green; Reiniciar
+    el bot taken, then refused by its 10-minute lock; Aplicar 2 and back to 1; bot.log in the viewer; the butler's
+    own log shows each command printed, never run; the butler stopped and removed (its folder empty) and the room red
+    again.
+  - Everything put back.
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never
