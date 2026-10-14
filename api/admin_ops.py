@@ -40,7 +40,7 @@ from fastapi.encoders import jsonable_encoder
 from psycopg.types.json import Jsonb
 
 from api import config_writer as cw
-from api.admin import propose, require_admin, require_mostrador, write_scope
+from api.admin import config_action, propose, require_admin, require_mostrador, write_scope
 from api.auth import Session, scoped_site
 from brain.capture.backends import unlink_plate_photo
 from brain.db import queries as q
@@ -87,36 +87,6 @@ def _bitacora(conn: psycopg.Connection, actor: Session, action: str, detail: dic
     conn.execute(q.INSERT_ADMIN_LOG_BY, {
         "usuario": actor.user, "usuario_uid": actor.uid, "action": action, "detail": Jsonb(detail),
     })
-
-
-def _config_and_row_sync(session: Session, decide: Callable[[Config], tuple[list[cw.Op], str, dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
-    """Under the writer's lock (the caller holds it): config.yaml is read again, decide(config) answers (ops, action,
-    detail, answer) with no ops when nothing changes, and the file and its bitácora row land together: the row's
-    transaction commits only after the file landed, and a failed row puts the file back. A second identical click
-    finds nothing to change and writes no row."""
-    ops, action, detail, answer = decide(load_config())
-    if not ops:
-        return {**answer, "cambio": False}
-    written: cw.WriteResult | None = None
-    try:
-        with q.connect() as conn, conn.transaction():
-            written = cw.apply_ops(ops)
-            if not written.written:
-                return {**answer, "cambio": False}
-            _bitacora(conn, session, action, detail)
-        return {**answer, "cambio": True}
-    except Exception:
-        if written is not None and written.written:
-            cw.restore(written.previous_text)
-        raise
-
-
-async def _config_action(session: Session, decide: Callable[[Config], tuple[list[cw.Op], str, dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
-    async with cw.LOCK:
-        try:
-            return await asyncio.to_thread(_config_and_row_sync, session, decide)
-        except cw.WriterError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 def _site_or_404(conn: psycopg.Connection, site: str | None) -> None:
@@ -199,7 +169,7 @@ async def pausa(body: SwitchRequest, session: Session = Depends(require_admin)) 
         op = cw.set_op(path, True) if body.on else cw.delete_op(path)
         return [op], "cola.pausa" if body.on else "cola.reanuda", {}, {"pausada": body.on}
 
-    answer = await _config_action(session, decide)
+    answer = await config_action(session, decide)
     if answer["cambio"]:
         log.info("queue %s from the mostrador user=%s", "paused" if body.on else "resumed", session.user)
     return answer
@@ -492,7 +462,7 @@ async def guardar_precio(body: PriceRequest, session: Session = Depends(require_
             return [], "", {}, answer
         return [cw.set_op(("prices", model), values)], "precio.guarda", {"modelo": model, "antes": antes, "despues": values}, answer
 
-    answer = await _config_action(session, decide)
+    answer = await config_action(session, decide)
     if answer["cambio"]:
         log.info("price set model=%s user=%s", model, session.user)
     return answer
@@ -510,7 +480,7 @@ async def quitar_precio(body: ModelNameRequest, session: Session = Depends(requi
             return [], "", {}, answer
         return [cw.delete_op(("prices", model))], "precio.quita", {"modelo": model, "antes": before.model_dump()}, answer
 
-    answer = await _config_action(session, decide)
+    answer = await config_action(session, decide)
     if answer["cambio"]:
         log.info("price removed model=%s user=%s", model, session.user)
     return answer

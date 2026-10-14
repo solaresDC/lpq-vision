@@ -359,6 +359,14 @@ ON CONFLICT (usuario) DO NOTHING
 RETURNING usuario
 """
 
+# The machine room changes the cuarto password (Section 3.15: you are already inside the wall). Only the active
+# machine row; no row back = there is no cuarto to change.
+SET_MACHINE_PASSWORD = """
+UPDATE users SET password_hash = %(password_hash)s, password_changed_at = now(), password_changed_by = %(changed_by)s
+WHERE usuario = %(usuario)s AND role = 'machine' AND active
+RETURNING usuario
+"""
+
 SET_USER_ACTIVE = """
 UPDATE users SET active = %(active)s
 WHERE usuario = %(usuario)s AND role <> 'machine'
@@ -448,6 +456,10 @@ FROM admin_log
 ORDER BY id DESC
 LIMIT %(limit)s
 """
+
+# The machine room's reboot (Section 3.15): when the butler last took one (its row is written right after its "ok", or
+# when it took the line without a readable answer: it may have rebooted, so its 10 minutes count).
+LAST_REBOOT_AT = "SELECT MAX(ts) AS ts FROM admin_log WHERE action = 'reboot'"
 
 # The bot's read-only cursor: the action and its detail, NEVER the name.
 ADMIN_LOG_MAX_ID = "SELECT COALESCE(MAX(id), 0) AS id FROM admin_log"

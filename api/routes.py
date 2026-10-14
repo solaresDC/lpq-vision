@@ -572,6 +572,14 @@ async def calibration(body: CalibrationRequest, session: Session = Depends(requi
 
 # --- the phone's door (Section 3.13.2): a camera's link, a name, the admin's Aceptar ---------
 
+def frame_ages() -> dict[tuple[str, str], float]:
+    """Seconds since each camera's last copy, for every camera that sent one since this api started (the machine
+    room's checklist, Section 3.15). A camera with no copy is simply absent."""
+    now = _now()
+    with _LOCK:
+        return {key: (now - slot.ts).total_seconds() for key, slot in _FRAMES.items()}
+
+
 def fresh_by(site: str, camera: str, cfg: Config) -> tuple[bool, int | None]:
     """Is something sending this camera now (a copy within FRESH_PUSHES pushes), and who sent the last copy:
     None = a machine's gafete, else the phone's id."""

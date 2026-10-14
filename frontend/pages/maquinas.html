@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Máquinas · LPQ_VISION</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .mq-grant { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .mq-grant .mq-left { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .mq-grant .spacer { flex: 1; }
+  .mq-status { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+  .mq-status > li { line-height: 1.4; }
+  .mq-status ul { margin: 4px 0 0 28px; padding-left: 14px; }
+  .mq-dot { display: inline-block; width: 24px; }
+  .mq-live { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .mq-line { margin: 6px 0; }
+  .mq-big { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .mq-service { border-top: 1px solid var(--line); padding: 12px 0; }
+  .mq-service:first-of-type { border-top: 0; }
+  .mq-log { background: #15140f; color: #e8e4d8; font-size: 12px; line-height: 1.45; padding: 10px; border-radius: var(--radius);
+            max-height: 440px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; min-height: 120px; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div id="room"><p class="muted">Cargando…</p></div>
+</main>
+<script type="module" src="/static/maquinas.js"></script>
+</body>
+</html>

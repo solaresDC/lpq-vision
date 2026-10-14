@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.14 (HEAD was 1ebe49d, Section 3.13.2).
+- Last update: Section 3.15 (HEAD was 94c8b8e, Section 3.14).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -73,9 +73,14 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   again (only a full engine restart fixed it before 3.4).
 - Another program (Ozzo) uses port 8001 (the owner confirmed it after 3.8.1). If localhost:8000 acts
   strange, use 127.0.0.1:8000.
+- The laptop never runs the butler (CLAUDE.md), so its machine room answers "El mayordomo no responde" to every
+  butler action, and its checklist shows the butler red, by design. The room counts the worker containers by name:
+  while a section's check stops the worker the checklist reads 0 analysts, and a ventanilla that booted in those
+  minutes writes workers.reconverge_fallida (a true row, not a test row). A section's Step 2 waits for the
+  reconvergence's log line before it stops the worker.
 
 ## The two machines today
-- Laptop: Fase 3 through 3.14; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.15; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -94,6 +99,58 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.15 (built in Section 3.15): the machine room
+- The second floor, /maquinas (SPEC 1.6 and 1.7, and 3.15's promise list). Built defaults (HQ's standard choices; the
+  owner may change any of them):
+  - The door: the admin only, with the cuarto password; it opens the room for THIS session for 15 minutes (a
+    countdown on top; "Cerrar el cuarto" closes it at once; the server owns the time, so another tab that opened it
+    again keeps it open). While no cuarto password exists the page births it (typed twice); it is changed from inside
+    (the room closes in every other session, this one keeps it). A password manager files it under "cuarto", never
+    under the admin's account. Every change inside is the double confirm with its diff; every act that happened
+    leaves one bitácora row; a refusal changes nothing and writes none.
+  - The model: only models whose key exists on this server are listed; a name outside the list is refused, and so is
+    a listed model without its key. max_tokens, the queue constants (llm_timeout_s, orphan_timeout_min, max_attempts)
+    and session_hours keep the registry's bounds; the machine block's assert bounces BEFORE the confirm, in its own
+    words; the confirm says when each change takes effect. The writer quotes every string it writes (active_model's
+    line gains quotes the first time it changes).
+  - The analysts: "Deseados" (machine.workers, remembered) against "Corriendo" (the worker containers counted live by
+    the compose network's DNS: «?» when it cannot count, 0 when none lives). Aplicar writes the number and asks the
+    butler for the scale together: a refused or absent butler puts the number back; a line it took without a
+    readable answer keeps the number (the next boot asks again) and says so. Analysis is stopped with the brake
+    (Cola), never with 0 analysts.
+  - The boot reconvergence (Fer's law: the number you had is the number you keep): 90 s after the ventanilla starts
+    it counts until two counts agree (10 s apart, for at most 2 minutes), counts once more, compares with the
+    remembered number and asks the butler ONCE when they differ, 0 running included. Its rows: workers.reconverge
+    {deseados, corriendo, mayordomo} (the bot announces it: analistas_ajustados) or workers.reconverge_fallida
+    {deseados, corriendo, motivo} (not announced); usuario empty (the system acted).
+  - Restart one service (fastapi, worker or bot; postgres has no button): the confirm says what each restart does
+    (the ventanilla's: a plate reaching a camera in those seconds is lost, and everyone logs in again). Refused while a
+    reboot is on its way.
+  - The reboot: refused BEFORE anyone is warned while one is on its way or a service restarts, within 10 minutes of
+    the last one the butler took, while the butler does not answer, or when the database cannot say which chats to
+    warn. Otherwise: the notice (aviso_reinicio, editable in Voz del bot) to every chat, 60 s, then the butler's
+    reboot. Refused or absent then: the warned chats hear at once the new text aviso_reinicio_cancelado (family all,
+    editable). Taken without a readable answer: it may be rebooting, so nothing is said for 3 minutes; a ventanilla
+    still alive then means it did not happen, and the warned chats hear it. The page follows it: a NEW ventanilla
+    (the sessions are gone) means it happened and the page reloads; the same ventanilla tells why it did not happen,
+    and the checklist says so for an hour.
+  - The checklist ("Estado: la lista de arranque"), re-read every 5 s: ventanilla (when it started), base de datos,
+    migraciones (this boot's report), cola (the mostrador's counts; grey while paused or past the bot's backlog
+    threshold), analistas (corriendo de deseados, and when the last plate finished), cámaras (the active sites'
+    cameras; a site in mantenimiento is not checked), bot (seen through its calls within max(60 s, 3 of its rounds)),
+    mayordomo. 🟢 fine, 🔴 failing, ⚪ no data or unusual without failing.
+  - "Registro en vivo": only the services' own log files (fastapi.log, worker-<host>.log; bot.log from 3.16), never
+    a rotated copy, the forensic river or a link: the last 200 lines, then each new line; a rotation is followed; it
+    ends when the room closes. A window, never the archive.
+  - The bitácora: machine.birth, machine.unlock and machine.password {}; knob.set {knob, site: null, antes, despues};
+    workers.scale {deseados, antes, corriendo, mayordomo}; service.restart {servicio, mayordomo}; reboot.aviso
+    {chats, enviados, segundos}; reboot {mayordomo}; reboot.fallido {motivo, avisados}; the two reconvergence rows.
+    The bot announces only workers.reconverge. A row after an act that already happened is written best-effort: a
+    database failing right then never turns a done act into an error.
+  - The butler is a service of the server's host only (built in 3.16, installed in 3.18; never one on the laptop).
+    Without it every action that needs it answers "El mayordomo no responde: nada cambió." at once, without a confirm
+    (the reboot: "no se avisó a nadie"), and the checklist shows it red.
 
 ### 3.14 (built in Section 3.14): Cola, papelera y gasto
 - Names, never claves or keys (owner, 13 Oct): Review, the panel and Galería show each dish by its name and each
@@ -442,14 +499,11 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
-- 3.15, the machine room: the grant gate; active_model (keyed models only); max_tokens and the machine
-  block; the worker census and scaling with boot reconvergence (its bitácora row is workers.reconverge
-  with detail {deseados, corriendo}: the bot announces it); restart one service; the reboot
-  choreography with the pre-reboot notice; the post-reboot checklist (init_report); the SSE log viewer;
-  the positive unlock test with the laptop's real cuarto; the newPassword() widget reused.
 - 3.16, the butler and the compose ADDs: three verbs, the persistent lock, the probe, --dry-run; the
   mailbox mount and the bot's logs volume (the bot writes /data/logs/bot.log since 3.11; until the
   volume exists that file stays inside its container); a laptop round trip in a throwaway container.
+  From 3.15's machine room: the butler answers "ok <id>" BEFORE it acts (a restart of fastapi or a reboot
+  would otherwise kill the answer the page waits for), and a line it took is in its 10-minute lock.
 - 3.17, local closing: the full local checklist and the Fase 1 and 2 regression; the backup also copies
   config.yaml and textos.yaml.
 - 3.18, deploy: a staged copy WITHOUT config.yaml or textos.yaml, built while the old one serves; the
@@ -496,15 +550,20 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   test camera of 3.13.2's ✋ (its own steps remove them; 3.18 confirms none is left).
 - From 3.14: photos/_smoke/check_314.py and photos/_smoke/smoke_314.py; the smoke plate of 3.14's ✋ (its own
   Eliminar ya deletes it; 3.18 confirms none is left).
+- From 3.15: photos/_smoke/check_315.py (its copy in the fastapi container vanishes at the next rebuild).
 
 ## Waiting on the owner (no section owns these)
-- 3.13.2's and 3.14's ✋, in one sitting (3.13.2's steps first), then ONE push of both commits. 3.13.2's, on the
-  laptop, inside a bracket of the server's bot: the camera rows; a test Pi camera (prueba-1) and its link window;
+- 3.13.2's and 3.14's ✋, in one sitting (3.13.2's steps first; both commits were pushed early, on 13 Oct). 3.13.2's,
+  on the laptop, inside a bracket of the server's bot: the camera rows; a test Pi camera (prueba-1) and its link window;
   the laptop opening the link is refused; a phone played by a script asks (posted in the group), Aceptar moves the
   Pi camera to it (the relevo posted), its light and the Mirilla; a second phone refused; Cambiar enlace kicks
   nobody; Sacar; the test camera removed. 3.14's: the tab's four cards; the brake on and off; the smoke plate
   discarded in Review, restored and deleted with Eliminar ya; a price typed from the provider's page and removed;
   the constantes link; the panel's count. Everything put back.
+- 3.15's ✋, on the laptop (no bot bracket): the door with a wrong and then the real cuarto password (the positive
+  unlock test); the room's cards; the assert's bounce; max_tokens there and back; every butler action answering "no
+  responde" with nothing changed and nobody warned; the checklist (bot and mayordomo red on the laptop, by design);
+  the live log viewer; Cerrar el cuarto. Everything put back.
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never

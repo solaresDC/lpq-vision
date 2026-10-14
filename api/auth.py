@@ -15,7 +15,8 @@ its password or changing its role drops that account's live sessions at once (dr
 This depends on the api being ONE uvicorn process, which it is and must remain.
 
 The machine floor: once the hub has checked the `cuarto` password (check_machine_password), THIS
-session holds a grant for MACHINE_GRANT_MIN minutes, in RAM, keyed by its session id; logout drops it.
+session holds a grant for MACHINE_GRANT_MIN minutes, in RAM, keyed by its session id; logout drops it,
+and a new cuarto password (Section 3.15) closes it in every other session.
 
 The gafete, the second wall inside the club: every site owns a device key (sites.device_key), and since
 Section 3.13.2 only the MACHINES carry it (the bot reads it from the database; a Pi will carry it), always
@@ -239,6 +240,19 @@ def machine_grant_left(session: Session) -> int:
 def revoke_machine(session: Session) -> None:
     with _LOCK:
         _GRANTS.pop(session.sid, None)
+
+
+def revoke_machine_others(session: Session) -> int:
+    """Close the machine floor in every OTHER session (a new cuarto password, Section 3.15): they opened it with
+    the old one. This session keeps its grant. Returns how many open rooms were closed (an expired grant is only
+    swept, not counted)."""
+    now = time.monotonic()
+    with _LOCK:
+        doomed = [sid for sid in _GRANTS if sid != session.sid]
+        live = sum(1 for sid in doomed if _GRANTS[sid] > now)
+        for sid in doomed:
+            _GRANTS.pop(sid, None)
+    return live
 
 
 # --- the gafete -----------------------------------------------------------------------

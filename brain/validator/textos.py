@@ -1,10 +1,10 @@
 """LPQ_VISION brain/validator/textos.py: the bot's voice, shared by the bot and the api (SPEC 1.5, 1.6).
 
-Every message the bot sends (and the two the api sends itself: the pre-reboot notice and enviar-prueba)
-lives here ONCE: its factory text, the fichas (named holes) it accepts with an example value each, and
-the family that decides where it goes. Around the catalog: the VALIDATOR (a template that would fail at
-3am never saves), the RENDERER (the only road from a text to a message), the textos.yaml reader and its
-whole-file writer, and the DESTINATIONS map (the routing law that replaced the bot's destination()).
+Every message the bot sends (and the ones the api sends itself: the pre-reboot notice, its cancellation and
+enviar-prueba) lives here ONCE: its factory text, the fichas (named holes) it accepts with an example value
+each, and the family that decides where it goes. Around the catalog: the VALIDATOR (a template that would
+fail at 3am never saves), the RENDERER (the only road from a text to a message), the textos.yaml reader and
+its whole-file writer, and the DESTINATIONS map (the routing law that replaced the bot's destination()).
 
 Pure code: no database, no network, no Telegram. textos.yaml is MACHINE-OWNED, the one config file
 rewritten whole; absent-when-off: a key present overrides one message, a key absent uses the factory
@@ -69,6 +69,9 @@ CATALOG: tuple[Texto, ...] = (
        "🟢 Hola, estoy en línea. Vigilo la cola, las fallas, el lente, las cámaras y la ventanilla."),
     _t("aviso_reinicio", "all", "Antes de un reinicio pedido en el cuarto de máquinas (lo manda la ventanilla).",
        "🔄 El cerebro se reiniciará en {minutos} min por mantenimiento. Vuelvo en unos minutos.", minutos="1"),
+    _t("aviso_reinicio_cancelado", "all", "Cuando el reinicio anunciado no se hace: el mayordomo no lo aceptó o no "
+       "respondía, o tomó la orden y nada se reinició en 3 min (lo manda la ventanilla, solo a los chats avisados).",
+       "✅ El reinicio anunciado no se hizo: el cerebro sigue en línea."),
     # --- machine families ---
     _t("cola_atorada", "machine", "Cuando los platos pendientes pasan el umbral de la cola.",
        "📈 Cola atorada: {pendientes} platos esperando (umbral {umbral}). El analista no da abasto.",

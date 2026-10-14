@@ -814,6 +814,13 @@ class KnobWriteRequest(_Body):
     site: str | None = None       # absent = the global value; present = that site's override
 
 
+class MachineKnobRequest(_Body):
+    """The machine room (Section 3.15): one second-floor knob, always its global value (the brain is one)."""
+
+    knob: str = Field(min_length=1, max_length=64)
+    value: Any
+
+
 class KnobResetRequest(_Body):
     """"Volver al global": deletes that site's override line."""
 

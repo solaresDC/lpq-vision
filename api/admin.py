@@ -13,6 +13,8 @@ admin_sites, admin_menu, admin_ops, admin_machine). The hub owns only what they 
   and, on the machine floor, with a live grant at confirm time;
 - the bitácora (admin_log) and the Telegram sendMessage helper: the api's own voice, so enviar-prueba
   and the pre-reboot notice work even when the bot is the sick service;
+- config_action(): one config.yaml change and its bitácora row as ONE act, under the writer's lock (the
+  brake, a price, a machine-room knob);
 - overview and constantes, the first reads of both pages.
 
 mount(app) includes every family of the fixed FAMILIES list; one not built yet is skipped with a clear
@@ -40,6 +42,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from psycopg.types.json import Jsonb
 
+from api import config_writer as cw
 from api.auth import (
     MACHINE_GRANT_MIN,
     ROLE_MACHINE,
@@ -58,6 +61,7 @@ from brain.validator.models import (
     PASSWORD_MIN_CHARS,
     RAW_LOG_AUTO_OFF_HOURS,
     WORKER_SCALE_MAX,
+    Config,
     ConfirmRequest,
     PasswordRequest,
     UnlockRequest,
@@ -201,6 +205,45 @@ async def alog(session: Session | None, action: str, detail: dict[str, Any] | No
         detail,
         session.uid if session else None,
     )
+
+
+# --- one config change and its row, together ------------------------------------------
+
+Decide = Callable[[Config], tuple[list[cw.Op], str, dict[str, Any], dict[str, Any]]]
+
+
+def _config_and_row_sync(session: Session, decide: Decide) -> dict[str, Any]:
+    """Under the writer's lock (the caller holds it): config.yaml is read again, decide(config) answers (ops, action,
+    detail, answer) with no ops when nothing changes, and the file and its bitácora row land together: the row's
+    transaction commits only after the file landed, and a failed row puts the file back. A second identical click
+    finds nothing to change and writes no row."""
+    ops, action, detail, answer = decide(load_config())
+    if not ops:
+        return {**answer, "cambio": False}
+    written: cw.WriteResult | None = None
+    try:
+        with q.connect() as conn, conn.transaction():
+            written = cw.apply_ops(ops)
+            if not written.written:
+                return {**answer, "cambio": False}
+            conn.execute(q.INSERT_ADMIN_LOG_BY, {
+                "usuario": session.user, "usuario_uid": session.uid, "action": action, "detail": Jsonb(detail),
+            })
+        return {**answer, "cambio": True}
+    except Exception:
+        if written is not None and written.written:
+            cw.restore(written.previous_text)
+        raise
+
+
+async def config_action(session: Session, decide: Decide) -> dict[str, Any]:
+    """One config.yaml change and its bitácora row as ONE act (Section 3.14's brake and prices, Section 3.15's
+    machine-room knobs). A model bounce (the machine block's assert, say) answers 400 with its own words."""
+    async with cw.LOCK:
+        try:
+            return await asyncio.to_thread(_config_and_row_sync, session, decide)
+        except cw.WriterError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 # --- the api's own voice --------------------------------------------------------------
