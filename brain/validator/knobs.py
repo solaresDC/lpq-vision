@@ -35,7 +35,7 @@ from brain.validator.models import (
 
 Kind = Literal[
     "int", "float", "choice", "switch", "pause", "horario", "timezone",
-    "chat_id", "prompt_merma", "prompt_presentacion", "model", "prices",
+    "chat_id", "prompt_merma", "prompt_presentacion", "model", "prices", "tipos_cambio",
 ]
 Floor = Literal["mostrador", "maquinas"]
 
@@ -156,6 +156,12 @@ REGISTRY: tuple[Knob, ...] = (
        "Precio por millón de tokens de cada modelo, para convertir el gasto en dinero.",
        "claude-sonnet-5: in_mtok, out_mtok, cache_write_mtok, cache_read_mtok",
        "Vacío hasta copiar el precio de la página oficial del proveedor; sin precio, el tablero muestra solo tokens.",
+       special=True),
+    _k("tipos_cambio", "tipos_cambio", "gasto",
+       "Cuántos pesos (MXN) o dólares canadienses (CAD) compra un dólar, para ver el gasto en esa moneda.",
+       "1 USD = 18.45 MXN",
+       "Escríbelo tú, del día que quieras (el FIX de Banxico o el de tu banco); el gasto se convierte con el último que "
+       "guardaste. Sin tipo de cambio, el gasto se ve en USD.",
        special=True),
     # --- machine room ---
     _k("active_model", "model", "modelo",

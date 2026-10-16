@@ -21,6 +21,10 @@
 // the tab. An action inside a site's card rebuilds that card alone (Section 3.13.2): what is typed in the other
 // cards stays, and so does a value typed or chosen and not saved in that same card (it is carried into the new
 // one). Every read carries a ticket: an answer older than what a card already shows never rolls it back.
+// Section 3.17.1 (the owner's ✋ notes, 16 Oct): each camera sits in its own box and "Agregar una cámara" in a block of
+// its own, apart from them. A link ends at 12:00 of its last day on the site's clock, and the page shows its end on that
+// clock ("hora de <sitio>"); the admin picks 1 día, 1 semana, 1 mes, permanente or personalizado: the box for its days
+// (only digits, 1 to 365) or its last day (a calendar, tomorrow to a year from the site's today) shows only then.
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import {
@@ -45,9 +49,14 @@ const LIVE_NOTE_CARD = "Hay cambios nuevos en esta tarjeta: aparecen en cuanto t
 const LIVE_NOTE_HOLD = "Hay cambios nuevos en esta tarjeta: aparecen en cuanto ocultes el gafete.";
 const LIVE_NOTE_TAB = "Se agregó o se quitó un sitio en otra ventana: la pestaña se actualiza en cuanto termines lo que estás editando.";
 const LUZ = { pi: "🟢 Pi conectada", telefono: "🟢 Teléfono conectado", nada: "🔴 Nada conectado" };
-const DURACIONES = [["1d", "1 día"], ["7d", "1 semana"], ["30d", "1 mes"], ["permanente", "permanente"]];
-const DIAS_KEY = { 1: "1d", 7: "7d", 30: "30d" };   // a link's days back to its choice; none = permanente
-const CAM_BLOCK = "border-top: 1px solid var(--line); padding: 10px 0; display: grid; gap: 6px;";
+const DURACIONES = [
+  ["1d", "1 día"], ["7d", "1 semana"], ["30d", "1 mes"], ["permanente", "permanente"], ["personalizado", "personalizado"],
+];
+const DIAS_KEY = { 1: "1d", 7: "7d", 30: "30d" };   // a link's days back to its choice; none = permanente; others = personalizado
+const DIAS_MAX = 365;                                 // personalizado: 1 to 365 days, or a last day within a year
+const DAY_MS = 86400000;
+const CAM_BLOCK = "border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin: 8px 0; display: grid; gap: 6px;";
+const ADD_BLOCK = "border: 1px dashed var(--line); border-radius: var(--radius); padding: 10px 12px; margin: 18px 0 8px; background: var(--bg);";
 const LIGHT_ON = "font-weight: 600; color: var(--ok);";
 const LIGHT_OFF = "font-weight: 600; color: var(--bad);";
 
@@ -71,9 +80,11 @@ const AYUDAS = {
     copiar: false,
   },
   duracion: {
-    que_es: "Cuánto tiempo sirve el enlace para que un teléfono nuevo pida entrar. Los teléfonos que ya entraron siguen aunque venza o cambie.",
+    que_es: "Hasta qué día sirve el enlace para que un teléfono nuevo pida entrar: vence a las 12:00 de ese día, en la hora "
+      + "del sitio. Los teléfonos que ya entraron siguen aunque venza o cambie.",
     ejemplo: "1 semana",
-    recomendacion: "1 semana. Si el enlace se compartió de más, «Cambiar enlace»: el anterior deja de servir y nadie sale.",
+    recomendacion: "1 semana. «personalizado»: de 1 a 365 días, o un día del calendario dentro de un año. Si el enlace se "
+      + "compartió de más, «Cambiar enlace»: el anterior deja de servir y nadie sale.",
     copiar: false,
   },
   rol: {
@@ -393,7 +404,7 @@ function siteCard(s, ctx, view) {
   if (s.in_config) {
     parts.push(el("h3", { text: "Funciones" }), funcionesRow(s, here, error), fieldHelp(AYUDAS.funciones));
     parts.push(el("h3", { text: "Cámaras" }), camerasBlock(s, here, error));
-    if (ctx.sess.admin) parts.push(addCameraRow(s, here, error), cameraHelps());
+    if (ctx.sess.admin) parts.push(addCameraBlock(s, here, error));
   }
   if (ctx.sess.admin) parts.push(el("h3", { text: "Gafete y estado" }), adminRow(s, ctx, error));
   parts.push(error);
@@ -438,12 +449,12 @@ function cameraBlock(s, c, ctx, error) {
   if (c.telefono) parts.push(phoneLine(s, c, ctx, error));
   for (const p of c.pendientes) parts.push(pendingLine(s, c, p, ctx, error));
   const offersLink = c.source === "phone" || piDown;
-  if (offersLink) parts.push(el("div", { class: "muted", text: linkText(c.enlace) }));
+  if (offersLink) parts.push(el("div", { class: "muted", text: linkText(c.enlace, s) }));
   const buttons = [wire(btn("Mirilla"), error, () => openMirilla(s.site, c.name))];
   if (offersLink) {
     buttons.push(wire(btn("Dame el enlace", "primary"), error, async () => {
       const answer = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace", { method: "POST" });
-      const changed = await linkDialog(s, c, ctx, answer.enlace, answer.nuevo ? "Enlace nuevo." : "");
+      const changed = await linkDialog(s, c, ctx, answer, answer.nuevo ? "Enlace nuevo." : "");
       if (answer.nuevo || changed) ctx.refresh();        // the same link, untouched: the card already shows it
     }));
     buttons.push(wire(btn("Cambiar enlace"), error, async () => {
@@ -451,7 +462,7 @@ function cameraBlock(s, c, ctx, error) {
         + "entraron siguen. ¿Cambiar?";
       if (!window.confirm(ask)) return;
       const answer = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace/nuevo", { method: "POST", json: {} });
-      await linkDialog(s, c, ctx, answer.enlace, "Enlace nuevo: el anterior ya no sirve.");
+      await linkDialog(s, c, ctx, answer, "Enlace nuevo: el anterior ya no sirve.");
       ctx.refresh();
     }));
   }
@@ -474,10 +485,83 @@ function codeText(code) {
   return code.slice(0, 4) + "-" + code.slice(4);
 }
 
-function linkText(link) {
+// A moment on the site's own clock, with that clock named (a link ends at noon of its last day there).
+function siteTime(iso, s) {
+  try {
+    return new Date(iso).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short", timeZone: s.zona }) + " (hora de " + s.site + ")";
+  } catch {
+    return fmtDate(iso) + " (hora de este navegador)";   // a zone this browser does not know: its own clock, named
+  }
+}
+
+function linkText(link, s) {
   if (!link) return "Sin enlace todavía: «Dame el enlace» crea uno.";
-  const life = link.vence ? (link.vencido ? "venció el " : "vence el ") + fmtDate(link.vence) : "permanente";
+  const life = link.vence ? (link.vencido ? "venció el " : "vence el ") + siteTime(link.vence, s) : "permanente";
   return "Enlace: " + codeText(link.codigo) + " · " + life + (link.vencido ? " («Dame el enlace» crea uno nuevo)" : "");
+}
+
+// A day on the site's calendar, n days after "YYYY-MM-DD" (calendar arithmetic in UTC: no clock can shift it).
+function dayAfter(iso, n) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d) + n * DAY_MS).toISOString().slice(0, 10);
+}
+
+// personalizado (Section 3.17.1): a switch between its days and its last day, shown only while personalizado is
+// chosen. read() answers the fields the server takes, or throws the reason in plain words.
+function customLife(link, hoy) {
+  const first = dayAfter(hoy, 1);
+  const last = dayAfter(hoy, DIAS_MAX);
+  const days = el("input", {
+    type: "text", inputmode: "numeric", autocomplete: "off", placeholder: "45", style: "width: 90px;",
+    "aria-label": "Cuántos días dura el enlace (de 1 a " + DIAS_MAX + ")",
+  });
+  if (link.dias && !DIAS_KEY[link.dias]) days.value = String(link.dias);
+  days.addEventListener("input", () => {
+    const digits = days.value.replace(/\D/g, "").slice(0, 3);
+    if (digits !== days.value) days.value = digits;
+  });
+  const date = el("input", { type: "date", min: first, max: last, style: INLINE, "aria-label": "Último día del enlace" });
+  const byDays = el("button", { type: "button", class: "kit-copy", text: "Por días" });
+  const byDate = el("button", { type: "button", class: "kit-copy", text: "Por fecha" });
+  const daysRow = el("div", { class: "kit-edit" }, days, el("span", { class: "muted", text: "días (de 1 a " + DIAS_MAX + ")" }));
+  const dateRow = el("div", { class: "kit-edit hidden" }, date,
+    el("span", { class: "muted", text: "de mañana (" + dmy(first) + ") a un año (" + dmy(last) + ")" }));
+  let mode = "dias";
+  const show = (next) => {
+    mode = next;
+    daysRow.classList.toggle("hidden", mode !== "dias");
+    dateRow.classList.toggle("hidden", mode !== "fecha");
+    byDays.setAttribute("aria-pressed", String(mode === "dias"));
+    byDate.setAttribute("aria-pressed", String(mode === "fecha"));
+    byDays.className = mode === "dias" ? "kit-copy primary" : "kit-copy";
+    byDate.className = mode === "fecha" ? "kit-copy primary" : "kit-copy";
+  };
+  byDays.addEventListener("click", () => { show("dias"); days.focus(); });
+  byDate.addEventListener("click", () => { show("fecha"); date.focus(); });
+  show("dias");
+  const node = el("div", { class: "hidden", style: "margin: 4px 0 8px;" },
+    el("div", { class: "kit-edit" }, byDays, byDate), daysRow, dateRow,
+    el("div", { class: "muted", text: "Vence a las 12:00 del último día, en la hora del sitio." }));
+  const read = () => {
+    if (mode === "dias") {
+      const n = Number(days.value);
+      if (!days.value || !Number.isInteger(n) || n < 1 || n > DIAS_MAX) {
+        throw new Error("Escribe cuántos días: un número de 1 a " + DIAS_MAX + ".");
+      }
+      return { dias: n };
+    }
+    if (!date.value) throw new Error("Elige el último día en el calendario.");
+    if (date.value < first || date.value > last) {
+      throw new Error("El último día va de mañana (" + dmy(first) + ") a un año desde hoy (" + dmy(last) + ").");
+    }
+    return { fecha: date.value };
+  };
+  return { node: node, read: read };
+}
+
+function dmy(iso) {
+  const [y, m, d] = iso.split("-");
+  return d + "/" + m + "/" + y;
 }
 
 function phoneLine(s, c, ctx, error) {
@@ -560,7 +644,9 @@ function overlayWindow(title, ...body) {
 // The link's code goes after the # (it never reaches a server's logs). Resolves, once closed, with whether the
 // admin changed its duration (the card then shows the new date). After "Guardar duración" the window shows the link
 // as the server has it now (if someone changed it meanwhile, the new code: the old one no longer opens anything).
-async function linkDialog(s, c, ctx, link, note) {
+async function linkDialog(s, c, ctx, answer, note) {
+  const link = answer.enlace;
+  const clock = { site: s.site, zona: answer.zona || s.zona };
   let url = "";
   let current = "";
   let changed = false;
@@ -572,7 +658,7 @@ async function linkDialog(s, c, ctx, link, note) {
     url = location.origin + "/captura#" + l.codigo;
     shown.textContent = url;
     code.textContent = codeText(l.codigo);
-    life.textContent = l.vence ? "Vence: " + fmtDate(l.vence) : "Permanente: no vence.";
+    life.textContent = l.vence ? "Vence: " + siteTime(l.vence, clock) : "Permanente: no vence.";
   };
   paint(link);
   const copy = el("button", { class: "kit-copy", type: "button", text: "copiar" });
@@ -607,18 +693,22 @@ async function linkDialog(s, c, ctx, link, note) {
   ];
   if (ctx.sess.admin) {
     const error = el("div", { class: "kit-error" });
-    const pick = choice(DURACIONES, link.dias === null ? "permanente" : DIAS_KEY[link.dias] || "7d");
+    const pick = choice(DURACIONES, link.dias === null ? "permanente" : DIAS_KEY[link.dias] || "personalizado");
+    const custom = customLife(link, answer.hoy);
+    const follow = () => custom.node.classList.toggle("hidden", pick.value !== "personalizado");
+    pick.addEventListener("change", follow);
+    follow();
     const save = wire(btn("Guardar duración"), error, async () => {
-      const answer = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace/duracion", {
-        method: "POST", json: { duracion: pick.value },
-      });
-      const moved = answer.enlace.codigo !== current;
-      paint(answer.enlace);
+      const json = { duracion: pick.value, ...(pick.value === "personalizado" ? custom.read() : {}) };
+      const done = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace/duracion", { method: "POST", json: json });
+      const moved = done.enlace.codigo !== current;
+      paint(done.enlace);
       changed = true;
-      toast(moved ? "duración guardada; el enlace había cambiado: la ventana muestra el de ahora" : "duración guardada: cuenta desde ahora", "ok");
+      const ends = done.enlace.vence ? "vence el " + siteTime(done.enlace.vence, clock) : "no vence";
+      toast(moved ? "duración guardada; el enlace había cambiado: la ventana muestra el de ahora" : "duración guardada: " + ends, "ok");
     });
     body.push(el("div", { class: "kit-edit" }, el("span", { class: "muted", text: "Duración" }), pick, save),
-      fieldHelp(AYUDAS.duracion), error);
+      custom.node, fieldHelp(AYUDAS.duracion), error);
   }
   await overlayWindow("Enlace de " + c.name + " (" + s.site + ")", ...body.filter(Boolean));
   return changed;
@@ -659,6 +749,15 @@ async function openMirilla(site, camera) {
     el("p", { class: "muted", text: "Se actualiza sola cada " + st.frame_poll_s + " s mientras está abierta. Para alinear o calibrar: pestaña Cámara." }));
   stop();
   if (url) URL.revokeObjectURL(url);
+}
+
+// "Agregar una cámara" (Section 3.17.1): a block of its own under the cameras, with its title and the three helps of
+// its fields, so it never reads as one more camera.
+function addCameraBlock(s, ctx, error) {
+  return el("div", { style: ADD_BLOCK },
+    el("div", { style: "font-weight: 600; margin-bottom: 4px;", text: "Agregar una cámara a " + s.site }),
+    addCameraRow(s, ctx, error),
+    cameraHelps());
 }
 
 function addCameraRow(s, ctx, error) {

@@ -11,7 +11,9 @@ the site layer with mantenimiento and overrides), each with a factory default so
 config.yaml loads as it is; the two prompt lanes; and the ONE shared contender table (the
 bake-off and the machine room's keyless selector both read it here). Site overrides are checked
 against the knob registry (brain/validator/knobs.py) at load. Section 3.13.2 adds the camera links'
-code alphabet and durations and the name a phone gives (enlace_codigo, nombre_telefono).
+code alphabet and durations and the name a phone gives (enlace_codigo, nombre_telefono). Section 3.17.1 adds a
+link's personalizado life (its days or its last day; every link ends at noon of its last day, the site's clock)
+and the exchange rates the gasto shows its money with (tipos_cambio, typed by a human).
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ import re
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -65,6 +67,7 @@ Role = Literal["admin", "manager", "machine"]
 AccountRole = Literal["admin", "manager"]              # what the users CRUD may create; 'machine' is the cuarto row
 Lane = Literal["merma", "presentacion"]
 RestartService = Literal["fastapi", "worker", "bot"]   # postgres never has a button
+Moneda = Literal["MXN", "CAD"]   # the currencies the gasto can also show its money in (USD is the prices' own; owner, 16 Oct)
 
 # --- Fase-3 constants (SPEC section 4); the absent-key defaults live HERE, one source ------
 FRAME_POLL_S_DEFAULT = 5          # push cadence when capture.frame_poll_s is absent (the knob's factory default)
@@ -87,6 +90,8 @@ ENLACE_ALFABETO = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"   # no 0 O 1 I L: a code rea
 ENLACE_LARGO = 8                  # characters of a code (shown as two groups of 4)
 DURACIONES: dict[str, int | None] = {"1d": 1, "7d": 7, "30d": 30, "permanente": None}   # a link's life, in days
 DURACION_DEFAULT = "7d"           # a camera's first link lasts a week (owner, 11 Oct)
+ENLACE_DIAS_MAX = 365             # a personalizado link: 1 to 365 days, or its last day within a year (owner, 16 Oct)
+ENLACE_VENCE_HORA = 12            # every link ends at 12:00 of its last day, the site's own clock (owner, 16 Oct)
 NOMBRE_TELEFONO_MAX = 30          # the name a phone gives when it asks to be a camera
 # Letters and signs that show as nothing (Hangul fillers, the blank Braille cell, Khmer inherent vowels): a name
 # drops them like control characters.
@@ -97,7 +102,7 @@ USER_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,31}\Z")
 CAMERA_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,23}\Z")
 CHAT_ID_RE = re.compile(r"^-?\d{1,20}\Z")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d\Z")
-Duracion = Literal["1d", "7d", "30d", "permanente"]
+Duracion = Literal["1d", "7d", "30d", "permanente", "personalizado"]
 
 # --- presentation lane constants (SPEC section 4 / 1.7) --------------------------------
 PRESENTATION_PASS_SCORE = 80
@@ -397,14 +402,26 @@ MACHINE_DEFAULTS = MachineConfig()
 
 class PriceConfig(BaseModel):
     """One model's price in USD per million tokens. Prices ship EMPTY: a human enters them after
-    verifying at the source (rule 1). An absent model shows "sin precio", never a guess."""
+    verifying at the source (rule 1). An absent model shows "sin precio", never a guess. Never infinite or NaN (a
+    hand edit like .inf would break the gasto's answer)."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     in_mtok: float = Field(ge=0)
     out_mtok: float = Field(ge=0)
     cache_write_mtok: float = Field(ge=0)
     cache_read_mtok: float = Field(ge=0)
+
+
+class TipoCambioConfig(BaseModel):
+    """How many of a currency one US dollar buys, typed by a human (owner, 16 Oct: the gasto also in pesos or in
+    Canadian dollars), with the day it was typed. An absent currency: the gasto shows its money in USD only. Never
+    infinite or NaN."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    valor: float = Field(gt=0)
+    fecha: date
 
 
 class SiteConfig(BaseModel):
@@ -457,6 +474,7 @@ class Config(BaseModel):
     confianza_minima: Confidence = "media"
     papelera_dias: int = Field(default=10, ge=1, le=365)
     prices: dict[str, PriceConfig] = Field(default_factory=dict)
+    tipos_cambio: dict[Moneda, TipoCambioConfig] = Field(default_factory=dict)   # absent-when-empty (Section 3.17.1)
     raw_logging_off_at: datetime | None = None          # absent-when-off: only while raw_logging is on
     admin_chat_id: str | None = None                    # absent-when-off: the machine families' own chat
     queue_paused: bool | None = None                    # absent-when-off: only `true` ever exists
@@ -797,15 +815,20 @@ class PedirRequest(_Body):
 
 
 class EnlaceNuevoRequest(_Body):
-    """Cambiar enlace: a new code. duracion absent = the camera's current one (only the admin chooses another)."""
+    """Cambiar enlace: a new code. duracion absent = the camera's current one (only the admin chooses another).
+    personalizado carries its days, or its last day (fecha, on the site's calendar): one of the two."""
 
     duracion: Duracion | None = None
+    dias: int | None = None
+    fecha: date | None = None
 
 
 class EnlaceDuracionRequest(_Body):
-    """The admin's duración of a camera's link: the same code, counted again from now."""
+    """The admin's duración of a camera's link: the same code, its last day counted again from the site's today."""
 
     duracion: Duracion
+    dias: int | None = None
+    fecha: date | None = None
 
 
 class KnobWriteRequest(_Body):
@@ -1092,6 +1115,17 @@ class PriceRequest(_Body):
 
 class ModelNameRequest(_Body):
     model: str = Field(min_length=1, max_length=120)
+
+
+class TipoCambioRequest(_Body):
+    """One currency's exchange rate: how many of it one US dollar buys (Section 3.17.1)."""
+
+    moneda: Moneda
+    valor: float
+
+
+class MonedaRequest(_Body):
+    moneda: Moneda
 
 
 class WorkersRequest(_Body):

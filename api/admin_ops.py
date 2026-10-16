@@ -11,6 +11,8 @@ GET  /api/admin/gasto?site=&dias=        gasto de filas vivas (admin): tokens pe
                                          ficha readings; money only where a human entered a price ("sin precio" otherwise)
 POST /api/admin/gasto/precio             one model's price per million tokens, copied from the provider's page (admin)
 POST /api/admin/gasto/precio/quitar      back to "sin precio" (admin)
+POST /api/admin/gasto/tipo_cambio        one currency's exchange rate, typed by a human (admin; Section 3.17.1)
+POST /api/admin/gasto/tipo_cambio/quitar back to USD only for that currency (admin)
 
 The constantes are read in Inicio (the hub's /api/admin/constantes): this tab links there instead of repeating them.
 Every action that changes something leaves ONE bitácora row (ids, counts, a model and its prices; never a key, a code
@@ -22,16 +24,20 @@ instructions, however the provider billed them) and tokens that came out, and mo
 number anywhere (owner, 8 Oct). It is the gasto of LIVE rows: a purged plate leaves with its jobs, and failed attempts or
 bake-off calls never land here (the provider's console is the exact ledger). A plate discarded while its analysis still
 waits in the queue is analyzed anyway (the claim is the queue's verbatim one): Esperando counts it until then.
+Section 3.17.1: the gasto can also show its money in pesos (MXN) or Canadian dollars (CAD), converted on the page with
+the exchange rate a human typed (tipos_cambio, with the day it was typed); the prices stay in USD per million tokens,
+as the provider's page gives them.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable
 from datetime import datetime, time, timedelta, timezone
 from math import ceil
-from typing import Any
+from typing import Any, get_args
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -49,10 +55,13 @@ from brain.validator.models import (
     Config,
     IdsRequest,
     ModelNameRequest,
+    Moneda,
+    MonedaRequest,
     PriceConfig,
     PriceRequest,
     RetryRequest,
     SwitchRequest,
+    TipoCambioRequest,
     keyed_contenders,
     load_config,
 )
@@ -70,6 +79,12 @@ PAGE_MAX = 100_000             # a page number beyond this is answered as this o
 GASTO_DIAS = (7, 30, 90)       # the gasto's ranges, in local days
 GASTO_DIAS_DEFAULT = 30
 PRICE_MAX_MTOK = 1000.0        # USD per million tokens: anything above is a typo (per token, or a missing point)
+# What one US dollar is worth in each currency at least and at most (Section 3.17.1): a rate outside is a typo (a
+# misplaced point, or the rate written backwards). Each with its words and an example for the refusal.
+TIPO_CAMBIO_RANGO = {"MXN": (5.0, 60.0), "CAD": (0.5, 3.0)}
+MONEDA_PALABRAS = {"MXN": ("pesos", "18.45"), "CAD": ("dólares canadienses", "1.38")}
+TIPO_CAMBIO_DECIMALES = 6      # a rate keeps at most this many decimals (what a bank or Banxico's FIX ever shows)
+assert set(TIPO_CAMBIO_RANGO) == set(MONEDA_PALABRAS) == set(get_args(Moneda)), "admin_ops: a Moneda without its range or words"
 MTOK = 1_000_000
 FLUJO = {"return": "regresa", "outgoing": "sale"}
 UNKNOWN_DISH = "desconocido"   # the model's own word for a plate it does not know
@@ -431,6 +446,12 @@ async def gasto(site: str | None = None, dias: int = GASTO_DIAS_DEFAULT, session
             "precios": {model: price.model_dump() for model, price in sorted(cfg.prices.items())},
             "modelos": sorted({f["modelo"] for f in filas if f["modelo"]} | {c.model for c in keyed_contenders()} | set(cfg.prices)),
             "ayuda_precios": _help("prices"),
+            "monedas": list(TIPO_CAMBIO_RANGO),
+            "tipos_cambio": {
+                moneda: {"valor": rate.valor, "fecha": rate.fecha.isoformat()}
+                for moneda, rate in sorted(cfg.tipos_cambio.items())
+            },
+            "ayuda_tipos_cambio": _help("tipos_cambio"),
         }
 
     return jsonable_encoder(await asyncio.to_thread(work))
@@ -483,4 +504,60 @@ async def quitar_precio(body: ModelNameRequest, session: Session = Depends(requi
     answer = await config_action(session, decide)
     if answer["cambio"]:
         log.info("price removed model=%s user=%s", model, session.user)
+    return answer
+
+
+# --- the exchange rates (Section 3.17.1) ------------------------------------------------------
+
+def _rate_text(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+@router.post("/api/admin/gasto/tipo_cambio")
+async def guardar_tipo_cambio(body: TipoCambioRequest, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """One currency's exchange rate, how many of it one US dollar is worth, typed by a human (owner, 16 Oct), with the
+    day it was typed (the global timezone's calendar). Written under tipos_cambio.<moneda> through the ONE writer; the
+    page converts the gasto with it."""
+    low, high = TIPO_CAMBIO_RANGO[body.moneda]
+    words, example = MONEDA_PALABRAS[body.moneda]
+    if not math.isfinite(body.valor) or not low <= body.valor <= high:
+        raise HTTPException(
+            status_code=400,
+            detail="Revisa el tipo de cambio: 1 dólar vale entre " + _rate_text(low) + " y " + _rate_text(high) + " "
+            + words + ". Escribe cuántos " + words + " vale 1 dólar, como " + example + ".",
+        )
+    valor = round(body.valor, TIPO_CAMBIO_DECIMALES)
+
+    def decide(now: Config) -> tuple[list[cw.Op], str, dict[str, Any], dict[str, Any]]:
+        hoy = datetime.now(timezone.utc).astimezone(ZoneInfo(now.timezone)).date().isoformat()
+        before = now.tipos_cambio.get(body.moneda)
+        antes = {"valor": before.valor, "fecha": before.fecha.isoformat()} if before is not None else None
+        values = {"valor": valor, "fecha": hoy}
+        answer = {"moneda": body.moneda, "tipo_cambio": values}
+        if antes == values:
+            return [], "", {}, answer
+        return ([cw.set_op(("tipos_cambio", body.moneda), values)], "tipo_cambio.guarda",
+                {"moneda": body.moneda, "antes": antes, "despues": values}, answer)
+
+    answer = await config_action(session, decide)
+    if answer["cambio"]:
+        log.info("exchange rate set currency=%s user=%s", body.moneda, session.user)
+    return answer
+
+
+@router.post("/api/admin/gasto/tipo_cambio/quitar")
+async def quitar_tipo_cambio(body: MonedaRequest, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Back to USD only for that currency: its line leaves the file (absent-when-off)."""
+
+    def decide(now: Config) -> tuple[list[cw.Op], str, dict[str, Any], dict[str, Any]]:
+        before = now.tipos_cambio.get(body.moneda)
+        answer = {"moneda": body.moneda, "tipo_cambio": None}
+        if before is None:
+            return [], "", {}, answer
+        antes = {"valor": before.valor, "fecha": before.fecha.isoformat()}
+        return [cw.delete_op(("tipos_cambio", body.moneda))], "tipo_cambio.quita", {"moneda": body.moneda, "antes": antes}, answer
+
+    answer = await config_action(session, decide)
+    if answer["cambio"]:
+        log.info("exchange rate removed currency=%s user=%s", body.moneda, session.user)
     return answer

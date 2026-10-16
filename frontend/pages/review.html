@@ -23,6 +23,8 @@
   .stepper .val { width: 64px; text-align: center; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .live { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+  .live.bad { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -30,6 +32,7 @@
   <section class="card">
     <div class="tabs" id="tabs"></div>
     <div class="row" id="filters"></div>
+    <p class="live" id="live"></p>
   </section>
   <section class="card">
     <div id="list"></div>
@@ -41,7 +44,13 @@
 // Review (Fase 2's human lane). Section 3.14: Descartar (in the bulk bar and in the corrector) sends plates to the
 // papelera; a row under its site's confianza_minima carries "bajo el umbral"; dishes and components show their names
 // from the Menú, never a clave or an internal key.
-import { api, session, requireLogin, mountHeader, el, qs, fmtDate, toast } from "/static/app.js";
+// Section 3.17.1 (the owner's ✋ notes, 16 Oct): the lists follow the system by themselves every LIVE_MS while the page
+// is on screen (a plate restored from the papelera comes back without reloading). A re-read uses the filters, tab and
+// page as last applied, repaints only when the answer changed (a read a person asked for always repaints), keeps the
+// plates ticked and the focus, steps back when its last page emptied itself, and waits while the corrector or any
+// window is open, an action runs, or hands are on the list (a press, a finger, a text selection); it never opens the
+// login.
+import { api, session, requireLogin, mountHeader, el, qs, fmtDate, toast, poll } from "/static/app.js";
 
 const pick = (selector) => document.querySelector(selector);
 let sess = await session();
@@ -54,6 +63,9 @@ const BUCKET = 10;
 let tab = "pendientes";
 let page = 1;
 let selected = new Set();
+const LIVE_MS = 5000;              // the lists re-read themselves this often while the page is on screen
+const HOLD_MAX_MS = 30000;         // a press or a touch older than this no longer holds the list (a lost release)
+const live = { applied: null, sig: "", ticket: 0, painted: 0, acting: 0, running: false, pressedAt: 0, touchedAt: 0 };
 let dishes = [];           // [{dish_id, nombre, componentes: [keys], etiquetas: {key: label}}]
 let currentRows = [];
 let minimas = {};          // each listed site's confianza_minima: rows under it are painted
@@ -146,14 +158,14 @@ function resultText(r) {
 // --- tabs, list, pager, bulk bar ------------------------------------------------------
 function renderTabs(counts) {
   pick("#tabs").replaceChildren(...TABS.map(([key, label]) =>
-    el("button", { class: key === tab ? "current" : "", text: label + " (" + counts[key] + ")", onclick: () => { tab = key; page = 1; load(); } })));
+    el("button", { class: key === tab ? "current" : "", "data-focus": "tab:" + key, text: label + " (" + counts[key] + ")", onclick: () => { tab = key; page = 1; load(); } })));
 }
 
 function renderList(rows) {
   currentRows = rows;
   const node = pick("#list");
   if (!rows.length) { node.replaceChildren(el("p", { class: "muted", text: "Nada en esta pestaña con estos filtros." })); return; }
-  const all = el("input", { type: "checkbox", onchange: (ev) => { selected = ev.target.checked ? new Set(rows.map((r) => r.id)) : new Set(); renderList(rows); renderBulk(); } });
+  const all = el("input", { type: "checkbox", "aria-label": "Elegir todos", "data-focus": "pick:all", onchange: (ev) => { selected = ev.target.checked ? new Set(rows.map((r) => r.id)) : new Set(); renderList(rows); renderBulk(); refocus("pick:all"); } });
   all.checked = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const table = el("table", {},
     el("thead", {}, el("tr", {},
@@ -162,7 +174,7 @@ function renderList(rows) {
       el("th", { text: "Fecha" }), el("th", { text: "" }),
     )),
     el("tbody", {}, rows.map((r) => {
-      const box = el("input", { type: "checkbox", onchange: (ev) => { if (ev.target.checked) selected.add(r.id); else selected.delete(r.id); ev.target.closest("tr").classList.toggle("selected", ev.target.checked); renderBulk(); } });
+      const box = el("input", { type: "checkbox", "aria-label": "Elegir el plato " + r.id, "data-focus": "pick:" + r.id, onchange: (ev) => { if (ev.target.checked) selected.add(r.id); else selected.delete(r.id); ev.target.closest("tr").classList.toggle("selected", ev.target.checked); renderBulk(); } });
       box.checked = selected.has(r.id);
       return el("tr", { class: selected.has(r.id) ? "selected" : "" },
         el("td", { class: "pick" }, box),
@@ -174,7 +186,7 @@ function renderList(rows) {
         el("td", {}, r.confidence || "", tab !== "no_platos" && underMin(r) ? el("div", {}, chip("bajo el umbral")) : null),
         el("td", {}, chips(r)),
         el("td", { text: fmtDate(r.ts) }),
-        el("td", {}, el("button", { class: "primary", text: "Corregir", onclick: () => openCorrector(r) })),
+        el("td", {}, el("button", { class: "primary", "data-focus": "corregir:" + r.id, text: "Corregir", onclick: () => openCorrector(r) })),
       );
     })),
   );
@@ -183,22 +195,22 @@ function renderList(rows) {
 
 function renderPager(d) {
   pick("#pager").replaceChildren(
-    el("button", { text: "◀ Anterior", disabled: d.page <= 1, onclick: () => { page = d.page - 1; load(); } }),
+    el("button", { "data-focus": "anterior", text: "◀ Anterior", disabled: d.page <= 1, onclick: () => { page = d.page - 1; load(); } }),
     el("span", { class: "muted", text: "página " + d.page + " de " + d.pages + " · " + d.total + " en total" }),
-    el("button", { text: "Siguiente ▶", disabled: d.page >= d.pages, onclick: () => { page = d.page + 1; load(); } }),
+    el("button", { "data-focus": "siguiente", text: "Siguiente ▶", disabled: d.page >= d.pages, onclick: () => { page = d.page + 1; load(); } }),
   );
 }
 
 function renderBulk() {
   const n = selected.size;
   const bar = pick("#bulkbar");
-  const mk = (text, action, cls) => el("button", { class: cls || "", text, disabled: n === 0, onclick: () => bulk(action) });
+  const mk = (text, action, cls) => el("button", { class: cls || "", "data-focus": "bulk:" + action, text, disabled: n === 0, onclick: () => bulk(action) });
   bar.replaceChildren(...[       // the buttons a tab does not offer are left out (no stray "null" in the bar)
     el("span", { class: "muted", text: n ? n + " seleccionado" + (n === 1 ? "" : "s") : "Selecciona platos para actuar en lote" }),
     tab === "pendientes" ? mk("✔ Correcto (verificar tal cual)", "verify_as_is", "ok") : null,
     tab !== "no_platos" ? mk("✘ No es plato", "not_plate", "bad") : null,
     tab !== "pendientes" ? mk("↩ Regresar a pendientes", "reopen") : null,
-    el("button", { class: "warn", text: "🗑 Descartar", disabled: n === 0, onclick: discardSelected }),
+    el("button", { class: "warn", "data-focus": "descartar", text: "🗑 Descartar", disabled: n === 0, onclick: discardSelected }),
   ].filter(Boolean));
 }
 
@@ -210,37 +222,139 @@ async function discardSelected() {
   const where = one ? " Se restaura desde el Mostrador (Cola, papelera y gasto) mientras espera ahí."
     : " Se restauran desde el Mostrador (Cola, papelera y gasto) mientras esperan ahí.";
   if (!window.confirm("¿Mandar " + what + " a la papelera?" + where)) return;
+  live.acting += 1;
   try {
     const r = await api("/api/review/bulk", { method: "POST", json: { ids, action: "discard" } });
     toast((r.updated === 1 ? "1 plato a la papelera: se restaura" : r.updated + " platos a la papelera: se restauran")
       + " desde el Mostrador", "ok");
     selected = new Set();
     await load();
-  } catch (err) { toast(err.message, "bad"); }
+  } catch (err) { toast(err.message, "bad"); } finally { live.acting -= 1; }
 }
 
 async function bulk(action) {
   const ids = [...selected];
+  live.acting += 1;
   try {
     const r = await api("/api/review/bulk", { method: "POST", json: { ids, action } });
     toast(r.updated + " de " + r.requested + " actualizados", "ok");
     selected = new Set();
     await load();
-  } catch (err) { toast(err.message, "bad"); }
+  } catch (err) { toast(err.message, "bad"); } finally { live.acting -= 1; }
+}
+
+// show(d, ticket, always): an answer older than the one on screen never rolls it back; the same answer repaints only
+// when a person asked for the read (always), so a live round never moves the list under someone's eyes.
+function show(d, ticket, always) {
+  if (ticket < live.painted) return;
+  live.painted = ticket;
+  stampLive();
+  const sig = JSON.stringify(d);
+  if (sig === live.sig && !always) return;
+  live.sig = sig;
+  const key = focusKey();
+  selected = new Set([...selected].filter((id) => d.rows.some((r) => r.id === id)));
+  minimas = d.minimas || {};
+  nombres = d.nombres || {};
+  etiquetas = d.etiquetas || {};
+  renderTabs(d.counts);
+  renderList(d.rows);
+  renderPager(d);
+  renderBulk();
+  refocus(key);
+}
+
+// The last page emptied itself (its plates were verified, discarded or restored elsewhere): the one before is read.
+function pageGone(d) {
+  return d.pages >= 1 && d.page > d.pages;
 }
 
 async function load() {
+  const asked = params();
+  live.applied = asked;
+  const ticket = ++live.ticket;
   try {
-    const d = await api("/api/review" + qs(params()));
-    selected = new Set([...selected].filter((id) => d.rows.some((r) => r.id === id)));
-    minimas = d.minimas || {};
-    nombres = d.nombres || {};
-    etiquetas = d.etiquetas || {};
-    renderTabs(d.counts);
-    renderList(d.rows);
-    renderPager(d);
-    renderBulk();
+    const d = await api("/api/review" + qs(asked));
+    if (pageGone(d)) { page = d.pages; return load(); }
+    show(d, ticket, true);
   } catch (err) { toast(err.message, "bad"); }
+}
+
+// The person's focus across a repaint: a tab, a box or a button keeps it by its data-focus, only when the focus is
+// on the lists or nowhere (a person who moved on elsewhere keeps their place).
+const AREAS = "#tabs, #list, #pager, #bulkbar";
+function focusKey() {
+  const a = document.activeElement;
+  return a && a !== document.body && a.closest(AREAS) && a.dataset.focus ? a.dataset.focus : null;
+}
+function refocus(key) {
+  if (!key) return;
+  const a = document.activeElement;
+  if (a && a !== document.body && !a.closest(AREAS)) return;
+  const target = [...document.querySelectorAll("[data-focus]")].find((x) => x.dataset.focus === key);
+  if (target && !target.disabled && target !== a) target.focus({ preventScroll: true });
+}
+
+// --- the live re-read (Section 3.17.1) --------------------------------------------------------
+function stampLive(bad) {
+  const line = pick("#live");
+  line.classList.toggle("bad", Boolean(bad));
+  line.textContent = bad
+    ? "No se pudo actualizar la lista (" + new Date().toLocaleTimeString("es-MX") + "). Si tu sesión venció, recarga la página."
+    : "actualizado " + new Date().toLocaleTimeString("es-MX");
+}
+
+async function quietGet(path) {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), 2 * LIVE_MS);
+  try {
+    const res = await fetch(path, { credentials: "same-origin", cache: "no-store", signal: stop.signal });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const listCard = pick("#list").closest(".card");
+listCard.addEventListener("pointerdown", (ev) => { if (ev.pointerType !== "touch") live.pressedAt = Date.now(); });
+listCard.addEventListener("touchstart", () => { live.touchedAt = Date.now(); }, { passive: true });
+window.addEventListener("pointerup", (ev) => { if (ev.pointerType !== "touch") live.pressedAt = 0; }, true);
+window.addEventListener("pointercancel", (ev) => { if (ev.pointerType !== "touch") live.pressedAt = 0; }, true);
+const fingerOff = (ev) => { if (!ev.touches || ev.touches.length === 0) live.touchedAt = 0; };
+window.addEventListener("touchend", fingerOff, true);
+window.addEventListener("touchcancel", fingerOff, true);
+function free() {
+  const recent = (at) => at > 0 && Date.now() - at < HOLD_MAX_MS;
+  if (!live.applied || live.acting || document.querySelector(".overlay, [aria-modal='true']")) return false;
+  if (recent(live.pressedAt) || recent(live.touchedAt)) return false;
+  const sel = window.getSelection();
+  return !(sel && !sel.isCollapsed && sel.anchorNode && listCard.contains(sel.anchorNode));
+}
+async function round() {
+  if (live.running || !free()) return;
+  live.running = true;
+  try {
+    for (;;) {                        // a step back reads the page before (each step a smaller page: it ends)
+      const ticket = ++live.ticket;
+      const d = await quietGet("/api/review" + qs(live.applied));
+      if (!free()) return;            // the corrector, an action, a press or a selection began meanwhile
+      if (!d) {
+        if (ticket >= live.painted) stampLive(true);
+        return;
+      }
+      if (pageGone(d)) {
+        page = d.pages;
+        live.applied = { ...live.applied, page: d.pages };
+        continue;
+      }
+      show(d, ticket, false);
+      return;
+    }
+  } finally {
+    live.running = false;
+  }
 }
 
 // --- the one-by-one corrector ---------------------------------------------------------
@@ -312,30 +426,38 @@ function openCorrector(r) {
       if (changed) body.leftovers_verified = { ...pct };
     }
     save.disabled = true;
+    live.acting += 1;
     try {
       await api("/api/review/" + r.id + "/verify", { method: "POST", json: body });
       toast(body.leftovers_verified ? "Corrección guardada" : "Verificado tal cual", "ok");
       overlay.remove();
       await load();
-    } catch (err) { toast(err.message, "bad"); save.disabled = false; }
+    } catch (err) { toast(err.message, "bad"); save.disabled = false; } finally { live.acting -= 1; }
   });
   notPlate.addEventListener("click", async () => {
+    live.acting += 1;
     try { await api("/api/review/" + r.id + "/not_plate", { method: "POST" }); toast("Marcado como no-plato", "ok"); overlay.remove(); await load(); }
-    catch (err) { toast(err.message, "bad"); }
+    catch (err) { toast(err.message, "bad"); } finally { live.acting -= 1; }
   });
   discard.addEventListener("click", async () => {
     discard.disabled = true;
+    live.acting += 1;
     try {
       await api("/api/review/" + r.id + "/discard", { method: "POST" });
       toast("A la papelera: se restaura desde el Mostrador", "ok");
       overlay.remove();
       await load();
-    } catch (err) { toast(err.message, "bad"); discard.disabled = false; }
+    } catch (err) { toast(err.message, "bad"); discard.disabled = false; } finally { live.acting -= 1; }
   });
   document.body.append(overlay);
 }
 
 await load();
+let firstRound = true;
+poll(async () => {
+  if (firstRound) { firstRound = false; return; }   // the page just read the list: the first round is the next one
+  await round();
+}, LIVE_MS);
 </script>
 </body>
 </html>

@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.17 (HEAD was a782a4a, Section 3.16).
+- Last update: Section 3.17.1 (HEAD was 4be804f, Section 3.17).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -87,7 +87,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   fresh one (its lock remembers 10 minutes).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.17; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.17.1; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -106,6 +106,32 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.17.1 (owner, 16 Oct 2026; built in Section 3.17.1): the owner's notes from 3.17's ✋
+- Sitios y cuentas: each camera sits in its own box, and "Agregar una cámara a <sitio>" is a block of its own under
+  them (its title, the row, the three helps of its fields), never read as one more camera.
+- A camera's link ends at 12:00 of its last day on the site's own clock, never a count of hours from the click (owner:
+  made today at 1:00 p.m. with "1 día", it ends tomorrow at 12:00 p.m.). The choices: 1 día, 1 semana, 1 mes (30 days),
+  permanente and personalizado; personalizado's box shows only while it is chosen, with a switch between its days (only
+  digits, 1 to 365) and its last day (a calendar from tomorrow to a year from the site's today). Saved twice the same
+  day, the same end. The page shows a link's end on the site's clock ("hora de demo"); a refusal says why in plain
+  words. The code stays shown beside the link (HQ's answer, 16 Oct: it is the same key as the link; the locks are
+  Tailscale, the admin's Aceptar and one phone per camera); hiding it behind a button waits for the owner's word.
+- Prices and exchange rates show at least two decimals (2.2 shows 2.20; 2.57 stays 2.57; 0.2 and 0.20 are one number).
+- The Gasto shows its money in USD, MXN or CAD (a menu; each browser remembers its last choice). The exchange rates are
+  typed by the admin (owner, 16 Oct: "Typed by you"), 1 USD = N, kept in config.yaml under tipos_cambio with the day
+  each was saved (a special knob of the registry; one bitácora row per save or removal; a currency without a rate
+  can't be chosen). Built defaults (HQ's standard choices; the owner may change any of them): a typo guard refuses MXN
+  outside 5 to 60 and CAD outside 0.5 to 3; the money converts with the last rate saved, on the page. The prices stay
+  in USD per million tokens, as the provider's page gives them; no price ever comes from the model itself (HQ's answer,
+  16 Oct: it does not know its current prices, and asking per plate costs time and money).
+- Fewer reloads: the Papelera (every 5 s), the Gasto (every 10 s) and Review's lists (every 5 s) follow the system by
+  themselves while on screen, on the Cola's terms: they repaint only when their data changed (a read a person asked for
+  always repaints), never under a pressed mouse, a finger, a text selection, an open window (the photo viewer, the
+  corrector, a confirm), a running action or a field in use, never with an answer older than the one on screen, and
+  their re-read never opens the login. A repaint keeps the person's place (the plates ticked, the focus, a table's
+  sideways scroll, a typed value and its error line); a page that emptied itself steps back to the one before. Review's
+  re-read uses the filters as last applied. Polling only: websockets stay forbidden.
 
 ### 3.17 (built in Section 3.17): the local closing
 - The backup (scripts/pg_backup.sh; the server's lpq-backup timer runs the file in place every night at 03:30 UTC):
@@ -628,17 +654,14 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - From 3.17: photos/_smoke/check_317.py (its copy, and /tmp/smoke_diet.jpg, in the fastapi container vanish at the next
   recreate). The backup test's folder (photos/backups_317) and its scratch database (lpq_restore_317) are removed by
   their own steps; 3.18 confirms neither is left.
+- From 3.17.1: photos/_smoke/check_3171.py (its copy in the fastapi container vanishes at the next recreate); the ✋'s
+  test camera (prueba-2), its link, its price and its exchange rate are removed by its own steps, and config.yaml goes
+  back with git checkout; 3.18 confirms none is left.
 
 ## Waiting on the owner (no section owns these)
 - 3.17's ✋, ONE list in one sitting after 3.17's commit (owner, 14 Oct: the earlier ✋ lists merged), ending with one
-  push of 3.15, 3.16 and 3.17:
-  - 3.13.2's steps first (pushed early, on 13 Oct, with 3.14's), on the laptop, inside a bracket of the server's bot:
-    the camera rows; a test Pi camera (prueba-1) and its link window; the laptop opening the link is refused; a phone
-    played by a script asks (posted in the group), Aceptar moves the Pi camera to it (the relevo posted), its light
-    and the Mirilla; a second phone refused; Cambiar enlace kicks nobody; Sacar; the test camera removed.
-  - 3.14's, after the bracket: the tab's four cards; the brake on and off; the smoke plate discarded in Review,
-    restored and deleted with Eliminar ya; a price typed from the provider's page and removed; the constantes link;
-    the panel's count.
+  push of 3.15, 3.16 and 3.17. Steps 1 to 23 (3.13.2's, inside a bracket of the server's bot, and 3.14's) passed on
+  15 Oct; the owner's notes on them became 3.17.1. Left, unless the owner already reported them to HQ:
   - 3.15's (no bot bracket): the door with a wrong and then the real cuarto password (the positive unlock test); the
     room's cards; the assert's bounce; max_tokens there and back; every butler action answering "no responde" with
     nothing changed and nobody warned; the checklist (bot and mayordomo red on the laptop, by design); the live log
@@ -648,6 +671,13 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
     own log shows each command printed, never run; the butler stopped and removed (its folder empty) and the room red
     again.
   - Everything put back.
+- 3.17.1's ✋ (on the laptop after 3.17.1's commit; no bot needed): the camera boxes and the add block; a test camera
+  (prueba-2) and its link: its end at 12:00 on demo's clock, 1 día, personalizado by days (only digits; a wrong number
+  refused) and by date (the calendar's limits), permanente, the camera removed; a price showing two decimals; an
+  exchange rate (a typo refused) and the money in pesos, remembered after a reload; a second tab's Gasto following the
+  first; the rates and the price removed; the Papelera and Review following each other without reloading (a plate
+  discarded and restored); everything put back. Then one push of what is not pushed yet (3.17.1, with 3.15 to 3.17
+  when their push has not happened).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never

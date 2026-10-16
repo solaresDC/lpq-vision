@@ -14,11 +14,19 @@
 // A price row being typed keeps its text, its focus and its caret while any other row saves or the range changes.
 // Constantes: they are read in Inicio; this tab links there instead of repeating them.
 // Each card loads on its own: one that fails says so inside itself and the others still work.
+// Section 3.17.1 (the owner's ✋ notes, 16 Oct): the Papelera (every LIVE_MS) and the Gasto (every GASTO_LIVE_MS) also
+// follow the system by themselves while on screen, on the Cola's terms: they repaint only when their data changed,
+// never under a pressed mouse, a finger, a text selection, an open window or a field in use, never with an answer older
+// than the one on screen, and their re-read never opens the login; a repaint keeps the person's place (the focus, a
+// table's sideways scroll, a row's error line). A price or an exchange rate shows at least two decimals (2.20; 2.57
+// stays 2.57). The Gasto can show its money in USD, MXN or CAD: the exchange rates are typed by
+// the admin (1 USD = 18.45 MXN), with the day each was saved; the prices stay in USD per million tokens.
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import { busy, card, confirmFlow, fieldHelp, photoViewer } from "/static/admin-kit.js";
 
-const LIVE_MS = 5000;               // the Cola re-reads itself this often while it is on screen
+const LIVE_MS = 5000;               // the Cola and the Papelera re-read themselves this often while on screen
+const GASTO_LIVE_MS = 10000;        // the Gasto (a heavier read) this often
 const READ_TIMEOUT_MS = 2 * LIVE_MS; // a re-read that has not answered by then counts as failed
 const HOLD_MAX_MS = 30000;          // a press or a touch older than this no longer holds the Cola (a lost release)
 // Where each price sits on the provider's price page (checked 13 Oct 2026); this system keeps its caché 5 minutes.
@@ -36,6 +44,11 @@ function isDecimal(raw) {
   const m = /^\d+(\.\d+)?/.exec(raw);
   return Boolean(m) && m[0] === raw;
 }
+// The currencies the Gasto can show besides USD, and how an exchange rate is typed (Section 3.17.1).
+const MONEDA_NOMBRE = { USD: "dólares (USD)", MXN: "pesos (MXN)", CAD: "dólares canadienses (CAD)" };
+const MONEDA_PALABRA = { MXN: "pesos", CAD: "dólares canadienses" };
+const MONEDA_EJEMPLO = { MXN: "18.45", CAD: "1.38" };
+const MONEDA_KEY = "lpq.gasto.moneda";   // this browser's last currency choice (a convenience: absent = USD)
 
 const STYLE = `
 .ops-tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin: 10px 0; }
@@ -52,6 +65,7 @@ const STYLE = `
 .ops-price label { display: inline-flex; flex-direction: column; gap: 2px; margin: 0 8px 6px 0; font-size: 13px; color: var(--muted); }
 .ops-pager { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .ops-live { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.ops-pair { display: inline-flex; align-items: center; gap: 6px; }
 .ops-live.bad { color: var(--warn); }
 `;
 
@@ -62,12 +76,12 @@ function injectStyle() {
 
 export async function render(ctx) {
   injectStyle();
-  const bus = { refreshCola: () => {} };   // the papelera's actions ask the Cola to look again
+  const bus = { refreshCola: () => {}, refreshGasto: () => {} };   // the papelera's actions ask the others to look again
   const box = el("div", {});
   box.append(await guarded("Cola de análisis", () => colaCard(ctx, bus)));
   box.append(await guarded("Papelera", () => papeleraCard(ctx, bus)));
   box.append(ctx.sess.admin
-    ? gastoCard(ctx)
+    ? gastoCard(ctx, bus)
     : card("Gasto", el("p", { class: "muted", text: "El gasto lo ve el admin." })));
   box.append(constantesCard());
   return box;
@@ -96,15 +110,33 @@ function fmtInt(n) {
   return Number(n || 0).toLocaleString("es-MX");
 }
 
-function fmtUsd(value) {
-  return "USD " + Number(value).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+// money: {code, rate} = the currency the Gasto shows and how many of it one USD is worth (1 for USD itself).
+function fmtCash(usd, money) {
+  return money.code + " " + (Number(usd) * money.rate).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 }
 
 // usd null with nothing unpriced = nothing was spent; usd null otherwise = only unpriced rows.
-function fmtMoney(usd, sinPrecio) {
+function fmtMoney(usd, sinPrecio, money) {
   if (usd === null || usd === undefined) return sinPrecio ? "sin precio" : "sin gasto";
   const extra = sinPrecio ? " · " + sinPrecio + (sinPrecio === 1 ? " fila sin precio" : " filas sin precio") : "";
-  return fmtUsd(usd) + extra;
+  return fmtCash(usd, money) + extra;
+}
+
+// A price or an exchange rate as the page shows it (owner, 16 Oct): at least two decimals, more only when it has
+// them (up to 10, more than anyone types): 2 shows 2.00, 0.2 shows 0.20, 2.57 stays 2.57, 0.075 stays 0.075. No
+// thousands mark: it is a field's value.
+function fmtPrice(value) {
+  const n = Number(value);
+  let plain = n.toFixed(10);
+  while (plain.endsWith("0")) plain = plain.slice(0, -1);
+  if (plain.endsWith(".")) plain = plain.slice(0, -1);
+  const point = plain.indexOf(".");
+  return point === -1 || plain.length - point - 1 < 2 ? n.toFixed(2) : plain;
+}
+
+function dmy(iso) {
+  const [y, m, d] = String(iso).slice(0, 10).split("-");
+  return d + "/" + m + "/" + y;
 }
 
 function fmtDay(iso) {
@@ -118,6 +150,78 @@ function plural(n, one, many) {
 
 function clock() {
   return new Date().toLocaleTimeString("es-MX");
+}
+
+// The "actualizado" line under a live card, and what it says when a re-read failed.
+function stamp(live) {
+  live.classList.remove("bad");
+  live.textContent = "actualizado " + clock();
+}
+
+function failed(live, what) {
+  live.classList.add("bad");
+  live.textContent = "No se pudo actualizar " + what + " (" + clock() + "). Si tu sesión venció, recarga la página.";
+}
+
+// Hands on a card: a mouse press or a finger on it holds its repaint until it is released (a touch that starts a
+// scroll fires pointercancel at once, so fingers are followed with the touch events instead; a press older than
+// HOLD_MAX_MS is a lost release), and so does a text selection inside it. stop() when the tab is left.
+function hands(node) {
+  const state = { pressedAt: 0, touchedAt: 0 };
+  const onPointerDown = (ev) => { if (ev.pointerType !== "touch") state.pressedAt = Date.now(); };
+  const onPointerUp = (ev) => { if (ev.pointerType !== "touch") state.pressedAt = 0; };
+  const onTouchStart = () => { state.touchedAt = Date.now(); };
+  const onTouchEnd = (ev) => { if (!ev.touches || ev.touches.length === 0) state.touchedAt = 0; };
+  node.addEventListener("pointerdown", onPointerDown);
+  node.addEventListener("touchstart", onTouchStart, { passive: true });
+  window.addEventListener("pointerup", onPointerUp, true);
+  window.addEventListener("pointercancel", onPointerUp, true);
+  window.addEventListener("touchend", onTouchEnd, true);
+  window.addEventListener("touchcancel", onTouchEnd, true);
+  const recent = (at) => at > 0 && Date.now() - at < HOLD_MAX_MS;
+  return {
+    held: () => {
+      if (recent(state.pressedAt) || recent(state.touchedAt)) return true;
+      const sel = window.getSelection();
+      return Boolean(sel && !sel.isCollapsed && sel.anchorNode && node.contains(sel.anchorNode));
+    },
+    stop: () => {
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+      window.removeEventListener("touchend", onTouchEnd, true);
+      window.removeEventListener("touchcancel", onTouchEnd, true);
+    },
+  };
+}
+
+// An open window anywhere (a confirm, the photo viewer, the login, a dialog): the live cards wait under it.
+function windowOpen() {
+  return Boolean(document.querySelector(".overlay, [aria-modal='true']"));
+}
+
+// The person's focus inside a card, as a key that survives a repaint (a button's or a box's data-focus, a help's "?"
+// by its data-help); refocus() puts it back on the new element with that key, only when the focus is still on the
+// card or nowhere (a person who moved on elsewhere keeps their place) and the element can take it.
+function focusKeyIn(root) {
+  const active = document.activeElement;
+  if (!active || active === document.body || !root.contains(active)) return null;
+  if (active.dataset && active.dataset.focus) return "f:" + active.dataset.focus;
+  const help = active.classList.contains("kit-ask") ? active.closest("[data-help]") : null;
+  return help ? "h:" + help.dataset.help : null;
+}
+
+function refocus(root, key) {
+  if (!key) return;
+  const active = document.activeElement;
+  if (active && active !== document.body && !root.contains(active)) return;
+  let target = null;
+  if (key.startsWith("f:")) {
+    target = [...root.querySelectorAll("[data-focus]")].find((x) => x.dataset.focus === key.slice(2)) || null;
+  } else {
+    const help = [...root.querySelectorAll("[data-help]")].find((x) => x.dataset.help === key.slice(2));
+    target = help ? help.querySelector(".kit-ask") : null;
+  }
+  if (target && !target.disabled && target !== document.activeElement) target.focus({ preventScroll: true });
 }
 
 // A read that never opens the login (an expired session simply waits for the person's next click) and never hangs:
@@ -158,29 +262,9 @@ async function colaCard(ctx, bus) {
   const fails = el("div", {});      // the failed plates and Reintentar
   const live = el("div", { class: "ops-live" });
   const node = card("Cola de análisis " + scopeText(ctx.site), head, tiles, brake, fails, live);
-  const state = {
-    brakeSig: "", countSig: "", ticket: 0, painted: 0, acting: 0, running: false, gone: false,
-    pressedAt: 0, touchedAt: 0,     // when a mouse button or a finger went down on the card (0 = none)
-  };
-
-  // A mouse press or a finger on the card holds the repaint until it is released (a touch that starts a scroll
-  // fires pointercancel at once, so fingers are followed with the touch events instead).
-  const onPointerDown = (ev) => { if (ev.pointerType !== "touch") state.pressedAt = Date.now(); };
-  const onPointerUp = (ev) => { if (ev.pointerType !== "touch") state.pressedAt = 0; };
-  const onTouchStart = () => { state.touchedAt = Date.now(); };
-  const onTouchEnd = (ev) => { if (!ev.touches || ev.touches.length === 0) state.touchedAt = 0; };
-  node.addEventListener("pointerdown", onPointerDown);
-  node.addEventListener("touchstart", onTouchStart, { passive: true });
-  window.addEventListener("pointerup", onPointerUp, true);
-  window.addEventListener("pointercancel", onPointerUp, true);
-  window.addEventListener("touchend", onTouchEnd, true);
-  window.addEventListener("touchcancel", onTouchEnd, true);
-  const recent = (at) => at > 0 && Date.now() - at < HOLD_MAX_MS;
-  const held = () => {
-    if (recent(state.pressedAt) || recent(state.touchedAt)) return true;
-    const sel = window.getSelection();
-    return Boolean(sel && !sel.isCollapsed && sel.anchorNode && node.contains(sel.anchorNode));
-  };
+  const state = { brakeSig: "", countSig: "", ticket: 0, painted: 0, acting: 0, running: false, gone: false };
+  const hand = hands(node);
+  const held = hand.held;
 
   // focusKey: the data-focus of the button the person was on (an action passes it: its button is disabled while it
   // runs, so the browser has already moved the focus away). The focus comes back only when it is on the card or
@@ -188,8 +272,7 @@ async function colaCard(ctx, bus) {
   const paint = (data, ticket, focusKey) => {
     if (ticket < state.painted) return;                 // an answer older than the one on screen never rolls it back
     state.painted = ticket;
-    live.classList.remove("bad");
-    live.textContent = "actualizado " + clock();
+    stamp(live);
     const brakeSig = JSON.stringify([data.pausada, data.puede_pausar, data.ayuda_pausa]);
     const countSig = JSON.stringify([data.site, data.esperando, data.en_proceso, data.fallidos, data.fallidos_lista]);
     if (brakeSig === state.brakeSig && countSig === state.countSig) return;   // nothing moves under the person's eyes
@@ -264,10 +347,7 @@ async function colaCard(ctx, bus) {
   ctx.onLeave(() => {
     state.gone = true;
     stop();
-    window.removeEventListener("pointerup", onPointerUp, true);
-    window.removeEventListener("pointercancel", onPointerUp, true);
-    window.removeEventListener("touchend", onTouchEnd, true);
-    window.removeEventListener("touchcancel", onTouchEnd, true);
+    hand.stop();
   });
   return node;
 }
@@ -354,22 +434,83 @@ function failBody(data, act) {
 
 // --- Papelera ------------------------------------------------------------------------------
 
+// The papelera follows itself every LIVE_MS while on screen (Section 3.17.1): a plate discarded in Review shows up
+// here without reloading. It repaints only when its data changed, keeps the plates ticked (those still listed), the
+// page, the table's sideways scroll and the focus, and waits while an action runs, a window is open or hands are on it.
 async function papeleraCard(ctx, bus) {
   const body = el("div", {});
-  const node = card("Papelera " + scopeText(ctx.site), body);
-  const view = { page: 1, selected: new Set(), ticket: 0 };
-  const load = async () => {
-    const ticket = ++view.ticket;
-    const data = await api("/api/admin/papelera" + qs({ site: ctx.site, page: view.page }));
-    if (ticket !== view.ticket) return;  // a newer read is on its way: it paints
+  const live = el("div", { class: "ops-live" });
+  const node = card("Papelera " + scopeText(ctx.site), body, live);
+  const view = { page: 1, selected: new Set(), ticket: 0, painted: 0, sig: "", acting: 0, running: false, gone: false };
+  let hand = null;                      // hands on the card once it stands: a card that cannot load leaves nothing behind
+  const path = () => "/api/admin/papelera" + qs({ site: ctx.site, page: view.page });
+  view.act = async (fn) => {
+    view.acting += 1;
+    try {
+      return await fn();
+    } finally {
+      view.acting -= 1;
+    }
+  };
+  // quiet: a live round's answer, so a step back reads quietly too (never the login, never a hang) and paints only
+  // while the card is still free; otherwise a person's read (api).
+  const paint = async (data, ticket, quiet) => {
+    if (ticket < view.painted) return;   // an answer older than the one on screen never rolls it back
     if (data.page > data.pages && data.pages >= 1 && view.page !== data.pages) {
       view.page = data.pages;           // the last page emptied itself: show the one before
-      return load();
+      if (!quiet) return load();
+      const step = ++view.ticket;
+      const before = await quietGet(path());
+      if (!free()) return;
+      if (before) return paint(before, step, true);
+      if (step >= view.painted) failed(live, "la papelera");
+      return;
     }
+    view.painted = ticket;
+    stamp(live);
+    const sig = JSON.stringify(data);
+    if (sig === view.sig) return;       // nothing moves under the person's eyes
+    view.sig = sig;
     for (const id of [...view.selected]) if (!data.rows.some((r) => r.id === id)) view.selected.delete(id);
+    const scroller = body.querySelector(".ops-scroll");
+    const left = scroller ? scroller.scrollLeft : 0;
+    const focusKey = focusKeyIn(body);
     body.replaceChildren(...papeleraBody(ctx, data, view, load, bus).filter(Boolean));
+    const again = body.querySelector(".ops-scroll");
+    if (again && left) again.scrollLeft = left;
+    refocus(body, focusKey);
+  };
+  const load = async () => {
+    const ticket = ++view.ticket;
+    const data = await api(path());
+    if (!view.gone) await paint(data, ticket, false);
+  };
+  const free = () => !view.gone && !view.acting && !(hand && hand.held()) && !windowOpen();
+  const round = async () => {
+    if (view.running || !free()) return;
+    view.running = true;
+    try {
+      const ticket = ++view.ticket;
+      const data = await quietGet(path());
+      if (!free()) return;              // an action, a press, a selection or a window began meanwhile
+      if (data) await paint(data, ticket, true);
+      else if (ticket >= view.painted) failed(live, "la papelera");
+    } finally {
+      view.running = false;
+    }
   };
   await load();
+  hand = hands(node);
+  let first = true;
+  const stop = poll(async () => {
+    if (first) { first = false; return; }     // the render just read it: the first round is the next one
+    await round();
+  }, LIVE_MS);
+  ctx.onLeave(() => {
+    view.gone = true;
+    stop();
+    hand.stop();
+  });
   return node;
 }
 
@@ -378,12 +519,12 @@ function papeleraBody(ctx, data, view, load, bus) {
     "Los platos descartados en Review esperan aquí " + data.dias + " días y luego se borran solos, con su foto. "
     + "«Restaurar» los regresa a Pendientes con sus correcciones. ",
     ctx.sess.admin
-      ? el("a", { href: "#perillas", text: "Los días se cambian en Perillas (papelera_dias)." })
+      ? el("a", { href: "#perillas", "data-focus": "perillas", text: "Los días se cambian en Perillas (papelera_dias)." })
       : el("span", { text: "Los días los fija el admin." }));
   if (!data.total) return [note, el("p", { text: "La papelera está vacía." })];
 
-  const restore = el("button", { type: "button", class: "ok" });
-  const kill = el("button", { type: "button", class: "bad" });
+  const restore = el("button", { type: "button", class: "ok", "data-focus": "restaurar" });
+  const kill = el("button", { type: "button", class: "bad", "data-focus": "eliminar" });
   const sync = () => {
     const n = view.selected.size;
     restore.textContent = "↩ Restaurar" + (n ? " (" + n + ")" : "");
@@ -391,7 +532,8 @@ function papeleraBody(ctx, data, view, load, bus) {
     restore.disabled = n === 0;
     kill.disabled = n === 0;
   };
-  // After an action, or a refusal (another tab or the hourly purge got there first), the list is read again.
+  // After an action, or a refusal (another tab or the hourly purge got there first), the list is read again, and the
+  // Cola and the Gasto look again too.
   const reload = async () => {
     try {
       await load();
@@ -399,8 +541,9 @@ function papeleraBody(ctx, data, view, load, bus) {
       toast(err.message, "bad");
     }
     bus.refreshCola();
+    bus.refreshGasto();
   };
-  restore.addEventListener("click", () => busy(restore, async () => {
+  restore.addEventListener("click", () => busy(restore, () => view.act(async () => {
     try {
       const r = await api("/api/admin/papelera/restaurar", { method: "POST", json: { ids: [...view.selected] } });
       toast(plural(r.restaurados, "plato", "platos") + " de vuelta en Review (Pendientes)", "ok");
@@ -410,8 +553,8 @@ function papeleraBody(ctx, data, view, load, bus) {
     }
     sync();
     await reload();
-  }));
-  kill.addEventListener("click", () => busy(kill, async () => {
+  })));
+  kill.addEventListener("click", () => busy(kill, () => view.act(async () => {
     try {
       const result = await confirmFlow(() =>
         api("/api/admin/papelera/eliminar", { method: "POST", json: { ids: [...view.selected] } }));
@@ -423,11 +566,11 @@ function papeleraBody(ctx, data, view, load, bus) {
     }
     sync();
     await reload();
-  }));
+  })));
 
   const photos = data.rows.map((r) => ({ src: r.photo_url, caption: "#" + r.id + " · " + (r.platillo || "sin analizar") }));
   const boxes = [];
-  const all = el("input", { type: "checkbox", "aria-label": "Elegir todos" });
+  const all = el("input", { type: "checkbox", "aria-label": "Elegir todos", "data-focus": "pick:all" });
   all.checked = data.rows.length > 0 && data.rows.every((r) => view.selected.has(r.id));
   all.addEventListener("change", () => {
     for (const r of data.rows) {
@@ -438,7 +581,7 @@ function papeleraBody(ctx, data, view, load, bus) {
     sync();
   });
   const rows = data.rows.map((r, i) => {
-    const box = el("input", { type: "checkbox", "aria-label": "Elegir el plato " + r.id });
+    const box = el("input", { type: "checkbox", "aria-label": "Elegir el plato " + r.id, "data-focus": "pick:" + r.id });
     box.checked = view.selected.has(r.id);
     box.addEventListener("change", () => {
       if (box.checked) view.selected.add(r.id);
@@ -447,7 +590,9 @@ function papeleraBody(ctx, data, view, load, bus) {
       sync();
     });
     boxes.push(box);
-    const thumb = el("button", { type: "button", class: "ops-thumb-btn", "aria-label": "Ver la foto del plato " + r.id },
+    const thumb = el("button", {
+      type: "button", class: "ops-thumb-btn", "aria-label": "Ver la foto del plato " + r.id, "data-focus": "foto:" + r.id,
+    },
       el("img", { class: "ops-thumb", src: r.photo_url, loading: "lazy", alt: "plato " + r.id }));
     thumb.addEventListener("click", () => photoViewer(photos, i));
     return el("tr", {},
@@ -468,9 +613,9 @@ function papeleraBody(ctx, data, view, load, bus) {
   };
   const counter = data.pages > 1
     ? el("div", { class: "ops-pager" },
-      el("button", { type: "button", text: "◀ Anterior", disabled: data.page <= 1, onclick: turn(data.page - 1) }),
+      el("button", { type: "button", "data-focus": "anterior", text: "◀ Anterior", disabled: data.page <= 1, onclick: turn(data.page - 1) }),
       el("span", { class: "muted", text: "página " + data.page + " de " + data.pages + " · " + data.total + " en total" }),
-      el("button", { type: "button", text: "Siguiente ▶", disabled: data.page >= data.pages, onclick: turn(data.page + 1) }))
+      el("button", { type: "button", "data-focus": "siguiente", text: "Siguiente ▶", disabled: data.page >= data.pages, onclick: turn(data.page + 1) }))
     : el("p", { class: "muted", text: plural(data.total, "plato", "platos") + " en la papelera." });
   return [
     note,
@@ -482,71 +627,187 @@ function papeleraBody(ctx, data, view, load, bus) {
 
 // --- Gasto (the admin's) ---------------------------------------------------------------------
 
-// The card shows at once and fills itself in: the gasto never holds up the Cola or the papelera.
-function gastoCard(ctx) {
+// The card shows at once and fills itself in: the gasto never holds up the Cola or the papelera. It follows itself
+// every GASTO_LIVE_MS while on screen (Section 3.17.1): it repaints only when its data changed, and waits while an
+// action runs, a window is open, hands are on it, or the cursor is in one of its fields or menus. A repaint keeps
+// what was typed and not saved, the focus and caret, an open "?", a row's error line and the tables' sideways scroll.
+function gastoCard(ctx, bus) {
   const body = el("div", {}, el("p", { class: "muted", text: "Cargando el gasto…" }));
-  const node = card("Gasto " + scopeText(ctx.site), body);
-  // rows: model -> {inputs, price} of the price rows on screen; range: the range select on screen.
-  const view = { dias: 30, rows: new Map(), range: null, ticket: 0 };
-  const load = async (savedModel) => {
-    const ticket = ++view.ticket;
-    const data = await api("/api/admin/gasto" + qs({ site: ctx.site, dias: view.dias }));
-    if (ticket !== view.ticket) return;  // a newer read is on its way: it paints
-    // Read what is on screen NOW (after the wait): what is typed and not saved in the other rows stays, and so do
-    // the focus and the caret of the field being typed in.
+  const live = el("div", { class: "ops-live" });
+  const node = card("Gasto " + scopeText(ctx.site), body, live);
+  const view = {
+    dias: 30, moneda: savedMoneda(), data: null, ticket: 0, painted: 0, sig: "", acting: 0, running: false, gone: false,
+  };
+  const hand = hands(node);
+  const path = () => "/api/admin/gasto" + qs({ site: ctx.site, dias: view.dias });
+  // savedKey: the field (or row of fields) just saved; it shows the saved value (and loses its error line), every
+  // other field keeps what was typed in it and not saved, with its focus and caret. An open "?" stays open.
+  // focusAfter: the data-focus of the button an action ran from (disabled while it ran, so the focus left it).
+  const paint = (data, ticket, savedKey, focusAfter) => {
+    if (ticket < view.painted) return;   // an answer older than the one on screen never rolls it back
+    view.painted = ticket;
+    stamp(live);
+    const sig = JSON.stringify(data) + "|" + view.moneda;
+    if (sig === view.sig && !savedKey) return;
+    view.sig = sig;
+    view.data = data;
     const typed = new Map();
     let focus = null;
     const active = document.activeElement;
-    for (const [model, row] of view.rows) {
-      const values = {};
-      let changed = false;
-      for (const [key] of PRICE_FIELDS) {
-        const input = row.inputs[key];
-        values[key] = input.value;
-        if (values[key] !== (row.price ? String(row.price[key]) : "")) changed = true;
-        if (input === active) focus = { model: model, key: key, start: input.selectionStart, end: input.selectionEnd };
-      }
-      if (changed && model !== savedModel) typed.set(model, values);
+    for (const input of body.querySelectorAll("[data-keep]")) {
+      const key = input.dataset.keep;
+      const justSaved = savedKey && key.startsWith(savedKey);
+      if (!justSaved && input.value !== input.dataset.saved) typed.set(key, input.value);
+      if (input === active) focus = { key: key, start: input.selectionStart, end: input.selectionEnd };
     }
-    const rangeFocused = view.range !== null && view.range === active;
-    view.rows = new Map();
-    body.replaceChildren(...gastoBody(data, view, load, typed).filter(Boolean));
-    if (focus && view.rows.has(focus.model)) {
-      const input = view.rows.get(focus.model).inputs[focus.key];
-      input.focus({ preventScroll: true });
-      try { input.setSelectionRange(focus.start, focus.end); } catch { /* the caret stays at the end */ }
-    } else if (rangeFocused && view.range) {
-      view.range.focus({ preventScroll: true });
+    const menu = active && body.contains(active) && active.tagName === "SELECT" ? active.getAttribute("aria-label") : null;
+    const focusKey = focusAfter ? "f:" + focusAfter : focusKeyIn(body);
+    const helpsOpen = [...body.querySelectorAll("[data-help]")]
+      .filter((h) => h.querySelector(".kit-more:not(.hidden)")).map((h) => h.dataset.help);
+    const errors = new Map([...body.querySelectorAll("[data-error]")]
+      .filter((x) => x.textContent && !(savedKey && x.dataset.error.startsWith(savedKey)))
+      .map((x) => [x.dataset.error, x.textContent]));
+    const scrolls = [...body.querySelectorAll(".ops-scroll")].map((x) => x.scrollLeft);
+    body.replaceChildren(...gastoBody(data, view, load, act, repaint).filter(Boolean));
+    for (const line of body.querySelectorAll("[data-error]")) {
+      if (errors.has(line.dataset.error)) line.textContent = errors.get(line.dataset.error);
+    }
+    [...body.querySelectorAll(".ops-scroll")].forEach((x, i) => { if (scrolls[i]) x.scrollLeft = scrolls[i]; });
+    for (const input of body.querySelectorAll("[data-keep]")) {
+      if (typed.has(input.dataset.keep)) input.value = typed.get(input.dataset.keep);
+      if (focus && input.dataset.keep === focus.key) {
+        input.focus({ preventScroll: true });
+        try { input.setSelectionRange(focus.start, focus.end); } catch { /* the caret stays at the end */ }
+      }
+    }
+    if (menu) {
+      const again = [...body.querySelectorAll("select")].find((x) => x.getAttribute("aria-label") === menu);
+      if (again) again.focus({ preventScroll: true });
+    }
+    for (const name of helpsOpen) {
+      const help = [...body.querySelectorAll("[data-help]")].find((h) => h.dataset.help === name);
+      const more = help && help.querySelector(".kit-more");
+      const ask = help && help.querySelector(".kit-ask");
+      if (more && ask) {
+        more.classList.remove("hidden");
+        ask.setAttribute("aria-expanded", "true");
+      }
+    }
+    if (!focus && !menu) refocus(body, focusKey);
+  };
+  const repaint = () => { if (view.data) paint(view.data, view.painted, null, null); };
+  const load = async (savedKey, focusAfter) => {
+    const ticket = ++view.ticket;
+    const data = await api(path());
+    if (!view.gone) paint(data, ticket, savedKey || null, focusAfter || null);
+  };
+  const act = async (fn) => {
+    view.acting += 1;
+    try {
+      return await fn();
+    } finally {
+      view.acting -= 1;
     }
   };
-  load(null).catch((err) => body.replaceChildren(el("p", { class: "kit-error", text: "No se pudo cargar el gasto: " + err.message })));
+  const free = () => {
+    if (view.gone || view.acting || hand.held() || windowOpen()) return false;
+    const active = document.activeElement;
+    return !(active && body.contains(active) && (active.tagName === "INPUT" || active.tagName === "SELECT"));
+  };
+  const round = async () => {
+    if (view.running || !free()) return;
+    view.running = true;
+    try {
+      const ticket = ++view.ticket;
+      const data = await quietGet(path());
+      if (!free()) return;
+      if (data) paint(data, ticket, null, null);
+      else if (ticket >= view.painted) failed(live, "el gasto");
+    } finally {
+      view.running = false;
+    }
+  };
+  bus.refreshGasto = () => { round().catch((err) => console.warn("gasto:", err.message)); };
+  load(null).catch((err) => {
+    // only while nothing is painted: a live round that already brought the gasto keeps it on screen
+    if (!view.gone && view.painted === 0) {
+      body.replaceChildren(el("p", { class: "kit-error", text: "No se pudo cargar el gasto: " + err.message }));
+    }
+  });
+  let first = true;
+  const stop = poll(async () => {
+    if (first) { first = false; return; }     // the first read is the one above: the first round is the next one
+    await round();
+  }, GASTO_LIVE_MS);
+  ctx.onLeave(() => {
+    view.gone = true;
+    stop();
+    hand.stop();
+  });
   return node;
 }
 
-function gastoBody(data, view, load, typed) {
-  const range = el("select", { "aria-label": "Rango" },
+// This browser's last currency (a convenience): storage that is missing or refused means USD.
+function savedMoneda() {
+  try {
+    const m = window.localStorage.getItem(MONEDA_KEY);
+    return m && MONEDA_NOMBRE[m] ? m : "USD";
+  } catch {
+    return "USD";
+  }
+}
+
+function saveMoneda(m) {
+  try {
+    window.localStorage.setItem(MONEDA_KEY, m);
+  } catch { /* the choice lasts while the page is open */ }
+}
+
+// The currency the money shows in: the chosen one when its exchange rate exists, else USD.
+function moneyOf(data, view) {
+  const rate = view.moneda !== "USD" ? data.tipos_cambio[view.moneda] : null;
+  return rate ? { code: view.moneda, rate: rate.valor, fecha: rate.fecha } : { code: "USD", rate: 1, fecha: null };
+}
+
+function gastoBody(data, view, load, act, repaint) {
+  const money = moneyOf(data, view);
+  const range = el("select", { "aria-label": "Rango", style: "width: auto;" },
     data.dias_opciones.map((d) => el("option", { value: String(d), text: "Últimos " + d + " días" })));
   range.value = String(data.dias);
   range.addEventListener("change", () => {
     view.dias = Number(range.value);
     load(null).catch((err) => toast(err.message, "bad"));
   });
-  view.range = range;
+  const currency = el("select", { "aria-label": "Moneda", style: "width: auto;" }, ["USD", ...data.monedas].map((m) => {
+    const rate = m === "USD" ? null : data.tipos_cambio[m];
+    const text = m === "USD" ? MONEDA_NOMBRE.USD : MONEDA_NOMBRE[m] + (rate ? "" : ": falta su tipo de cambio");
+    return el("option", { value: m, text: text, disabled: m !== "USD" && !rate });
+  }));
+  currency.value = money.code;
+  currency.addEventListener("change", () => {
+    view.moneda = currency.value;
+    saveMoneda(view.moneda);
+    repaint();
+  });
   const out = [
     el("p", { class: "muted", text:
       "Gasto de filas vivas: lo que gastaron los platos que siguen en la base"
       + (data.site ? "" : " y las lecturas de fichas del Menú")
       + ". No cuenta intentos fallidos, pruebas de comparación de modelos ni platos ya borrados de la papelera: la cuenta"
       + " exacta es la consola del proveedor. Cada sitio cuenta sus días con su propia hora." }),
-    el("div", { class: "kit-edit" }, range),
+    el("div", { class: "kit-edit" }, range, el("span", { class: "ops-pair" }, el("span", { class: "muted", text: "Moneda" }), currency)),
   ];
+  if (money.code !== "USD") {
+    out.push(el("p", { class: "muted", text: "El gasto se ve en " + MONEDA_NOMBRE[money.code] + ": 1 USD = "
+      + fmtPrice(money.rate) + " " + money.code + ", guardado el " + dmy(money.fecha) + ". Los precios siguen en USD, como los da el proveedor." }));
+  }
 
   const sumRow = (label, s, count) => el("tr", {},
     el("td", { text: label }),
     el("td", { class: "num", text: count }),
     el("td", { class: "num", text: fmtInt(s.entrada) }),
     el("td", { class: "num", text: fmtInt(s.salida) }),
-    el("td", { class: "num", text: fmtMoney(s.usd, s.sin_precio) }));
+    el("td", { class: "num", text: fmtMoney(s.usd, s.sin_precio, money) }));
   const sums = data.sitios.map((s) => sumRow(s.site, s, plural(s.platos, "plato", "platos")));
   if (data.fichas) sums.push(sumRow("Leer ficha (Menú)", data.fichas, plural(data.fichas.lecturas, "lectura", "lecturas")));
   const totalRow = sumRow("Total", data.total, "");
@@ -565,31 +826,47 @@ function gastoBody(data, view, load, typed) {
       el("td", { class: "num", text: f.site ? plural(f.platos, "plato", "platos") : plural(f.lecturas, "lectura", "lecturas") }),
       el("td", { class: "num", text: fmtInt(f.entrada) }),
       el("td", { class: "num", text: fmtInt(f.salida) }),
-      el("td", { class: "num", text: fmtMoney(f.usd, f.usd === null ? 1 : 0) })))));
+      el("td", { class: "num", text: fmtMoney(f.usd, f.usd === null ? 1 : 0, money) })))));
   }
 
-  out.push(el("h3", { text: "Precios (USD por millón de tokens)" }), el("p", { class: "muted", text: PRICE_NOTE }), fieldHelp({
+  const priceHelp = fieldHelp({
     que_es: data.ayuda_precios.que_es,
     ejemplo: PRICE_COLUMNS,
     recomendacion: data.ayuda_precios.recomendacion,
     copiar: false,
-  }));
-  for (const model of data.modelos) out.push(priceRow(model, data.precios[model] || null, view, load, typed.get(model)));
+  });
+  priceHelp.dataset.help = "precios";
+  out.push(el("h3", { text: "Precios (USD por millón de tokens)" }), el("p", { class: "muted", text: PRICE_NOTE }), priceHelp);
+  for (const model of data.modelos) out.push(priceRow(model, data.precios[model] || null, load, act));
+
+  const rateHelp = fieldHelp({
+    que_es: data.ayuda_tipos_cambio.que_es,
+    ejemplo: data.ayuda_tipos_cambio.ejemplo,
+    recomendacion: data.ayuda_tipos_cambio.recomendacion,
+    copiar: false,
+  });
+  rateHelp.dataset.help = "tipos_cambio";
+  out.push(el("h3", { text: "Tipos de cambio (cuánto vale 1 USD)" }), rateHelp);
+  for (const moneda of data.monedas) out.push(rateRow(moneda, data.tipos_cambio[moneda] || null, load, act));
   return out;
 }
 
-function priceRow(model, price, view, load, typed) {
+function priceRow(model, price, load, act) {
   const inputs = {};
   const fields = PRICE_FIELDS.map(([key, label]) => {
-    const input = el("input", { type: "text", inputmode: "decimal", autocomplete: "off", placeholder: "USD por MTok" });
-    input.value = typed ? typed[key] : (price ? String(price[key]) : "");
+    const saved = price ? fmtPrice(price[key]) : "";
+    const input = el("input", {
+      type: "text", inputmode: "decimal", autocomplete: "off", placeholder: "USD por MTok",
+      "data-keep": "precio:" + model + ":" + key, "data-saved": saved,
+    });
+    input.value = saved;
     inputs[key] = input;
     return el("label", {}, el("span", { text: label }), input);
   });
-  view.rows.set(model, { inputs: inputs, price: price });
-  const error = el("div", { class: "kit-error" });
-  const save = el("button", { type: "button", class: "primary", text: "Guardar precio" });
-  save.addEventListener("click", () => busy(save, async () => {
+  const error = el("div", { class: "kit-error", "data-error": "precio:" + model + ":" });
+  const back = "guardar-precio:" + model;
+  const save = el("button", { type: "button", class: "primary", "data-focus": back, text: "Guardar precio" });
+  save.addEventListener("click", () => busy(save, () => act(async () => {
     error.textContent = "";
     const json = { model: model };
     for (const [key, label] of PRICE_FIELDS) {
@@ -607,24 +884,24 @@ function priceRow(model, price, view, load, typed) {
     try {
       await api("/api/admin/gasto/precio", { method: "POST", json: json });
       toast("precio guardado: " + model, "ok");
-      await load(model);
+      await load("precio:" + model + ":", back);
     } catch (err) {
       error.textContent = err.message;
     }
-  }));
+  })));
   const actions = el("div", { class: "kit-edit" }, save);
   if (price) {
-    const remove = el("button", { type: "button", text: "Quitar precio" });
-    remove.addEventListener("click", () => busy(remove, async () => {
+    const remove = el("button", { type: "button", "data-focus": "quitar-precio:" + model, text: "Quitar precio" });
+    remove.addEventListener("click", () => busy(remove, () => act(async () => {
       if (!window.confirm("¿Quitar el precio de " + model + "? Su gasto vuelve a mostrarse solo en tokens (sin precio).")) return;
       try {
         await api("/api/admin/gasto/precio/quitar", { method: "POST", json: { model: model } });
         toast("precio quitado: " + model, "ok");
-        await load(model);
+        await load("precio:" + model + ":", back);
       } catch (err) {
         error.textContent = err.message;
       }
-    }));
+    })));
     actions.append(remove);
   }
   return el("div", { class: "ops-price" },
@@ -632,6 +909,61 @@ function priceRow(model, price, view, load, typed) {
       el("code", { text: model }),
       el("span", { class: price ? "chip ok" : "chip", text: price ? "con precio" : "sin precio" })),
     el("div", {}, ...fields),
+    actions,
+    error);
+}
+
+// One currency's exchange rate (Section 3.17.1): how many of it 1 USD is worth, typed by the admin.
+function rateRow(moneda, rate, load, act) {
+  const saved = rate ? fmtPrice(rate.valor) : "";
+  const input = el("input", {
+    type: "text", inputmode: "decimal", autocomplete: "off", placeholder: MONEDA_EJEMPLO[moneda], style: "width: 110px;",
+    "aria-label": "Cuántos " + MONEDA_PALABRA[moneda] + " vale 1 USD", "data-keep": "cambio:" + moneda, "data-saved": saved,
+  });
+  input.value = saved;
+  const error = el("div", { class: "kit-error", "data-error": "cambio:" + moneda });
+  const back = "guardar-cambio:" + moneda;
+  const save = el("button", { type: "button", class: "primary", "data-focus": back, text: "Guardar" });
+  save.addEventListener("click", () => busy(save, () => act(async () => {
+    error.textContent = "";
+    const raw = input.value.trim().replace(",", ".");
+    if (!raw) {
+      error.textContent = "Escribe cuántos " + MONEDA_PALABRA[moneda] + " vale 1 dólar, como " + MONEDA_EJEMPLO[moneda] + ".";
+      return;
+    }
+    if (!isDecimal(raw)) {
+      error.textContent = "El tipo de cambio es un número como " + MONEDA_EJEMPLO[moneda] + " (sin signos ni letras).";
+      return;
+    }
+    try {
+      await api("/api/admin/gasto/tipo_cambio", { method: "POST", json: { moneda: moneda, valor: Number(raw) } });
+      toast("tipo de cambio guardado: " + moneda, "ok");
+      await load("cambio:" + moneda, back);
+    } catch (err) {
+      error.textContent = err.message;
+    }
+  })));
+  const actions = el("div", { class: "kit-edit" },
+    el("span", { text: "1 USD =" }), input, el("span", { text: MONEDA_NOMBRE[moneda] }), save);
+  if (rate) {
+    const remove = el("button", { type: "button", "data-focus": "quitar-cambio:" + moneda, text: "Quitar" });
+    remove.addEventListener("click", () => busy(remove, () => act(async () => {
+      if (!window.confirm("¿Quitar el tipo de cambio de " + moneda + "? El gasto deja de verse en " + MONEDA_PALABRA[moneda]
+        + " hasta que escribas otro.")) return;
+      try {
+        await api("/api/admin/gasto/tipo_cambio/quitar", { method: "POST", json: { moneda: moneda } });
+        toast("tipo de cambio quitado: " + moneda, "ok");
+        await load("cambio:" + moneda, back);
+      } catch (err) {
+        error.textContent = err.message;
+      }
+    })));
+    actions.append(remove);
+  }
+  return el("div", { class: "ops-price" },
+    el("div", { class: "kit-head" },
+      el("strong", { text: moneda }),
+      el("span", { class: rate ? "chip ok" : "chip", text: rate ? "guardado el " + dmy(rate.fecha) : "sin tipo de cambio" })),
     actions,
     error);
 }

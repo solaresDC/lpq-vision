@@ -539,10 +539,10 @@ WHERE e.codigo = %(codigo)s
 """
 
 # Dame el enlace for a camera with no link yet: a link that someone else created a moment before wins (no row back).
+# vence = noon of its last day on the site's clock, computed by the api (Section 3.17.1); NULL = permanente.
 INSERT_ENLACE = """
 INSERT INTO camara_enlaces (site, camera, codigo, dias, vence_at)
-VALUES (%(site)s, %(camera)s, %(codigo)s, %(dias)s,
-        CASE WHEN %(dias)s::int IS NULL THEN NULL ELSE now() + make_interval(days => %(dias)s::int) END)
+VALUES (%(site)s, %(camera)s, %(codigo)s, %(dias)s, %(vence)s)
 ON CONFLICT (site, camera) DO NOTHING
 RETURNING site, camera, codigo, dias, vence_at, false AS vencido
 """
@@ -551,18 +551,16 @@ RETURNING site, camera, codigo, dias, vence_at, false AS vencido
 # the phones already inside stay. dias NULL = permanente.
 UPSERT_ENLACE = """
 INSERT INTO camara_enlaces (site, camera, codigo, dias, vence_at)
-VALUES (%(site)s, %(camera)s, %(codigo)s, %(dias)s,
-        CASE WHEN %(dias)s::int IS NULL THEN NULL ELSE now() + make_interval(days => %(dias)s::int) END)
+VALUES (%(site)s, %(camera)s, %(codigo)s, %(dias)s, %(vence)s)
 ON CONFLICT (site, camera) DO UPDATE
 SET codigo = EXCLUDED.codigo, dias = EXCLUDED.dias, vence_at = EXCLUDED.vence_at, creado_at = now()
 RETURNING site, camera, codigo, dias, vence_at, false AS vencido
 """
 
-# The admin's duración: the same code, counted again from now.
+# The admin's duración: the same code, its last day counted again from the site's today.
 SET_ENLACE_DIAS = """
 UPDATE camara_enlaces
-SET dias = %(dias)s,
-    vence_at = CASE WHEN %(dias)s::int IS NULL THEN NULL ELSE now() + make_interval(days => %(dias)s::int) END
+SET dias = %(dias)s, vence_at = %(vence)s
 WHERE site = %(site)s AND camera = %(camera)s
 RETURNING site, camera, codigo, dias, vence_at, false AS vencido
 """

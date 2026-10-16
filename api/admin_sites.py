@@ -11,7 +11,8 @@ POST /api/admin/sites/{site}/cameras/{camera}/delete remove one camera with its 
 POST /api/admin/sites/{site}/cameras/{camera}/source Relevo a Pi: a phone camera goes back to its Pi; its phone leaves
 POST /api/admin/sites/{site}/cameras/{camera}/enlace Dame el enlace: the live link, a new one when none or expired
 POST /api/admin/sites/{site}/cameras/{camera}/enlace/nuevo    Cambiar enlace: a new code (only the admin picks its life)
-POST /api/admin/sites/{site}/cameras/{camera}/enlace/duracion the same code, its life counted again from now (admin)
+POST /api/admin/sites/{site}/cameras/{camera}/enlace/duracion the same code, its last day counted again from today
+                                                     (admin)
 POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/aceptar  the phone becomes that camera; on a Pi
                                                      camera, the relevo (admin; never on a deactivated site)
 POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/rechazar its request for that camera goes (admin)
@@ -35,6 +36,10 @@ warning the admin chat. Never yourself, never the last active admin, never the m
 can't be edited until it is recovered; any change to an account drops its open sessions. A gafete is never
 logged and never written to the bitácora: it reaches only the admin's screen, on request. A link's code never
 reaches a log or the bitácora either, and a phone's pass reaches neither: only its sha256 lives in telefonos.
+Section 3.17.1: a link ends at 12:00 of its last day on the site's own clock (owner, 16 Oct), never a count of hours
+from the click: 1 día made today ends tomorrow at noon. personalizado lasts 1 to 365 days, or until a chosen day
+within a year. Each site's view carries its timezone (zona) and the link answers the site's today (hoy), so the page
+shows and picks days on the site's calendar.
 """
 
 from __future__ import annotations
@@ -43,7 +48,7 @@ import asyncio
 import logging
 import secrets
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -58,12 +63,15 @@ from api.admin import log_action, propose, require_admin, require_mostrador, wri
 from api.auth import ROLE_MACHINE, Session, drop_sessions_of, forget_fuera, make_hash, note_fuera
 from brain.db import queries as q
 from brain.db.init import DEVICE_KEY_BYTES
+from brain.validator import knobs
 from brain.validator.models import (
     DEFAULT_TIMEZONE,
     DURACION_DEFAULT,
     DURACIONES,
     ENLACE_ALFABETO,
+    ENLACE_DIAS_MAX,
     ENLACE_LARGO,
+    ENLACE_VENCE_HORA,
     USER_RECOVERY_DAYS,
     CameraConfig,
     CameraUpsertRequest,
@@ -244,6 +252,7 @@ def _site_view(row: dict[str, Any], site_cfg: SiteConfig | None, cfg: Config, ph
         "ingestion": row["ingestion"],
         "chat_set": row["telegram_chat_id"] is not None,
         "in_config": site_cfg is not None,
+        "zona": knobs.timezone_of(cfg, row["site"]),     # the site's clock: a link's day and hour are read on it
     }
     if site_cfg is None:
         view.update({"funciones": None, "cameras": [], "auditor": ["Este sitio existe en la base pero falta en config.yaml."]})
@@ -558,6 +567,61 @@ def _nuevo_codigo() -> str:
     return "".join(secrets.choice(ENLACE_ALFABETO) for _ in range(ENLACE_LARGO))
 
 
+def _hoy(cfg: Config, site: str) -> tuple[ZoneInfo, date]:
+    """The site's clock and its today. A link endpoint reads it ONCE and passes it on, so a request that straddles
+    midnight counts every day from the same today."""
+    zone = ZoneInfo(knobs.timezone_of(cfg, site))
+    return zone, datetime.now(timezone.utc).astimezone(zone).date()
+
+
+def _vence(zone: ZoneInfo, today: date, dias: int | None) -> datetime | None:
+    """The end of a link that lasts `dias` days (owner, 16 Oct): 12:00 (ENLACE_VENCE_HORA) of the day `dias` days after
+    the site's today, on the site's own clock, never a count of hours from the click. None = permanente."""
+    if dias is None:
+        return None
+    return datetime.combine(today + timedelta(days=dias), time(ENLACE_VENCE_HORA), tzinfo=zone)
+
+
+def _iso(moment: datetime | None) -> str | None:
+    return moment.isoformat() if moment is not None else None
+
+
+def _fecha_text(day: date) -> str:
+    return f"{day.day:02d}/{day.month:02d}/{day.year}"
+
+
+def _dias_pedidos(body: EnlaceNuevoRequest | EnlaceDuracionRequest, today: date) -> int | None:
+    """The days a chosen duración means: a fixed choice's own (None = permanente), personalizado's days (1 to
+    ENLACE_DIAS_MAX), or the days from the site's today to the last day it chose (tomorrow to a year from today)."""
+    if body.duracion != "personalizado":
+        if body.dias is not None or body.fecha is not None:
+            raise HTTPException(status_code=400, detail="Los días o la fecha van solo con «personalizado».")
+        return DURACIONES[body.duracion]
+    if (body.dias is None) == (body.fecha is None):
+        raise HTTPException(status_code=400, detail="«personalizado» lleva los días o una fecha: uno de los dos.")
+    if body.dias is not None:
+        if not 1 <= body.dias <= ENLACE_DIAS_MAX:
+            raise HTTPException(status_code=400, detail=f"Los días van de 1 a {ENLACE_DIAS_MAX}: escribe solo el número.")
+        return body.dias
+    dias = (body.fecha - today).days
+    if not 1 <= dias <= ENLACE_DIAS_MAX:
+        first, last = today + timedelta(days=1), today + timedelta(days=ENLACE_DIAS_MAX)
+        raise HTTPException(status_code=400, detail="La fecha va de mañana (" + _fecha_text(first) + ") a un año desde hoy ("
+                            + _fecha_text(last) + "), en la hora del sitio.")
+    return dias
+
+
+def _vida(zone: ZoneInfo, today: date, dias: int | None) -> dict[str, Any]:
+    """What a link write stores and its bitácora row says: its days and its end (on the site's clock)."""
+    return {"dias": dias, "vence": _vence(zone, today, dias)}
+
+
+def _link_answer(site: str, camera: str, nuevo: bool, row: dict[str, Any], zone: ZoneInfo, today: date) -> dict[str, Any]:
+    """A link endpoint's answer: the link, the site's clock and its today (the page picks days on that calendar)."""
+    return {"site": site, "camera": camera, "nuevo": nuevo, "enlace": _enlace_view(row), "zona": zone.key,
+            "hoy": today.isoformat()}
+
+
 def _link_camera_now(conn: psycopg.Connection, site: str, camera: str) -> None:
     """A link write holds the camera's lock (the one Quitar la cámara takes) and looks at the camera again under it:
     a camera removed meanwhile answers 404, so no link outlives its camera."""
@@ -580,9 +644,12 @@ async def _link_tx(work: Callable[[psycopg.Connection, str], Any]) -> Any:
 @router.post("/api/admin/sites/{site}/cameras/{camera}/enlace")
 async def dame_enlace(site: str, camera: str, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
     """Dame el enlace: the camera's live link; when it has none or it expired, a new code (an expired link keeps its
-    duration; a first link lasts DURACION_DEFAULT). Its bitácora row only when a code is born (never the code)."""
+    duration; a first link lasts DURACION_DEFAULT), ending at noon of its last day. Its bitácora row only when a code
+    is born (never the code)."""
     target = write_scope(session, site)
-    _camera_or_404(_site_cfg(await _config(), target), target, camera)
+    cfg = await _config()
+    _camera_or_404(_site_cfg(cfg, target), target, camera)
+    zone, today = _hoy(cfg, target)
 
     def work(conn: psycopg.Connection, codigo: str) -> tuple[dict[str, Any], bool]:
         key = {"site": target, "camera": camera}
@@ -590,20 +657,20 @@ async def dame_enlace(site: str, camera: str, session: Session = Depends(require
         row = conn.execute(q.LOCK_ENLACE, key).fetchone()
         if row is not None and not row["vencido"]:
             return row, False
-        dias = row["dias"] if row is not None else DURACIONES[DURACION_DEFAULT]
+        vida = _vida(zone, today, row["dias"] if row is not None else DURACIONES[DURACION_DEFAULT])
         if row is None:
-            fresh = conn.execute(q.INSERT_ENLACE, {**key, "codigo": codigo, "dias": dias}).fetchone()
+            fresh = conn.execute(q.INSERT_ENLACE, {**key, "codigo": codigo, **vida}).fetchone()
             if fresh is None:                        # someone else made it a moment ago: that one is the link
                 return conn.execute(q.LOCK_ENLACE, key).fetchone(), False
         else:
-            fresh = conn.execute(q.UPSERT_ENLACE, {**key, "codigo": codigo, "dias": dias}).fetchone()
-        _bitacora(conn, session, "enlace.crea", {**key, "dias": dias})
+            fresh = conn.execute(q.UPSERT_ENLACE, {**key, "codigo": codigo, **vida}).fetchone()
+        _bitacora(conn, session, "enlace.crea", {**key, "dias": vida["dias"], "vence": _iso(vida["vence"])})
         return fresh, True
 
     row, nuevo = await _link_tx(work)
     if nuevo:
         log.info("link created %s/%s user=%s", target, camera, session.user)
-    return {"site": target, "camera": camera, "nuevo": nuevo, "enlace": _enlace_view(row)}
+    return _link_answer(target, camera, nuevo, row, zone, today)
 
 
 @router.post("/api/admin/sites/{site}/cameras/{camera}/enlace/nuevo")
@@ -614,42 +681,51 @@ async def cambiar_enlace(site: str, camera: str, body: EnlaceNuevoRequest,
     target = write_scope(session, site)
     if body.duracion is not None and not session.is_admin:
         raise HTTPException(status_code=403, detail="Solo el admin elige cuánto dura un enlace.")
-    _camera_or_404(_site_cfg(await _config(), target), target, camera)
+    if body.duracion is None and (body.dias is not None or body.fecha is not None):
+        raise HTTPException(status_code=400, detail="Los días o la fecha van solo con «personalizado».")
+    cfg = await _config()
+    _camera_or_404(_site_cfg(cfg, target), target, camera)
+    zone, today = _hoy(cfg, target)
+    chosen = _dias_pedidos(body, today) if body.duracion is not None else None
 
     def work(conn: psycopg.Connection, codigo: str) -> dict[str, Any]:
         key = {"site": target, "camera": camera}
         _link_camera_now(conn, target, camera)
         row = conn.execute(q.LOCK_ENLACE, key).fetchone()
         if body.duracion is not None:
-            dias = DURACIONES[body.duracion]
+            dias = chosen
         else:
             dias = row["dias"] if row is not None else DURACIONES[DURACION_DEFAULT]
-        fresh = conn.execute(q.UPSERT_ENLACE, {**key, "codigo": codigo, "dias": dias}).fetchone()
-        _bitacora(conn, session, "enlace.cambia", {**key, "dias": dias})
+        vida = _vida(zone, today, dias)
+        fresh = conn.execute(q.UPSERT_ENLACE, {**key, "codigo": codigo, **vida}).fetchone()
+        _bitacora(conn, session, "enlace.cambia", {**key, "dias": dias, "vence": _iso(vida["vence"])})
         return fresh
 
     row = await _link_tx(work)
     log.info("link changed %s/%s user=%s", target, camera, session.user)
-    return {"site": target, "camera": camera, "nuevo": True, "enlace": _enlace_view(row)}
+    return _link_answer(target, camera, True, row, zone, today)
 
 
 @router.post("/api/admin/sites/{site}/cameras/{camera}/enlace/duracion")
 async def duracion_enlace(site: str, camera: str, body: EnlaceDuracionRequest,
                           session: Session = Depends(require_admin)) -> dict[str, Any]:
-    """The admin's duration of a camera's link: the same code, its life counted again from now."""
-    _camera_or_404(_site_cfg(await _config(), site), site, camera)
-    dias = DURACIONES[body.duracion]
+    """The admin's duration of a camera's link: the same code, its last day counted again from the site's today (saved
+    twice the same day, the same end: never a drift of hours)."""
+    cfg = await _config()
+    _camera_or_404(_site_cfg(cfg, site), site, camera)
+    zone, today = _hoy(cfg, site)
+    vida = _vida(zone, today, _dias_pedidos(body, today))
 
     def work(conn: psycopg.Connection) -> dict[str, Any]:
         _link_camera_now(conn, site, camera)
-        row = conn.execute(q.SET_ENLACE_DIAS, {"site": site, "camera": camera, "dias": dias}).fetchone()
+        row = conn.execute(q.SET_ENLACE_DIAS, {"site": site, "camera": camera, **vida}).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail=f"{camera} aún no tiene enlace: pide uno con «Dame el enlace».")
-        _bitacora(conn, session, "enlace.duracion", {"site": site, "camera": camera, "dias": dias})
+        _bitacora(conn, session, "enlace.duracion", {"site": site, "camera": camera, "dias": vida["dias"], "vence": _iso(vida["vence"])})
         return row
 
     row = await asyncio.to_thread(_tx, work)
-    return {"site": site, "camera": camera, "nuevo": False, "enlace": _enlace_view(row)}
+    return _link_answer(site, camera, False, row, zone, today)
 
 
 # --- the phones (Section 3.13.2): Aceptar and Rechazar (admin), Sacar ---------------------------
