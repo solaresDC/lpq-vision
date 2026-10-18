@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.17.3 (HEAD was Section 3.17.2's commit, on de9c3fd).
+- Last update: Section 3.17.4 (HEAD was c84135f, Section 3.17.3).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -87,7 +87,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   fresh one (its lock remembers 10 minutes).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.17.3; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.17.4; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -106,6 +106,13 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.17.4 (owner, 18 Oct 2026; built in Section 3.17.4): the provider charges in dollars
+- Under the Gasto's Moneda, one line: "Anthropic (Claude) cobra su API siempre en dólares (USD), sin importar el país o
+  la tarjeta; tu banco lo pasa a tu moneda con su tipo de cambio, así que el gasto en pesos o en dólares canadienses es
+  una estimación." (owner, 18 Oct: the providers charge in USD whatever the country or the card). HQ checked it (18
+  Oct): true for the Claude API and for OpenAI's; a Google Cloud billing account (the Gemini API's) can run in pesos or
+  Canadian dollars if it was opened so, and this system uses only Claude.
 
 ### 3.17.3 (owner, 17 Oct 2026; built in Section 3.17.3): an expired link never comes back; the captura address
 - A camera's link and its code, written here as the owner asked (16 and 17 Oct): one key, not two. The link is the
@@ -692,19 +699,15 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - From 3.17.3: photos/_smoke/check_3173.py and photos/_smoke/vence_3173.py, the ✋'s helper (their copies in the fastapi
   container vanish at the next recreate); the ✋'s test camera (prueba-3) and its link are removed by its own steps, and
   config.yaml goes back with git checkout; 3.18 confirms none is left.
+- From 3.17.4: nothing (its check is two commands in its block, no file).
 
 ## Waiting on the owner (no section owns these)
-- 3.17.1's ✋ (on the laptop after 3.17.1's commit; no bot needed): the camera boxes and the add block; a test camera
-  (prueba-2) and its link: its end at 12:00 on demo's clock, 1 día, personalizado by days (only digits; a wrong number
-  refused) and by date (the calendar's limits), permanente, the camera removed; a price showing two decimals; an
-  exchange rate (a typo refused) and the money in pesos, remembered after a reload; a second tab's Gasto following the
-  first; the rates and the price removed; the Papelera and Review following each other without reloading (a plate
-  discarded and restored); everything put back; the push of 3.17.1 (3.15 to 3.17 went up on 16 Oct).
-- 3.17.2's ✋ (on the laptop after 3.17.2's commit): the machine room's door says it closes after an hour; opened with
-  the cuarto password, its countdown starts at an hour; Cerrar el cuarto; the push of 3.17.2.
-- 3.17.3's ✋ (on the laptop after 3.17.3's commit): the captura address on top of Sitios y cuentas for the admin, not
-  for the manager; a test camera (prueba-3) whose link, expired by the ✋'s helper while its window is open, is refused a
-  new duration, then «Dame el enlace» gives a new code; the camera removed, everything put back; the push of 3.17.3.
+- 3.17.2's, 3.17.3's and 3.17.4's ✋, ONE list in one sitting after 3.17.4's commit (owner, 18 Oct): the machine room's
+  door says it closes after an hour, opened with the cuarto password its countdown starts at an hour, Cerrar el cuarto;
+  the captura address on top of Sitios y cuentas for the admin, not for the manager; a test camera (prueba-3) whose
+  link, expired by the ✋'s helper while its window is open, is refused a new duration, then «Dame el enlace» gives a
+  new code, the camera removed; the line under the Gasto's Moneda; everything put back; one push of 3.17.2, 3.17.3 and
+  3.17.4 (`de9c3fd..<3.17.4>`).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never
@@ -725,6 +728,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - 3.13.1's ✋ (12 Oct, on the laptop): passed ("then it worked"), pushed as 8f87aa3.
 - 3.17's ✋ (3.13.2's, 3.14's, 3.15's and 3.16's steps in one list; 15 and 16 Oct, on the laptop): passed "with flying
   colors", pushed `94c8b8e..4be804f` (3.15, 3.16 and 3.17); the owner's notes on it became 3.17.1.
+- 3.17.1's ✋ (18 Oct, on the laptop): every step "working perfectly", pushed `4be804f..de9c3fd`; the owner's note on it
+  (the providers charge in dollars) became 3.17.4.
 
 ## Still forbidden (post-demo): STOP and flag if asked
 Coach screens, pi_csi/usb backends, the MODEL cascade (stays "off"), geometry v2, the báscula, POS,

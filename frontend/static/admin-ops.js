@@ -21,6 +21,8 @@
 // table's sideways scroll, a row's error line). A price or an exchange rate shows at least two decimals (2.20; 2.57
 // stays 2.57). The Gasto can show its money in USD, MXN or CAD: the exchange rates are typed by
 // the admin (1 USD = 18.45 MXN), with the day each was saved; the prices stay in USD per million tokens.
+// Section 3.17.4 (owner, 18 Oct): under Moneda, a line says the provider charges in dollars whatever the country or
+// the card, and the bank converts, so the money in pesos or Canadian dollars is an estimate.
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import { busy, card, confirmFlow, fieldHelp, photoViewer } from "/static/admin-kit.js";
@@ -49,6 +51,8 @@ const MONEDA_NOMBRE = { USD: "dólares (USD)", MXN: "pesos (MXN)", CAD: "dólare
 const MONEDA_PALABRA = { MXN: "pesos", CAD: "dólares canadienses" };
 const MONEDA_EJEMPLO = { MXN: "18.45", CAD: "1.38" };
 const MONEDA_KEY = "lpq.gasto.moneda";   // this browser's last currency choice (a convenience: absent = USD)
+const COBRO_USD = "Anthropic (Claude) cobra su API siempre en dólares (USD), sin importar el país o la tarjeta; tu banco "
+  + "lo pasa a tu moneda con su tipo de cambio, así que el gasto en pesos o en dólares canadienses es una estimación.";
 
 const STYLE = `
 .ops-tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin: 10px 0; }
@@ -796,6 +800,7 @@ function gastoBody(data, view, load, act, repaint) {
       + ". No cuenta intentos fallidos, pruebas de comparación de modelos ni platos ya borrados de la papelera: la cuenta"
       + " exacta es la consola del proveedor. Cada sitio cuenta sus días con su propia hora." }),
     el("div", { class: "kit-edit" }, range, el("span", { class: "ops-pair" }, el("span", { class: "muted", text: "Moneda" }), currency)),
+    el("p", { class: "muted", text: COBRO_USD }),
   ];
   if (money.code !== "USD") {
     out.push(el("p", { class: "muted", text: "El gasto se ve en " + MONEDA_NOMBRE[money.code] + ": 1 USD = "
