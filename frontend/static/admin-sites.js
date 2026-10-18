@@ -25,6 +25,8 @@
 // its own, apart from them. A link ends at 12:00 of its last day on the site's clock, and the page shows its end on that
 // clock ("hora de <sitio>"); the admin picks 1 día, 1 semana, 1 mes, permanente or personalizado: the box for its days
 // (only digits, 1 to 365) or its last day (a calendar, tomorrow to a year from the site's today) shows only then.
+// Section 3.17.3 (owner, 17 Oct): the admin sees the captura address alone (no code) on top, with copiar; a link that
+// already expired gets no new duration (the server refuses it: «Dame el enlace» makes a new code).
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import {
@@ -193,7 +195,7 @@ export async function render(ctx) {
   const view = {
     names: siteNames(data), note: el("div", { class: "kit-note hidden" }), cards: new Map(), parts: [], users: null, ticket: 0,
   };
-  const box = el("div", {}, view.note);
+  const box = el("div", {}, view.note, ctx.sess.admin ? capturaCard() : null);
   if (!data.sites.length) box.append(card("Sitios", el("p", { class: "muted", text: "No hay sitios que mostrar." })));
   for (const s of data.sites) {
     const node = remember(siteCard(s, ctx, view));
@@ -619,6 +621,54 @@ function cameraAdminRow(s, c, ctx, error) {
   return el("div", { class: "kit-edit" }, el("span", { class: "muted", text: "Rol" }), role, saveRole, remove);
 }
 
+// --- the captura address and the links' helpers (Section 3.17.3) ----------------------------------
+
+// "copiar" beside a link, an address or a gafete: what it copies is read at the click (the link's window repaints its
+// link); its label names what it copies.
+function copyButton(read, said, label) {
+  const copy = el("button", { class: "kit-copy", type: "button", text: "copiar", "aria-label": label });
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(read());
+      toast(said, "ok");
+    } catch {
+      toast("no se pudo copiar: selecciónalo a mano", "bad");
+    }
+  });
+  return copy;
+}
+
+// A phone opens the camera only with https, and "localhost" on a phone is the phone itself: the link's window and the
+// captura address say so when this mostrador was opened on this computer or without https (nothing otherwise).
+function httpsNote(that, the) {
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+  if (!local && location.protocol === "https:") return null;
+  return el("p", {
+    class: "kit-note",
+    text: local
+      ? "Abriste el mostrador en esta computadora (" + location.host + "): en un teléfono " + that + " no abre nada. Abre el "
+        + "mostrador con la dirección https del club para dar enlaces."
+      : "Abriste el mostrador sin https, así que " + the + " también: en el teléfono la cámara no abrirá. Abre el mostrador "
+        + "con la dirección https del club para dar enlaces.",
+  });
+}
+
+// The captura address alone, without a code (owner, 17 Oct: the admin only). By itself it lets no new phone in: a phone
+// joins only with a camera's current code (inside its link, or typed in the page's box) and then the admin's Aceptar.
+function capturaCard() {
+  const address = location.origin + "/captura";
+  const shown = el("code", { style: "word-break: break-all;", text: address });
+  return card("Dirección de captura (sin código)",
+    el("div", {}, shown, copyButton(() => address, "dirección copiada", "copiar la dirección de captura")),
+    el("p", {
+      class: "muted",
+      text: "La página de captura de todas las cámaras. Sola no deja entrar a ningún teléfono nuevo: el teléfono escribe ahí "
+        + "el código de su cámara (el que da «Dame el enlace», a ti o al gerente de ese restaurante) y espera tu Aceptar. "
+        + "Lo normal es mandar el enlace de la cámara, que ya trae su código.",
+    }),
+    httpsNote("esa dirección", "la dirección"));
+}
+
 // --- windows on this page: the link and the mirilla (Section 3.13.2) ------------------------------
 // Both are overlays: while one is open the tab's live re-read waits (inUse), and Escape or Cerrar closes it.
 
@@ -661,28 +711,13 @@ async function linkDialog(s, c, ctx, answer, note) {
     life.textContent = l.vence ? "Vence: " + siteTime(l.vence, clock) : "Permanente: no vence.";
   };
   paint(link);
-  const copy = el("button", { class: "kit-copy", type: "button", text: "copiar" });
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(url);
-      toast("enlace copiado", "ok");
-    } catch {
-      toast("no se pudo copiar: selecciónalo a mano", "bad");
-    }
-  });
-  // A phone opens the camera only with https; and "localhost" on a phone is the phone itself.
-  const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
-  const warning = local
-    ? "Abriste el mostrador en esta computadora (" + location.host + "): en un teléfono ese enlace no abre nada. Abre el "
-      + "mostrador con la dirección https del club para dar enlaces."
-    : "Abriste el mostrador sin https, así que el enlace también: en el teléfono la cámara no abrirá. Abre el mostrador "
-      + "con la dirección https del club para dar enlaces.";
+  const copy = copyButton(() => url, "enlace copiado", "copiar el enlace");
   const body = [
     note ? el("p", { class: "kit-reco", text: note }) : null,
     el("div", {}, shown, copy),
     el("p", {}, el("span", { class: "muted", text: "Código: " }), code),
     life,
-    local || location.protocol !== "https:" ? el("p", { class: "kit-note", text: warning }) : null,
+    httpsNote("ese enlace", "el enlace"),
     el("p", {
       class: "muted",
       text: "Mándalo por WhatsApp al teléfono que va a ser " + c.name + ". Lo abre en su navegador (con Tailscale encendido), "
@@ -700,7 +735,16 @@ async function linkDialog(s, c, ctx, answer, note) {
     follow();
     const save = wire(btn("Guardar duración"), error, async () => {
       const json = { duracion: pick.value, ...(pick.value === "personalizado" ? custom.read() : {}) };
-      const done = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace/duracion", { method: "POST", json: json });
+      let done;
+      try {
+        done = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace/duracion", { method: "POST", json: json });
+      } catch (err) {
+        if (err.status === 410) {                     // Section 3.17.3: it expired and stays so; nothing to copy
+          life.textContent = "Venció: ya no deja entrar a ningún teléfono nuevo.";
+          copy.disabled = true;
+        }
+        throw err;
+      }
       const moved = done.enlace.codigo !== current;
       paint(done.enlace);
       changed = true;
@@ -786,15 +830,7 @@ function addCameraRow(s, ctx, error) {
 
 function showKey(box, key) {
   box.dataset.liveHold = "1";        // a gafete on screen holds its card still until "ocultar" (the live re-read waits)
-  const copy = el("button", { class: "kit-copy", type: "button", text: "copiar" });
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(key);
-      toast("gafete copiado", "ok");
-    } catch {
-      toast("no se pudo copiar: selecciónalo a mano", "bad");
-    }
-  });
+  const copy = copyButton(() => key, "gafete copiado", "copiar el gafete");
   const hide = el("button", { class: "kit-copy", type: "button", text: "ocultar" });
   hide.addEventListener("click", () => {
     box.replaceChildren();

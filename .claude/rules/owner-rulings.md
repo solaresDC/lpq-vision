@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.17.2 (HEAD was de9c3fd, Section 3.17.1).
+- Last update: Section 3.17.3 (HEAD was Section 3.17.2's commit, on de9c3fd).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -87,7 +87,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   fresh one (its lock remembers 10 minutes).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.17.2; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.17.3; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -106,6 +106,28 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.17.3 (owner, 17 Oct 2026; built in Section 3.17.3): an expired link never comes back; the captura address
+- A camera's link and its code, written here as the owner asked (16 and 17 Oct): one key, not two. The link is the
+  captura address plus that camera's code (/captura#CODE); the code (shown 4-4) is the part that changes. Both are seen
+  only in Sitios y cuentas, by the admin and that site's manager. Whoever has the link never types the code: a good link
+  asks for the name, then "⏳ Pendiente" until the admin's Aceptar. The page's box («¿Tienes el código de la cámara?
+  Escríbelo aquí:») shows only on /captura opened with no link, an expired one or a changed one, and takes only the
+  current code, checked as the link is. With no link the phone needs the captura address (typed, or sent from the card
+  on top of Sitios y cuentas) and then the code in the box, so the link, which carries its code, is what usually gets
+  sent: the box is a backup. A phone that is already the camera keeps going when its link expires or changes (its pass
+  counts; Sacar removes it); a phone already waiting keeps waiting; every new phone needs the admin's Aceptar.
+- An expired link never works again (owner, 17 Oct: "that is a security breach"): its code stops opening at once, by the
+  link and by the box, and nothing brings it back. «Dame el enlace» on an expired link makes a new code; «Cambiar
+  enlace» makes one at once; «Guardar duración» refuses a link that already expired (410, "Ese enlace ya venció y no
+  vuelve a servir: ...", and the window's line says "Venció: ya no deja entrar a ningún teléfono nuevo."), changing
+  nothing and writing no row. Until 3.17.3 it gave the same code a new end, so the old link opened again (HQ found it on
+  17 Oct: a link window opened before noon and saved after, or the api at any time). A link's end is judged by the clock
+  at the moment it is read (clock_timestamp), so a write or a phone's request that waited for the camera's lock never
+  sees it alive.
+- The captura address alone (no code) shows on top of Sitios y cuentas for the admin only (owner, 17 Oct), with copiar
+  and, when the mostrador was opened on this computer or without https, the same note as the link's window. By itself
+  it lets no new phone in.
 
 ### 3.17.2 (owner, 16 Oct 2026; built in Section 3.17.2): the machine room's hour
 - The machine room stays open an hour after the cuarto password, not 15 minutes (owner, 16 Oct: "closes every hour
@@ -650,7 +672,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - From 3.13.2: photos/_smoke/check_3132.py and photos/_smoke/telefono_3132.py (the ✋'s phone); the
   laptop browser's leftovers of 3.12 and 3.13 (an inert lpq_device cookie and the stored lpq.gafete,
   lpq.site and lpq.camera of localhost:8000: clear that site's data in the browser); the link, phone and
-  test camera of 3.13.2's ✋ (its own steps remove them; 3.18 confirms none is left).
+  test camera of 3.13.2's ✋ (its own steps remove them; 3.18 confirms none is left). Since 3.17.1 check_3132.py no
+  longer holds (its B1, B5 and B9 expect 3.13.2's link ends, and B1's and B5's FAIL lines print a link code): never
+  rerun it as it is.
 - From 3.14: photos/_smoke/check_314.py and photos/_smoke/smoke_314.py; the smoke plate of 3.14's ✋ (its own
   Eliminar ya deletes it; 3.18 confirms none is left).
 - From 3.15: photos/_smoke/check_315.py (its copy in the fastapi container vanishes at the next rebuild). From 3.16 a
@@ -665,6 +689,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   test camera (prueba-2), its link, its price and its exchange rate are removed by its own steps, and config.yaml goes
   back with git checkout; 3.18 confirms none is left.
 - From 3.17.2: photos/_smoke/check_3172.py (its copy in the fastapi container vanishes at the next recreate).
+- From 3.17.3: photos/_smoke/check_3173.py and photos/_smoke/vence_3173.py, the ✋'s helper (their copies in the fastapi
+  container vanish at the next recreate); the ✋'s test camera (prueba-3) and its link are removed by its own steps, and
+  config.yaml goes back with git checkout; 3.18 confirms none is left.
 
 ## Waiting on the owner (no section owns these)
 - 3.17.1's ✋ (on the laptop after 3.17.1's commit; no bot needed): the camera boxes and the add block; a test camera
@@ -675,6 +702,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   discarded and restored); everything put back; the push of 3.17.1 (3.15 to 3.17 went up on 16 Oct).
 - 3.17.2's ✋ (on the laptop after 3.17.2's commit): the machine room's door says it closes after an hour; opened with
   the cuarto password, its countdown starts at an hour; Cerrar el cuarto; the push of 3.17.2.
+- 3.17.3's ✋ (on the laptop after 3.17.3's commit): the captura address on top of Sitios y cuentas for the admin, not
+  for the manager; a test camera (prueba-3) whose link, expired by the ✋'s helper while its window is open, is refused a
+  new duration, then «Dame el enlace» gives a new code; the camera removed, everything put back; the push of 3.17.3.
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never

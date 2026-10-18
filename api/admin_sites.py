@@ -12,7 +12,7 @@ POST /api/admin/sites/{site}/cameras/{camera}/source Relevo a Pi: a phone camera
 POST /api/admin/sites/{site}/cameras/{camera}/enlace Dame el enlace: the live link, a new one when none or expired
 POST /api/admin/sites/{site}/cameras/{camera}/enlace/nuevo    Cambiar enlace: a new code (only the admin picks its life)
 POST /api/admin/sites/{site}/cameras/{camera}/enlace/duracion the same code, its last day counted again from today
-                                                     (admin)
+                                                     (admin; never on a link that already expired)
 POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/aceptar  the phone becomes that camera; on a Pi
                                                      camera, the relevo (admin; never on a deactivated site)
 POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/rechazar its request for that camera goes (admin)
@@ -40,6 +40,8 @@ Section 3.17.1: a link ends at 12:00 of its last day on the site's own clock (ow
 from the click: 1 día made today ends tomorrow at noon. personalizado lasts 1 to 365 days, or until a chosen day
 within a year. Each site's view carries its timezone (zona) and the link answers the site's today (hoy), so the page
 shows and picks days on the site's calendar.
+Section 3.17.3 (owner, 17 Oct): a link that expired never works again. Its duration can't be changed: «Dame el enlace»
+makes a new code instead (until 3.17.3 the same code got a new end, and the old link opened again).
 """
 
 from __future__ import annotations
@@ -99,6 +101,8 @@ SOURCE_WORDS = {"phone": "teléfono", "pi": "Pi"}
 ROLE_WORDS = {"return": "regreso", "outgoing": "salida", "both": "ambas"}
 MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 CODIGO_INTENTOS = 3                # a new link's code collides with another (1 in 10^11): try a fresh one
+VENCIDO_SIN_DURACION = ("Ese enlace ya venció y no vuelve a servir: cierra esta ventana y pulsa «Dame el enlace» "
+                        "para uno nuevo.")        # Section 3.17.3: an expired link gets no new end
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -710,7 +714,8 @@ async def cambiar_enlace(site: str, camera: str, body: EnlaceNuevoRequest,
 async def duracion_enlace(site: str, camera: str, body: EnlaceDuracionRequest,
                           session: Session = Depends(require_admin)) -> dict[str, Any]:
     """The admin's duration of a camera's link: the same code, its last day counted again from the site's today (saved
-    twice the same day, the same end: never a drift of hours)."""
+    twice the same day, the same end: never a drift of hours). A link that already expired is refused (410), changing
+    nothing (Section 3.17.3, owner 17 Oct: an expired link never works again; «Dame el enlace» makes a new code)."""
     cfg = await _config()
     _camera_or_404(_site_cfg(cfg, site), site, camera)
     zone, today = _hoy(cfg, site)
@@ -718,9 +723,15 @@ async def duracion_enlace(site: str, camera: str, body: EnlaceDuracionRequest,
 
     def work(conn: psycopg.Connection) -> dict[str, Any]:
         _link_camera_now(conn, site, camera)
-        row = conn.execute(q.SET_ENLACE_DIAS, {"site": site, "camera": camera, **vida}).fetchone()
-        if row is None:
+        key = {"site": site, "camera": camera}
+        link = conn.execute(q.LOCK_ENLACE, key).fetchone()
+        if link is None:
             raise HTTPException(status_code=404, detail=f"{camera} aún no tiene enlace: pide uno con «Dame el enlace».")
+        if link["vencido"]:
+            raise HTTPException(status_code=410, detail=VENCIDO_SIN_DURACION)
+        row = conn.execute(q.SET_ENLACE_DIAS, {**key, **vida}).fetchone()
+        if row is None:                      # it ended between the read and the write: the query keeps it ended
+            raise HTTPException(status_code=410, detail=VENCIDO_SIN_DURACION)
         _bitacora(conn, session, "enlace.duracion", {"site": site, "camera": camera, "dias": vida["dias"], "vence": _iso(vida["vence"])})
         return row
 

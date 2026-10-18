@@ -82,7 +82,8 @@ export async function api(path, { method = "GET", json, form } = {}) {
   const ct = res.headers.get("content-type") || "";
   const data = ct.includes("application/json") ? await res.json() : await res.text();
   if (!res.ok) {
-    // The admin floors read err.status: 403 (grant gone), 409 (already exists), 410 (confirm expired).
+    // The admin floors read err.status: 403 (grant gone), 409 (already exists), 410 (confirm expired, or a camera's
+    // link that expired: Guardar duración, Section 3.17.3).
     const err = new Error((data && data.error) || ("HTTP " + res.status));
     err.status = res.status;
     throw err;

@@ -523,16 +523,21 @@ FROM camara_enlaces
 ORDER BY site, camera
 """
 
+# A camera's link, locked, judged by the clock at the moment it is read (clock_timestamp, not now(): now() is the
+# transaction's start, and a write that waited for the camera's lock past a link's end would see it still alive;
+# Section 3.17.3, an expired link never comes back). It relies on LOCK_CAMARA being taken first, as every caller does:
+# FOR UPDATE computes its columns before it waits for the row, so the row's own lock must never be the one waited on.
 LOCK_ENLACE = """
-SELECT site, camera, codigo, dias, vence_at, (vence_at IS NOT NULL AND vence_at <= now()) AS vencido
+SELECT site, camera, codigo, dias, vence_at, (vence_at IS NOT NULL AND vence_at <= clock_timestamp()) AS vencido
 FROM camara_enlaces
 WHERE site = %(site)s AND camera = %(camera)s
 FOR UPDATE
 """
 
-# What a phone opened: the link behind a code, with its site's state.
+# What a phone opened: the link behind a code, with its site's state (judged by the clock when it is read, as
+# LOCK_ENLACE: a request re-read under the camera's lock sees a link that ended while it waited).
 SELECT_ENLACE_BY_CODIGO = """
-SELECT e.site, e.camera, (e.vence_at IS NOT NULL AND e.vence_at <= now()) AS vencido, s.active
+SELECT e.site, e.camera, (e.vence_at IS NOT NULL AND e.vence_at <= clock_timestamp()) AS vencido, s.active
 FROM camara_enlaces AS e
 JOIN sites AS s ON s.site = e.site
 WHERE e.codigo = %(codigo)s
@@ -557,11 +562,12 @@ SET codigo = EXCLUDED.codigo, dias = EXCLUDED.dias, vence_at = EXCLUDED.vence_at
 RETURNING site, camera, codigo, dias, vence_at, false AS vencido
 """
 
-# The admin's duración: the same code, its last day counted again from the site's today.
+# The admin's duración: the same code, its last day counted again from the site's today; never on a link that already
+# ended (Section 3.17.3: an expired link never comes back, so no row comes back either).
 SET_ENLACE_DIAS = """
 UPDATE camara_enlaces
 SET dias = %(dias)s, vence_at = %(vence)s
-WHERE site = %(site)s AND camera = %(camera)s
+WHERE site = %(site)s AND camera = %(camera)s AND (vence_at IS NULL OR vence_at > clock_timestamp())
 RETURNING site, camera, codigo, dias, vence_at, false AS vencido
 """
 
