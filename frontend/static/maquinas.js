@@ -1,5 +1,5 @@
 // LPQ_VISION maquinas.js: the MACHINE ROOM, the second floor (SPEC 1.6; Section 3.15).
-// Only the admin enters, and only with the cuarto password: it opens the room for this session for 15 minutes
+// Only the admin enters, and only with the cuarto password: it opens the room for this session for an hour
 // (a countdown on top; "Cerrar el cuarto" closes it at once). When the permission ends, or any read answers 403,
 // the page goes back to the door. Inside, every change is the server's double confirm with its visible diff.
 // The cards: the post-reboot checklist (re-read every 5 s), the model and its answer length (only models whose
@@ -10,6 +10,7 @@
 // the reboot and the scale: while its mailbox does not answer, those buttons change nothing and say so.
 // One view at a time (loading, door, birth, room, error): show() switches it, stops every timer, poll and stream of
 // the view before, and bumps the generation, so an answer that arrives for an older view is dropped.
+// Section 3.17.2 (owner, 16 Oct): the room stays open an hour, not 15 minutes.
 
 import { api, el, mountHeader, poll, requireLogin, session, toast } from "/static/app.js";
 import { busy, card, confirmDialog, fieldHelp, helps, newPassword } from "/static/admin-kit.js";
@@ -23,11 +24,11 @@ const SAME_VENTANILLA_MS = 60000;   // a ventanilla restart that still answers a
 const DOOR_HELP = {
   que_es: "La contraseña del cuarto de máquinas: una segunda llave, distinta de la de tu cuenta.",
   ejemplo: "la que guardaste al crearla",
-  recomendacion: "El cuarto se cierra solo a los 15 minutos; entonces se pide otra vez.",
+  recomendacion: "El cuarto se cierra solo a la hora; entonces se pide otra vez.",
   copiar: false,
 };
 const NEW_PASS_HELP = {
-  que_es: "La llave del cuarto de máquinas. La pide esta página cada vez que alguien entra, y cada 15 minutos.",
+  que_es: "La llave del cuarto de máquinas. La pide esta página cada vez que alguien entra, y cada hora.",
   ejemplo: "una frase larga que solo tú sepas",
   recomendacion: "Mínimo 10 caracteres, distinta de la de tu cuenta; guárdala donde guardas la del servidor.",
   copiar: false,
