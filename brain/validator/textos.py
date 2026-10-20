@@ -118,7 +118,7 @@ CATALOG: tuple[Texto, ...] = (
        **_SC, minutos="6"),
     _t("pi_callada", "site", "Cuando la Pi de una cámara deja de mandar imagen dentro del horario de servicio.",
        "📵 La Pi de {sitio}/{camara} no manda imagen desde hace {minutos} min en horario de servicio. Un teléfono puede "
-       "tomar su lugar: en el mostrador, «Dame el enlace» de esa cámara.",
+       "tomar su lugar: en el mostrador, «Dame el enlace» o «Ver enlace» de esa cámara.",
        **_SC, minutos="6"),
     _t("sitio_volvio", "site", "Cuando esa cámara vuelve a mandar imagen.",
        "🟢 El sitio {sitio} volvió a mandar imagen ({camara}).", **_SC),

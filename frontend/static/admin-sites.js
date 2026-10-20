@@ -2,9 +2,10 @@
 // Each visible site: the auditor (do the cameras' roles add up to the functions?), its two functions, its
 // cameras and, for the admin, its gafete (the machines' key) and its active switch. Each camera (Section 3.13.2):
 // its light (🟢 Pi conectada, 🟢 Teléfono conectado: «nombre», 🔴 Nada conectado), Mirilla (a window on this
-// page), its link ("Dame el enlace" and "Cambiar enlace": the admin and the site's manager; only the admin picks
-// how long it lasts), its phone with Sacar, the phones waiting with Aceptar and Rechazar (the admin's) and
-// Relevo a Pi; a Pi that sends nothing shows its link, so a phone can take its place. Cameras are added,
+// page), its link ("Dame el enlace", or "Ver enlace" once it has a live one, and "Cambiar enlace" inside its window:
+// the admin and the site's manager; only the admin picks how long it lasts), its phone with Sacar, the phones waiting
+// with Aceptar and Rechazar (the admin's) and Relevo a Pi; a Pi that sends nothing shows its link, so a phone can
+// take its place. Cameras are added,
 // re-roled and removed by the admin only (new ones are Pi by default). The admin also gets Crear restaurante
 // (site, cameras, functions, gafete, Telegram group, menu photos and manager: all or nothing; the group's chat
 // can be tested before creating, and the knobs the new restaurant inherits are shown read-only) and Cuentas
@@ -27,6 +28,9 @@
 // (only digits, 1 to 365) or its last day (a calendar, tomorrow to a year from the site's today) shows only then.
 // Section 3.17.3 (owner, 17 Oct): the admin sees the captura address alone (no code) on top, with copiar; a link that
 // already expired gets no new duration (the server refuses it: «Dame el enlace» makes a new code).
+// Section 3.17.5 (owner, 19 Oct): the box has ONE link button, «Dame el enlace» while the camera has no live link (none
+// yet, or expired: it makes a new code) and «Ver enlace» once it has one (the same link); «Cambiar enlace» (a new code
+// on purpose, after its confirm) lives inside the link window, no longer in the box.
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import {
@@ -78,7 +82,7 @@ const AYUDAS = {
   fuente: {
     que_es: "Qué aparato toma las fotos: una Raspberry Pi, o un teléfono que entra con el enlace de la cámara.",
     ejemplo: "Pi",
-    recomendacion: "Pi. Si la Pi no manda imagen, un teléfono toma su lugar con el enlace de la cámara (Dame el enlace) cuando el admin lo acepta.",
+    recomendacion: "Pi. Si la Pi no manda imagen, un teléfono toma su lugar con el enlace de la cámara («Dame el enlace» o «Ver enlace») cuando el admin lo acepta.",
     copiar: false,
   },
   duracion: {
@@ -454,18 +458,12 @@ function cameraBlock(s, c, ctx, error) {
   if (offersLink) parts.push(el("div", { class: "muted", text: linkText(c.enlace, s) }));
   const buttons = [wire(btn("Mirilla"), error, () => openMirilla(s.site, c.name))];
   if (offersLink) {
-    buttons.push(wire(btn("Dame el enlace", "primary"), error, async () => {
+    // Section 3.17.5: one button; its name says whether it makes a code (no live link) or shows the one there is.
+    const live = Boolean(c.enlace && !c.enlace.vencido);
+    buttons.push(wire(btn(live ? "Ver enlace" : "Dame el enlace", "primary"), error, async () => {
       const answer = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace", { method: "POST" });
       const changed = await linkDialog(s, c, ctx, answer, answer.nuevo ? "Enlace nuevo." : "");
       if (answer.nuevo || changed) ctx.refresh();        // the same link, untouched: the card already shows it
-    }));
-    buttons.push(wire(btn("Cambiar enlace"), error, async () => {
-      const ask = "El enlace de " + c.name + " cambia: el anterior deja de servir para entrar. Los teléfonos que ya "
-        + "entraron siguen. ¿Cambiar?";
-      if (!window.confirm(ask)) return;
-      const answer = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace/nuevo", { method: "POST", json: {} });
-      await linkDialog(s, c, ctx, answer, "Enlace nuevo: el anterior ya no sirve.");
-      ctx.refresh();
     }));
   }
   if (c.source === "phone") {
@@ -663,7 +661,8 @@ function capturaCard() {
     el("p", {
       class: "muted",
       text: "La página de captura de todas las cámaras. Sola no deja entrar a ningún teléfono nuevo: el teléfono escribe ahí "
-        + "el código de su cámara (el que da «Dame el enlace», a ti o al gerente de ese restaurante) y espera tu Aceptar. "
+        + "el código de su cámara (el que da «Dame el enlace» o «Ver enlace», a ti o al gerente de ese restaurante) "
+        + "y espera tu Aceptar. "
         + "Lo normal es mandar el enlace de la cámara, que ya trae su código.",
     }),
     httpsNote("esa dirección", "la dirección"));
@@ -692,8 +691,10 @@ function overlayWindow(title, ...body) {
 }
 
 // The link's code goes after the # (it never reaches a server's logs). Resolves, once closed, with whether the
-// admin changed its duration (the card then shows the new date). After "Guardar duración" the window shows the link
-// as the server has it now (if someone changed it meanwhile, the new code: the old one no longer opens anything).
+// link changed here (a duration saved or «Cambiar enlace»: the card then shows it). After "Guardar duración" the
+// window shows the link as the server has it now (if someone changed it meanwhile, the new code: the old one no
+// longer opens anything). «Cambiar enlace» (Section 3.17.5: here, no longer in the camera's box) asks first, then
+// shows the new code in this same window.
 async function linkDialog(s, c, ctx, answer, note) {
   const link = answer.enlace;
   const clock = { site: s.site, zona: answer.zona || s.zona };
@@ -712,11 +713,28 @@ async function linkDialog(s, c, ctx, answer, note) {
   };
   paint(link);
   const copy = copyButton(() => url, "enlace copiado", "copiar el enlace");
+  const said = el("p", { class: note ? "kit-reco" : "kit-reco hidden", text: note });
+  const error = el("div", { class: "kit-error" });        // the window's one red line (Cambiar enlace, Guardar duración)
+  const change = wire(btn("Cambiar enlace"), error, async () => {
+    const ask = "El enlace de " + c.name + " cambia: el anterior deja de servir para entrar. Los teléfonos que ya "
+      + "entraron siguen. ¿Cambiar?";
+    if (!window.confirm(ask)) return;
+    changed = true;                                    // closed before the answer: the card still re-reads
+    const fresh = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace/nuevo", { method: "POST", json: {} });
+    paint(fresh.enlace);
+    copy.disabled = false;                             // a 410 had disabled it: this code is live
+    said.textContent = "Enlace nuevo: el anterior ya no sirve.";
+    said.classList.remove("hidden");
+    toast("enlace cambiado", "ok");
+  });
   const body = [
-    note ? el("p", { class: "kit-reco", text: note }) : null,
+    said,
     el("div", {}, shown, copy),
     el("p", {}, el("span", { class: "muted", text: "Código: " }), code),
     life,
+    el("div", { class: "kit-edit" }, change, el("span", {
+      class: "muted", text: "Un código nuevo: el anterior deja de servir y los teléfonos que ya entraron siguen.",
+    })),
     httpsNote("ese enlace", "el enlace"),
     el("p", {
       class: "muted",
@@ -727,7 +745,6 @@ async function linkDialog(s, c, ctx, answer, note) {
     }),
   ];
   if (ctx.sess.admin) {
-    const error = el("div", { class: "kit-error" });
     const pick = choice(DURACIONES, link.dias === null ? "permanente" : DIAS_KEY[link.dias] || "personalizado");
     const custom = customLife(link, answer.hoy);
     const follow = () => custom.node.classList.toggle("hidden", pick.value !== "personalizado");
@@ -742,6 +759,7 @@ async function linkDialog(s, c, ctx, answer, note) {
         if (err.status === 410) {                     // Section 3.17.3: it expired and stays so; nothing to copy
           life.textContent = "Venció: ya no deja entrar a ningún teléfono nuevo.";
           copy.disabled = true;
+          changed = true;                              // Section 3.17.5: on close the box says «Dame el enlace» at once
         }
         throw err;
       }
@@ -753,6 +771,8 @@ async function linkDialog(s, c, ctx, answer, note) {
     });
     body.push(el("div", { class: "kit-edit" }, el("span", { class: "muted", text: "Duración" }), pick, save),
       custom.node, fieldHelp(AYUDAS.duracion), error);
+  } else {
+    body.push(error);
   }
   await overlayWindow("Enlace de " + c.name + " (" + s.site + ")", ...body.filter(Boolean));
   return changed;

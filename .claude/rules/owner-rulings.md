@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.17.4 (HEAD was c84135f, Section 3.17.3).
+- Last update: Section 3.17.5 (HEAD was 7b54c54, Section 3.17.4).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -87,7 +87,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   fresh one (its lock remembers 10 minutes).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.17.4; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.17.5; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -106,6 +106,17 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.17.5 (owner, 19 Oct 2026; built in Section 3.17.5): one link button, «Cambiar enlace» in its window
+- A camera's box has ONE link button (owner, 19 Oct: «Dame el enlace» and «Cambiar enlace» looked the same and
+  confused): «Dame el enlace» while the camera has no live link (none yet, or expired: it makes a new code and the
+  window says "Enlace nuevo.") and «Ver enlace» once it has one (the window shows that same link). «Cambiar enlace» (a
+  new code on purpose: the old one stops opening, the phones already in keep going) is inside the link window, after the
+  same browser question, and shows the new code in that window ("Enlace nuevo: el anterior ya no sirve."); it is no
+  longer in the box. The window keeps one red line for its buttons. Nothing else changes: the admin and that site's
+  manager use both; only the admin picks the duration. The texts that sent people to «Dame el enlace» for a live link
+  now name both buttons (the captura address card, the phone's code screen, the Fuente help, an api refusal and the
+  bot's 📵 pi_callada factory text).
 
 ### 3.17.4 (owner, 18 Oct 2026; built in Section 3.17.4): the provider charges in dollars
 - Under the Gasto's Moneda, one line: "Anthropic (Claude) cobra su API siempre en dólares (USD), sin importar el país o
@@ -340,9 +351,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 
 ### 3.13.2 (owner, 11 and 12 Oct 2026; built in Section 3.13.2): camera links and the new captura
 - Each camera in Sitios y cuentas shows its light (🟢 "Pi conectada", 🟢 "Teléfono conectado: «nombre»",
-  🔴 "Nada conectado"), Mirilla (a window on the same page), its link ("Dame el enlace", "Cambiar
-  enlace", its code shown next to it), its phone with Sacar, the phones waiting with Aceptar and
-  Rechazar, and on a phone camera "Relevo a Pi".
+  🔴 "Nada conectado"), Mirilla (a window on the same page), its link ("Dame el enlace", or "Ver enlace"
+  once it has a live one, with "Cambiar enlace" inside its window since 3.17.5; its code shown next to it),
+  its phone with Sacar, the phones waiting with Aceptar and Rechazar, and on a phone camera "Relevo a Pi".
 - Who does what: a camera's link, the admin and that site's manager (only the admin picks how long it
   lasts); Sacar, the manager for his own site and the admin for all; Aceptar and Rechazar, the admin
   only; cameras are added, removed and re-roled by the admin only. New cameras are Pi by default (owner,
@@ -382,10 +393,11 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   - One tab captures, the newest; the others say "Este teléfono ya captura en otra pestaña". A stop
     holds (a reload, a site deactivated and back) until a start button, a request or another link. A
     camera with no picture (another app, a call) waits and resumes; one that closes says so.
-  - The bot: a Pi camera's 📵 says a phone can take its place ("Dame el enlace"); 📱 posts each request
-    with the phone's name and the camera; the relevo reads "🟢 sitio/cámara cambió de fuente (ahora:
-    fuente)", with "teléfono de emergencia" when an Aceptar moved a Pi camera to a phone. It reads its
-    last 200 bitácora rows again each round, so a row that lands late is still announced once.
+  - The bot: a Pi camera's 📵 says a phone can take its place ("Dame el enlace", and "o «Ver enlace»"
+    from 3.17.5); 📱 posts each request with the phone's name and the camera; the relevo reads "🟢
+    sitio/cámara cambió de fuente (ahora: fuente)", with "teléfono de emergencia" when an Aceptar moved a
+    Pi camera to a phone. It reads its last 200 bitácora rows again each round, so a row that lands late
+    is still announced once.
   - Sitios y cuentas: an action rebuilds its own card only (what is typed in other cards stays, and so
     does a value of that card not saved yet); a finger on a button holds its card; the link window warns
     when the mostrador was opened without https or on this computer (a phone cannot open that link).
@@ -700,14 +712,19 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   container vanish at the next recreate); the ✋'s test camera (prueba-3) and its link are removed by its own steps, and
   config.yaml goes back with git checkout; 3.18 confirms none is left.
 - From 3.17.4: nothing (its check is two commands in its block, no file).
+- From 3.17.5: nothing new (its check is commands in its block, no file); its ✋ reuses photos/_smoke/vence_3173.py and
+  the test camera prueba-3, removed by its own steps.
+- A test camera's link (lesson of 19 Oct): a put-back (`git checkout -- config/config.yaml`) run before a ✋'s Quitar
+  takes the camera out of config.yaml but leaves its camara_enlaces row (only Quitar deletes a link), and adding that
+  name again brings the link back. Every ✋ removes its test cameras with Quitar before its put-back; 3.18 confirms no
+  camara_enlaces row for a test camera (prueba-2, prueba-3).
 
 ## Waiting on the owner (no section owns these)
-- 3.17.2's, 3.17.3's and 3.17.4's ✋, ONE list in one sitting after 3.17.4's commit (owner, 18 Oct): the machine room's
-  door says it closes after an hour, opened with the cuarto password its countdown starts at an hour, Cerrar el cuarto;
-  the captura address on top of Sitios y cuentas for the admin, not for the manager; a test camera (prueba-3) whose
-  link, expired by the ✋'s helper while its window is open, is refused a new duration, then «Dame el enlace» gives a
-  new code, the camera removed; the line under the Gasto's Moneda; everything put back; one push of 3.17.2, 3.17.3 and
-  3.17.4 (`de9c3fd..<3.17.4>`).
+- 3.17.5's ✋ (on the laptop after 3.17.5's commit): a test camera (prueba-3) shows only «Dame el enlace»; its window
+  says "Enlace nuevo." and has «Cambiar enlace»; then its box says «Ver enlace», which opens the same link; «Cambiar
+  enlace» in the window asks first and gives a new code; the manager has «Ver enlace», and «Cambiar enlace» in its
+  window; expired by the ✋'s helper, the box says «Dame el enlace» again; the camera removed with Quitar, everything put
+  back; the push of what is not up yet (`de9c3fd..<3.17.5>`, or `7b54c54..<3.17.5>` if 3.17.4's list was pushed).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never
@@ -730,6 +747,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   colors", pushed `94c8b8e..4be804f` (3.15, 3.16 and 3.17); the owner's notes on it became 3.17.1.
 - 3.17.1's ✋ (18 Oct, on the laptop): every step "working perfectly", pushed `4be804f..de9c3fd`; the owner's note on it
   (the providers charge in dollars) became 3.17.4.
+- 3.17.2's, 3.17.3's and 3.17.4's ✋ (18 and 19 Oct, on the laptop): every step correct; the link steps ran again after a
+  clean start (prueba-3 had a link left by a put-back before Quitar: see the limpieza); the owner's note on it (the
+  link buttons) became 3.17.5.
 
 ## Still forbidden (post-demo): STOP and flag if asked
 Coach screens, pi_csi/usb backends, the MODEL cascade (stays "off"), geometry v2, the báscula, POS,

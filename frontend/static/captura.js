@@ -299,7 +299,7 @@ function route(yo, note) {
       dropCode();
       showScreen(
         el("h2", { text: "Abre el enlace de tu cámara" }),
-        el("p", { text: "Te lo da tu gerente o el admin desde el mostrador (Sitios y cuentas, «Dame el enlace»)." }),
+        el("p", { text: "Te lo da tu gerente o el admin desde el mostrador (Sitios y cuentas, «Dame el enlace» o «Ver enlace»)." }),
         aviso ? el("p", { class: "warnline", text: aviso }) : null,
         codeForm());
   }

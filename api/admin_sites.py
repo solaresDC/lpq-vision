@@ -9,8 +9,10 @@ POST /api/admin/sites/{site}/cameras                 add one camera, or change i
 POST /api/admin/sites/{site}/cameras/{camera}/delete remove one camera with its link, its phone and its requests
                                                      (admin; double confirm; never the last one)
 POST /api/admin/sites/{site}/cameras/{camera}/source Relevo a Pi: a phone camera goes back to its Pi; its phone leaves
-POST /api/admin/sites/{site}/cameras/{camera}/enlace Dame el enlace: the live link, a new one when none or expired
-POST /api/admin/sites/{site}/cameras/{camera}/enlace/nuevo    Cambiar enlace: a new code (only the admin picks its life)
+POST /api/admin/sites/{site}/cameras/{camera}/enlace Dame el enlace (Ver enlace when live): the live link, a new one
+                                                     when none or expired
+POST /api/admin/sites/{site}/cameras/{camera}/enlace/nuevo    Cambiar enlace (inside the link window since 3.17.5): a new
+                                                     code (only the admin picks its life)
 POST /api/admin/sites/{site}/cameras/{camera}/enlace/duracion the same code, its last day counted again from today
                                                      (admin; never on a link that already expired)
 POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/aceptar  the phone becomes that camera; on a Pi
@@ -536,7 +538,7 @@ async def camera_source(site: str, camera: str, body: SourceRequest, session: Se
     if body.source != "pi":
         raise HTTPException(
             status_code=400,
-            detail="Una cámara pasa a teléfono cuando el admin acepta un teléfono en su enlace (Dame el enlace).",
+            detail="Una cámara pasa a teléfono cuando el admin acepta un teléfono en su enlace («Dame el enlace» o «Ver enlace»).",
         )
     cam = _camera_or_404(_site_cfg(await _config(), target), target, camera)
     if cam.source == "pi":
