@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.17.5 (HEAD was 7b54c54, Section 3.17.4).
+- Last update: Section 3.17.6 (HEAD was 9df75ed, Section 3.17.5).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -87,7 +87,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   fresh one (its lock remembers 10 minutes).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.17.5; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
+- Laptop: Fase 3 through 3.17.6; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
   group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -107,6 +107,23 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 
 ## Rulings in force (newest first)
 
+### 3.17.6 (owner, 20 Oct 2026; built in Section 3.17.6): the manager's link durations, as the admin allows
+- A restaurant's manager may choose how long his cameras' links last, but only the durations the admin allows his
+  restaurant (owner, 20 Oct, amending 11 Oct's "la duración que fije el admin"): the admin chooses them per restaurant
+  (a row of five in its card in Sitios y cuentas: 1 día, 1 semana, 1 mes, personalizado, permanente, and "Guardar
+  duraciones") or the same for every restaurant at once (a card on top: "Aplicar a todos los restaurantes", after
+  Chrome's question). None allowed = as before: only the admin chooses (the manager's window has no Duración, and the
+  server answers "Solo el admin elige cuánto dura un enlace."). The manager's window shows Duración with only the
+  allowed ones; any other is refused (403 "Esa duración la elige el admin. Puedes elegir: ..."), and so is Cambiar
+  enlace with another duration. These controls are the admin's only; the admin always chooses any duration. The admin
+  and the manager change the same link and see the same end (the box re-reads every 5 s). New restaurants start with
+  none.
+- In config.yaml: sites.<site>.gerente_duraciones, a list in the owner's order (["1d", "7d", "30d", "personalizado",
+  "permanente"]), absent when none; written only by the mostrador (one bitácora row per change: enlace.gerente, or
+  enlace.gerente_todos for every restaurant). An older image refuses that key (extra='forbid'): every container that
+  loads config.yaml runs 3.17.6's code before a restaurant allows a duration (3.18's deploy rebuilds them all).
+  enlace.gerente_todos carries what each restaurant had before, and is written only when something changed.
+
 ### 3.17.5 (owner, 19 Oct 2026; built in Section 3.17.5): one link button, «Cambiar enlace» in its window
 - A camera's box has ONE link button (owner, 19 Oct: «Dame el enlace» and «Cambiar enlace» looked the same and
   confused): «Dame el enlace» while the camera has no live link (none yet, or expired: it makes a new code and the
@@ -114,7 +131,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   new code on purpose: the old one stops opening, the phones already in keep going) is inside the link window, after the
   same browser question, and shows the new code in that window ("Enlace nuevo: el anterior ya no sirve."); it is no
   longer in the box. The window keeps one red line for its buttons. Nothing else changes: the admin and that site's
-  manager use both; only the admin picks the duration. The texts that sent people to «Dame el enlace» for a live link
+  manager use both; only the admin picks the duration (since 3.17.6 the manager too, among the ones the admin allows
+  his restaurant). The texts that sent people to «Dame el enlace» for a live link
   now name both buttons (the captura address card, the phone's code screen, the Fuente help, an api refusal and the
   bot's 📵 pi_callada factory text).
 
@@ -355,11 +373,13 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   once it has a live one, with "Cambiar enlace" inside its window since 3.17.5; its code shown next to it),
   its phone with Sacar, the phones waiting with Aceptar and Rechazar, and on a phone camera "Relevo a Pi".
 - Who does what: a camera's link, the admin and that site's manager (only the admin picks how long it
-  lasts); Sacar, the manager for his own site and the admin for all; Aceptar and Rechazar, the admin
-  only; cameras are added, removed and re-roled by the admin only. New cameras are Pi by default (owner,
-  11 Oct): a camera whose Pi sends nothing shows its link, so a phone can take its place.
+  lasts; since 3.17.6 the manager too, among the durations the admin allows his site); Sacar, the manager
+  for his own site and the admin for all; Aceptar and Rechazar, the admin only; cameras are added,
+  removed and re-roled by the admin only. New cameras are Pi by default (owner, 11 Oct): a camera whose
+  Pi sends nothing shows its link, so a phone can take its place.
 - One link per camera, lasting what the admin picks (1 día, 1 semana, 1 mes or permanente; a week by
-  default). Changing a link kicks nobody. One phone per camera: a camera with its phone refuses any other
+  default; personalizado since 3.17.1; the manager too, among the durations the admin allows, since
+  3.17.6). Changing a link kicks nobody. One phone per camera: a camera with its phone refuses any other
   ("barra-1 ya tiene teléfono"). Joining: the phone gives a name and waits on "⏳ Pendiente"; the bot posts
   the request in the site's group; the admin's Aceptar makes it the camera. Opening another camera's link
   moves the phone there after Aceptar and frees the first camera. On a Pi camera, Aceptar moves the
@@ -714,17 +734,22 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - From 3.17.4: nothing (its check is two commands in its block, no file).
 - From 3.17.5: nothing new (its check is commands in its block, no file); its ✋ reuses photos/_smoke/vence_3173.py and
   the test camera prueba-3, removed by its own steps.
+- From 3.17.6: photos/_smoke/check_3176.py (its copy in the fastapi container vanishes at the next recreate); the ✋'s
+  durations go back to none in the mostrador, its camera prueba-3 goes with Quitar, then config.yaml goes back with git
+  checkout; 3.18 confirms config.yaml has no gerente_duraciones the owner did not set on purpose.
 - A test camera's link (lesson of 19 Oct): a put-back (`git checkout -- config/config.yaml`) run before a ✋'s Quitar
   takes the camera out of config.yaml but leaves its camara_enlaces row (only Quitar deletes a link), and adding that
   name again brings the link back. Every ✋ removes its test cameras with Quitar before its put-back; 3.18 confirms no
   camara_enlaces row for a test camera (prueba-2, prueba-3).
 
 ## Waiting on the owner (no section owns these)
-- 3.17.5's ✋ (on the laptop after 3.17.5's commit): a test camera (prueba-3) shows only «Dame el enlace»; its window
-  says "Enlace nuevo." and has «Cambiar enlace»; then its box says «Ver enlace», which opens the same link; «Cambiar
-  enlace» in the window asks first and gives a new code; the manager has «Ver enlace», and «Cambiar enlace» in its
-  window; expired by the ✋'s helper, the box says «Dame el enlace» again; the camera removed with Quitar, everything put
-  back; the push of what is not up yet (`de9c3fd..<3.17.5>`, or `7b54c54..<3.17.5>` if 3.17.4's list was pushed).
+- 3.17.5's ✋ (20 Oct, on the laptop): steps 1 to 5 as expected (the owner's note at step 5 became 3.17.6); steps 6 to
+  8 (the expiry, Quitar, the put-back) still to do, with no push of their own (owner, 20 Oct: one push with 3.17.6).
+- 3.17.6's ✋ (on the laptop after 3.17.6's commit): the admin's two controls (the card on top, the row in demo's card,
+  all unchecked); a test camera (prueba-3) and its link; the manager without Duración; demo allows 1 semana and
+  personalizado, and the manager sets personalizado 3 días, which the admin's box shows; 1 día for every restaurant, and
+  the manager then has only 1 día; none for every restaurant, and his Duración is gone; the camera removed with Quitar,
+  everything put back; one push of 3.17.5 and 3.17.6 (`7b54c54..<3.17.6>`).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never

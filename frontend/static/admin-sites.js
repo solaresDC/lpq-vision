@@ -3,7 +3,8 @@
 // cameras and, for the admin, its gafete (the machines' key) and its active switch. Each camera (Section 3.13.2):
 // its light (🟢 Pi conectada, 🟢 Teléfono conectado: «nombre», 🔴 Nada conectado), Mirilla (a window on this
 // page), its link ("Dame el enlace", or "Ver enlace" once it has a live one, and "Cambiar enlace" inside its window:
-// the admin and the site's manager; only the admin picks how long it lasts), its phone with Sacar, the phones waiting
+// the admin and the site's manager; how long it lasts: the admin, or the manager among the durations the admin
+// allows his site, Section 3.17.6), its phone with Sacar, the phones waiting
 // with Aceptar and Rechazar (the admin's) and Relevo a Pi; a Pi that sends nothing shows its link, so a phone can
 // take its place. Cameras are added,
 // re-roled and removed by the admin only (new ones are Pi by default). The admin also gets Crear restaurante
@@ -31,6 +32,9 @@
 // Section 3.17.5 (owner, 19 Oct): the box has ONE link button, «Dame el enlace» while the camera has no live link (none
 // yet, or expired: it makes a new code) and «Ver enlace» once it has one (the same link); «Cambiar enlace» (a new code
 // on purpose, after its confirm) lives inside the link window, no longer in the box.
+// Section 3.17.6 (owner, 20 Oct): the admin chooses which link durations each restaurant's manager may choose (a row of
+// five in each site card, and the same five for every restaurant at once in a card on top); the manager's link window
+// shows Duración with only those (none: no Duración, as before). Both change the same link and see the same end.
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import {
@@ -57,6 +61,9 @@ const LIVE_NOTE_TAB = "Se agregó o se quitó un sitio en otra ventana: la pesta
 const LUZ = { pi: "🟢 Pi conectada", telefono: "🟢 Teléfono conectado", nada: "🔴 Nada conectado" };
 const DURACIONES = [
   ["1d", "1 día"], ["7d", "1 semana"], ["30d", "1 mes"], ["permanente", "permanente"], ["personalizado", "personalizado"],
+];
+const GERENTE_DURACIONES = [   // Section 3.17.6: the manager's choices, in the owner's order
+  ["1d", "1 día"], ["7d", "1 semana"], ["30d", "1 mes"], ["personalizado", "personalizado"], ["permanente", "permanente"],
 ];
 const DIAS_KEY = { 1: "1d", 7: "7d", 30: "30d" };   // a link's days back to its choice; none = permanente; others = personalizado
 const DIAS_MAX = 365;                                 // personalizado: 1 to 365 days, or a last day within a year
@@ -91,6 +98,14 @@ const AYUDAS = {
     ejemplo: "1 semana",
     recomendacion: "1 semana. «personalizado»: de 1 a 365 días, o un día del calendario dentro de un año. Si el enlace se "
       + "compartió de más, «Cambiar enlace»: el anterior deja de servir y nadie sale.",
+    copiar: false,
+  },
+  gerente: {
+    que_es: "Qué duraciones de enlace puede elegir el gerente de ese restaurante para sus cámaras. Sin ninguna marcada, "
+      + "solo el admin elige, como antes. El admin siempre puede elegir todas.",
+    ejemplo: "1 día y 1 semana",
+    recomendacion: "Las cortas (1 día, 1 semana) si el gerente da enlaces seguido; «permanente», mejor solo tú: ese enlace "
+      + "nunca vence.",
     copiar: false,
   },
   rol: {
@@ -199,7 +214,13 @@ export async function render(ctx) {
   const view = {
     names: siteNames(data), note: el("div", { class: "kit-note hidden" }), cards: new Map(), parts: [], users: null, ticket: 0,
   };
-  const box = el("div", {}, view.note, ctx.sess.admin ? capturaCard() : null);
+  let todos = null;                              // Section 3.17.6: every restaurant's durations, read unfiltered
+  if (ctx.sess.admin) {
+    const every = ctx.site ? await api("/api/admin/sites") : data;
+    todos = remember(gerenteTodosCard(ctx, view, every.sites));
+    view.todos = { node: todos, sig: todosSig(every.sites) };
+  }
+  const box = el("div", {}, view.note, ctx.sess.admin ? capturaCard() : null, todos);
   if (!data.sites.length) box.append(card("Sitios", el("p", { class: "muted", text: "No hay sitios que mostrar." })));
   for (const s of data.sites) {
     const node = remember(siteCard(s, ctx, view));
@@ -208,7 +229,7 @@ export async function render(ctx) {
   }
   if (ctx.sess.admin) {
     const global = await api("/api/admin/knobs");          // the global values a new restaurant inherits
-    view.parts.push(remember(createCard(ctx, global.knobs.filter((k) => k.per_site))));
+    view.parts.push(remember(createCard(ctx, global.knobs.filter((k) => k.per_site))), todos);
     const accounts = await api("/api/admin/users");
     const recent = await api("/api/admin/password-history" + qs({ limit: HISTORY_PREVIEW }));
     view.users = { node: remember(usersCard(ctx, accounts, recent)), sig: JSON.stringify(accounts) };
@@ -323,6 +344,8 @@ function liveTick(ctx, view) {
         entry.node.replaceWith(fresh);
         Object.assign(entry, { node: fresh, sig: sig, ticket: ticket });
       }
+      if (view.todos) await refreshTodos(ctx, view, false, ctx.site ? null : data);
+      if (view.gone) return;
       if (view.users) {
         const accounts = await liveGet("/api/admin/users");
         if (!accounts || view.gone) return;
@@ -410,7 +433,11 @@ function siteCard(s, ctx, view) {
   if (s.in_config) {
     parts.push(el("h3", { text: "Funciones" }), funcionesRow(s, here, error), fieldHelp(AYUDAS.funciones));
     parts.push(el("h3", { text: "Cámaras" }), camerasBlock(s, here, error));
-    if (ctx.sess.admin) parts.push(addCameraBlock(s, here, error));
+    if (ctx.sess.admin) {
+      parts.push(addCameraBlock(s, here, error));
+      parts.push(el("h3", { text: "Duración de los enlaces del gerente" }), gerenteRow(s, here, error),
+        fieldHelp(AYUDAS.gerente, { name: "Duración de los enlaces del gerente" }));
+    }
   }
   if (ctx.sess.admin) parts.push(el("h3", { text: "Gafete y estado" }), adminRow(s, ctx, error));
   parts.push(error);
@@ -430,6 +457,77 @@ function funcionesRow(s, ctx, error) {
     ctx.refresh();
   });
   return el("div", { class: "kit-edit" }, merma.node, pres.node, save);
+}
+
+// Section 3.17.6 (the admin's): which link durations this restaurant's manager may choose; none = only the admin.
+function gerenteChecks(chosen, keyed) {
+  return GERENTE_DURACIONES.map(([key, label]) => {
+    const c = checkbox(label, chosen.includes(key));
+    c.box.value = key;
+    if (keyed) c.box.dataset.key = "gerente:" + key;   // data-key: a card rebuilt after an action keeps it if unsaved
+    return c;
+  });
+}
+
+function gerenteRow(s, ctx, error) {
+  const checks = gerenteChecks(s.gerente_duraciones || [], true);
+  const save = wire(btn("Guardar duraciones", "primary"), error, async () => {
+    const duraciones = checks.filter((c) => c.box.checked).map((c) => c.box.value);
+    await api(sitePath(s.site) + "/enlaces/gerente", { method: "POST", json: { duraciones: duraciones } });
+    toast("duraciones del gerente guardadas", "ok");
+    ctx.refresh();
+  });
+  return el("div", { class: "kit-edit" }, el("span", { class: "muted", text: "El gerente puede elegir:" }),
+    ...checks.map((c) => c.node), save);
+}
+
+// Every restaurant's set, for the card on top: rebuilt by the live round when it changes (never under someone's hands).
+function todosSig(sites) {
+  return JSON.stringify(sites.filter((s) => s.in_config).map((s) => [s.site, s.gerente_duraciones || []]));
+}
+
+async function refreshTodos(ctx, view, force, given) {
+  const data = given || await liveGet("/api/admin/sites");
+  if (!data || view.gone) return;
+  const sig = todosSig(data.sites);
+  if (!force && sig === view.todos.sig) { unflag(view.todos.node); return; }
+  if (!force && inUse(view.todos.node)) { flag(view.todos.node); return; }
+  const fresh = remember(gerenteTodosCard(ctx, view, data.sites));
+  view.parts = view.parts.map((n) => (n === view.todos.node ? fresh : n));
+  view.todos.node.replaceWith(fresh);
+  view.todos = { node: fresh, sig: sig };
+}
+
+// The same five for every restaurant at once (the admin's). Its boxes start as the restaurants have them when all of
+// them agree; then each one is changed in its own card. Aplicar redraws only the restaurants' cards (3.13.2).
+function gerenteTodosCard(ctx, view, sites) {
+  const sets = sites.filter((s) => s.in_config).map((s) => (s.gerente_duraciones || []).join("|"));
+  const same = sets.length > 0 && sets.every((x) => x === sets[0]);
+  const checks = gerenteChecks(same ? (sets[0] ? sets[0].split("|") : []) : [], false);
+  const error = el("div", { class: "kit-error" });
+  const apply = wire(btn("Aplicar a todos los restaurantes", "primary"), error, async () => {
+    const chosen = checks.filter((c) => c.box.checked);
+    const ask = chosen.length
+      ? "Todos los restaurantes quedan con: " + chosen.map((c) => c.node.textContent).join(", ") + ". ¿Aplicar?"
+      : "Ningún gerente podrá elegir la duración de sus enlaces: solo tú. ¿Aplicar a todos los restaurantes?";
+    if (!window.confirm(ask)) return;
+    const json = { duraciones: chosen.map((c) => c.box.value) };
+    const done = await api("/api/admin/enlaces/gerente", { method: "POST", json: json });
+    toast("aplicado a " + done.sitios.length + (done.sitios.length === 1 ? " restaurante" : " restaurantes"), "ok");
+    for (const site of done.sitios) {                // each card alone: what is typed elsewhere stays (3.13.2)
+      if (view.cards.has(site)) refreshCard(ctx, view, site);
+    }
+    await refreshTodos(ctx, view, true);
+  });
+  return card("Duración de los enlaces del gerente: todos los restaurantes",
+    el("p", {
+      class: "muted", text: "Pone las mismas duraciones en todos los restaurantes; después cada uno se cambia en su tarjeta.",
+    }),
+    same ? null : el("p", { class: "kit-note", text: "Hoy no todos los restaurantes tienen las mismas." }),
+    el("div", { class: "kit-edit" }, el("span", { class: "muted", text: "El gerente puede elegir:" }),
+      ...checks.map((c) => c.node), apply),
+    fieldHelp(AYUDAS.gerente, { name: "Duración de los enlaces del gerente" }),
+    error);
 }
 
 function camerasBlock(s, ctx, error) {
@@ -744,8 +842,12 @@ async function linkDialog(s, c, ctx, answer, note) {
         + "su propio pase.",
     }),
   ];
-  if (ctx.sess.admin) {
-    const pick = choice(DURACIONES, link.dias === null ? "permanente" : DIAS_KEY[link.dias] || "personalizado");
+  // Section 3.17.6: the admin picks any duration; a manager only the ones the admin allows his site (none: no Duración).
+  const allowed = ctx.sess.admin ? DURACIONES : DURACIONES.filter((p) => (s.gerente_duraciones || []).includes(p[0]));
+  if (allowed.length) {
+    const now = link.dias === null ? "permanente" : DIAS_KEY[link.dias] || "personalizado";
+    const mine = allowed.some((p) => p[0] === now);
+    const pick = choice(allowed, mine ? now : allowed[0][0]);
     const custom = customLife(link, answer.hoy);
     const follow = () => custom.node.classList.toggle("hidden", pick.value !== "personalizado");
     pick.addEventListener("change", follow);
@@ -769,8 +871,11 @@ async function linkDialog(s, c, ctx, answer, note) {
       const ends = done.enlace.vence ? "vence el " + siteTime(done.enlace.vence, clock) : "no vence";
       toast(moved ? "duración guardada; el enlace había cambiado: la ventana muestra el de ahora" : "duración guardada: " + ends, "ok");
     });
-    body.push(el("div", { class: "kit-edit" }, el("span", { class: "muted", text: "Duración" }), pick, save),
-      custom.node, fieldHelp(AYUDAS.duracion), error);
+    const word = (DURACIONES.find((p) => p[0] === now) || [now, now])[1];
+    body.push(mine ? null : el("p", {                 // a manager, and a duration that is not among his
+      class: "kit-note", text: "La duración de ahora (" + word + ") no está entre las que puedes elegir; puedes cambiarla a una de estas.",
+    }), el("div", { class: "kit-edit" }, el("span", { class: "muted", text: "Duración" }), pick, save),
+    custom.node, fieldHelp(AYUDAS.duracion), error);
   } else {
     body.push(error);
   }

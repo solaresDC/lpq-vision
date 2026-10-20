@@ -13,7 +13,8 @@ bake-off and the machine room's keyless selector both read it here). Site overri
 against the knob registry (brain/validator/knobs.py) at load. Section 3.13.2 adds the camera links'
 code alphabet and durations and the name a phone gives (enlace_codigo, nombre_telefono). Section 3.17.1 adds a
 link's personalizado life (its days or its last day; every link ends at noon of its last day, the site's clock)
-and the exchange rates the gasto shows its money with (tipos_cambio, typed by a human).
+and the exchange rates the gasto shows its money with (tipos_cambio, typed by a human). Section 3.17.6 adds, per site,
+the link durations its manager may choose (gerente_duraciones; absent = only the admin chooses).
 """
 
 from __future__ import annotations
@@ -103,6 +104,9 @@ CAMERA_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,23}\Z")
 CHAT_ID_RE = re.compile(r"^-?\d{1,20}\Z")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d\Z")
 Duracion = Literal["1d", "7d", "30d", "permanente", "personalizado"]
+# Section 3.17.6: the order a site's gerente_duraciones is written and shown in (the owner's: 1 día, 1 semana, 1 mes,
+# personalizado, permanente).
+DURACIONES_GERENTE_ORDEN: tuple[str, ...] = ("1d", "7d", "30d", "personalizado", "permanente")
 
 # --- presentation lane constants (SPEC section 4 / 1.7) --------------------------------
 PRESENTATION_PASS_SCORE = 80
@@ -436,6 +440,20 @@ class SiteConfig(BaseModel):
     cameras: dict[str, CameraConfig] = Field(default_factory=dict)
     mantenimiento: bool | None = None
     overrides: dict[str, Any] = Field(default_factory=dict)
+    # Section 3.17.6 (owner, 20 Oct): the link durations this site's manager may choose; absent-when-none (only the
+    # admin chooses), written by the mostrador in DURACIONES_GERENTE_ORDEN.
+    gerente_duraciones: list[Duracion] | None = None
+
+    @field_validator("gerente_duraciones")
+    @classmethod
+    def _gerente_duraciones_shape(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        if not value:
+            raise ValueError("gerente_duraciones: [] is dead config (absent-when-none): delete the key instead")
+        if len(set(value)) != len(value):
+            raise ValueError("gerente_duraciones: each duration once")
+        return value
 
     @field_validator("mantenimiento")
     @classmethod
@@ -815,7 +833,8 @@ class PedirRequest(_Body):
 
 
 class EnlaceNuevoRequest(_Body):
-    """Cambiar enlace: a new code. duracion absent = the camera's current one (only the admin chooses another).
+    """Cambiar enlace: a new code. duracion absent = the camera's current one (the admin chooses any other; a manager
+    only one the admin allows his site, Section 3.17.6).
     personalizado carries its days, or its last day (fecha, on the site's calendar): one of the two."""
 
     duracion: Duracion | None = None
@@ -824,11 +843,25 @@ class EnlaceNuevoRequest(_Body):
 
 
 class EnlaceDuracionRequest(_Body):
-    """The admin's duración of a camera's link: the same code, its last day counted again from the site's today."""
+    """A camera's link duration (the admin's, or a manager's among the ones the admin allows his site, Section
+    3.17.6): the same code, its last day counted again from the site's today."""
 
     duracion: Duracion
     dias: int | None = None
     fecha: date | None = None
+
+
+class GerenteDuracionesRequest(_Body):
+    """Section 3.17.6: the link durations a site's manager may choose (none = only the admin chooses), each once."""
+
+    duraciones: list[Duracion] = Field(max_length=len(DURACIONES_GERENTE_ORDEN))   # required: [] says "none"
+
+    @field_validator("duraciones")
+    @classmethod
+    def _each_once(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("cada duración una sola vez")
+        return value
 
 
 class KnobWriteRequest(_Body):

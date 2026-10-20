@@ -5,6 +5,8 @@ GET  /api/admin/sites?site=                          the visible sites: DB row +
 POST /api/admin/sites                                Crear restaurante (admin): ALL OR NOTHING across DB and config
 POST /api/admin/sites/{site}/edit                    active / ingestion (admin; deactivating asks for the double confirm)
 POST /api/admin/sites/{site}/funciones               the site's two function switches
+POST /api/admin/sites/{site}/enlaces/gerente         the link durations the site's manager may choose (admin)
+POST /api/admin/enlaces/gerente                      the same durations for every site at once (admin)
 POST /api/admin/sites/{site}/cameras                 add one camera, or change its role (admin)
 POST /api/admin/sites/{site}/cameras/{camera}/delete remove one camera with its link, its phone and its requests
                                                      (admin; double confirm; never the last one)
@@ -12,9 +14,11 @@ POST /api/admin/sites/{site}/cameras/{camera}/source Relevo a Pi: a phone camera
 POST /api/admin/sites/{site}/cameras/{camera}/enlace Dame el enlace (Ver enlace when live): the live link, a new one
                                                      when none or expired
 POST /api/admin/sites/{site}/cameras/{camera}/enlace/nuevo    Cambiar enlace (inside the link window since 3.17.5): a new
-                                                     code (only the admin picks its life)
+                                                     code (its life: the admin's choice, or a manager's among the
+                                                     allowed ones, Section 3.17.6)
 POST /api/admin/sites/{site}/cameras/{camera}/enlace/duracion the same code, its last day counted again from today
-                                                     (admin; never on a link that already expired)
+                                                     (the admin; a manager among the durations the admin allows his
+                                                     site; never on a link that already expired)
 POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/aceptar  the phone becomes that camera; on a Pi
                                                      camera, the relevo (admin; never on a deactivated site)
 POST /api/admin/sites/{site}/cameras/{camera}/telefonos/{id}/rechazar its request for that camera goes (admin)
@@ -28,10 +32,11 @@ POST /api/admin/users/{usuario}/delete               delete: typed name + double
 POST /api/admin/users/{usuario}/recover              Recuperar a deleted account (admin)
 
 A manager sees ONLY its own site and edits its functions; of its cameras it gets the light, the mirilla, the
-links, Sacar and Relevo a Pi (Section 3.13.2: cameras are added, removed and re-roled by the admin, and Aceptar
-and Rechazar are the admin's); the gafete, the active switch, Crear restaurante and the accounts are the
-admin's. Every write leaves a bitácora row carrying the actor's name AND permanent account number (users.uid,
-never reused). A write that spans the database and config.yaml is all or nothing (_db_and_config). Accounts
+links (their duration only among the ones the admin allows his site, Section 3.17.6), Sacar and Relevo a Pi
+(Section 3.13.2: cameras are added, removed and re-roled by the admin, and Aceptar and Rechazar are the admin's); the
+gafete, the active switch, Crear restaurante and the accounts are the admin's. Every write leaves a bitácora row
+carrying the actor's name AND permanent account number (users.uid, never reused). A write that spans the database
+and config.yaml is all or nothing (_db_and_config). Accounts
 (owner ruling 3.9.2, amending SPEC §3): deleting one asks for its exact name, then the double confirm; it closes
 at once, stays recoverable for USER_RECOVERY_DAYS with its name reserved, and the worker's sweep erases it after
 warning the admin chat. Never yourself, never the last active admin, never the machine row; a deleted account
@@ -44,6 +49,9 @@ within a year. Each site's view carries its timezone (zona) and the link answers
 shows and picks days on the site's calendar.
 Section 3.17.3 (owner, 17 Oct): a link that expired never works again. Its duration can't be changed: «Dame el enlace»
 makes a new code instead (until 3.17.3 the same code got a new end, and the old link opened again).
+Section 3.17.6 (owner, 20 Oct): the admin chooses, per site or for every site at once, which link durations that site's
+manager may choose (1 día, 1 semana, 1 mes, personalizado, permanente; none = only the admin, as before); the
+manager's duration and Cambiar enlace with a duration are refused outside them (403). Both change the same link.
 """
 
 from __future__ import annotations
@@ -81,9 +89,11 @@ from brain.validator.models import (
     CameraUpsertRequest,
     Config,
     ConfirmNameRequest,
+    DURACIONES_GERENTE_ORDEN,
     EnlaceDuracionRequest,
     EnlaceNuevoRequest,
     Funciones,
+    GerenteDuracionesRequest,
     PasswordRequest,
     SiteConfig,
     SiteCreateRequest,
@@ -105,6 +115,9 @@ MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "
 CODIGO_INTENTOS = 3                # a new link's code collides with another (1 in 10^11): try a fresh one
 VENCIDO_SIN_DURACION = ("Ese enlace ya venció y no vuelve a servir: cierra esta ventana y pulsa «Dame el enlace» "
                         "para uno nuevo.")        # Section 3.17.3: an expired link gets no new end
+SOLO_ADMIN_DURACION = "Solo el admin elige cuánto dura un enlace."
+DURACION_PALABRAS = {"1d": "1 día", "7d": "1 semana", "30d": "1 mes", "personalizado": "personalizado",
+                     "permanente": "permanente"}
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -261,10 +274,13 @@ def _site_view(row: dict[str, Any], site_cfg: SiteConfig | None, cfg: Config, ph
         "zona": knobs.timezone_of(cfg, row["site"]),     # the site's clock: a link's day and hour are read on it
     }
     if site_cfg is None:
-        view.update({"funciones": None, "cameras": [], "auditor": ["Este sitio existe en la base pero falta en config.yaml."]})
+        view.update({"funciones": None, "cameras": [], "gerente_duraciones": [],
+                     "auditor": ["Este sitio existe en la base pero falta en config.yaml."]})
     else:
         view.update({
             "funciones": site_cfg.funciones.model_dump(),
+            "gerente_duraciones": [d for d in DURACIONES_GERENTE_ORDEN       # Section 3.17.6: the manager's choices,
+                                   if d in (site_cfg.gerente_duraciones or [])],  # in the owner's order
             "cameras": [_camera_view(row["site"], name, cam, cfg, phones, links) for name, cam in site_cfg.cameras.items()],
             "auditor": audit(site_cfg),
         })
@@ -596,6 +612,18 @@ def _fecha_text(day: date) -> str:
     return f"{day.day:02d}/{day.month:02d}/{day.year}"
 
 
+def _duracion_permitida(session: Session, site_cfg: SiteConfig, duracion: str) -> None:
+    """Section 3.17.6 (owner, 20 Oct): the admin chooses any duration; a manager only one the admin allows his site."""
+    if session.is_admin:
+        return
+    allowed = site_cfg.gerente_duraciones or []
+    if not allowed:
+        raise HTTPException(status_code=403, detail=SOLO_ADMIN_DURACION)
+    if duracion not in allowed:
+        words = ", ".join(DURACION_PALABRAS[d] for d in DURACIONES_GERENTE_ORDEN if d in allowed)
+        raise HTTPException(status_code=403, detail=f"Esa duración la elige el admin. Puedes elegir: {words}.")
+
+
 def _dias_pedidos(body: EnlaceNuevoRequest | EnlaceDuracionRequest, today: date) -> int | None:
     """The days a chosen duración means: a fixed choice's own (None = permanente), personalizado's days (1 to
     ENLACE_DIAS_MAX), or the days from the site's today to the last day it chose (tomorrow to a year from today)."""
@@ -683,14 +711,16 @@ async def dame_enlace(site: str, camera: str, session: Session = Depends(require
 async def cambiar_enlace(site: str, camera: str, body: EnlaceNuevoRequest,
                          session: Session = Depends(require_mostrador)) -> dict[str, Any]:
     """Cambiar enlace: a new code now; the old one stops opening at once, the phones already inside stay and the
-    requests already made wait as they were. The admin may choose its duration; a manager keeps the current one."""
+    requests already made wait as they were. The admin may choose its duration; a manager keeps the current one, or
+    chooses one the admin allows his site (Section 3.17.6)."""
     target = write_scope(session, site)
-    if body.duracion is not None and not session.is_admin:
-        raise HTTPException(status_code=403, detail="Solo el admin elige cuánto dura un enlace.")
     if body.duracion is None and (body.dias is not None or body.fecha is not None):
         raise HTTPException(status_code=400, detail="Los días o la fecha van solo con «personalizado».")
     cfg = await _config()
-    _camera_or_404(_site_cfg(cfg, target), target, camera)
+    site_cfg = _site_cfg(cfg, target)
+    if body.duracion is not None:
+        _duracion_permitida(session, site_cfg, body.duracion)
+    _camera_or_404(site_cfg, target, camera)
     zone, today = _hoy(cfg, target)
     chosen = _dias_pedidos(body, today) if body.duracion is not None else None
 
@@ -714,12 +744,16 @@ async def cambiar_enlace(site: str, camera: str, body: EnlaceNuevoRequest,
 
 @router.post("/api/admin/sites/{site}/cameras/{camera}/enlace/duracion")
 async def duracion_enlace(site: str, camera: str, body: EnlaceDuracionRequest,
-                          session: Session = Depends(require_admin)) -> dict[str, Any]:
-    """The admin's duration of a camera's link: the same code, its last day counted again from the site's today (saved
-    twice the same day, the same end: never a drift of hours). A link that already expired is refused (410), changing
-    nothing (Section 3.17.3, owner 17 Oct: an expired link never works again; «Dame el enlace» makes a new code)."""
+                          session: Session = Depends(require_mostrador)) -> dict[str, Any]:
+    """A camera's link duration: the same code, its last day counted again from the site's today (saved twice the same
+    day, the same end: never a drift of hours). The admin chooses any; a manager, on his own site, one the admin allows
+    it (Section 3.17.6; otherwise 403). A link that already expired is refused (410), changing nothing (Section 3.17.3,
+    owner 17 Oct: an expired link never works again; «Dame el enlace» makes a new code)."""
+    site = write_scope(session, site)
     cfg = await _config()
-    _camera_or_404(_site_cfg(cfg, site), site, camera)
+    site_cfg = _site_cfg(cfg, site)
+    _duracion_permitida(session, site_cfg, body.duracion)
+    _camera_or_404(site_cfg, site, camera)
     zone, today = _hoy(cfg, site)
     vida = _vida(zone, today, _dias_pedidos(body, today))
 
@@ -739,6 +773,48 @@ async def duracion_enlace(site: str, camera: str, body: EnlaceDuracionRequest,
 
     row = await asyncio.to_thread(_tx, work)
     return _link_answer(site, camera, False, row, zone, today)
+
+
+# --- the manager's durations (Section 3.17.6): the admin's, per site or for every site ---------
+
+def _gerente_ops(site: str, duraciones: list[str]) -> tuple[list[cw.Op], list[str]]:
+    """The write that leaves a site allowing these durations to its manager (none: the key goes, absent-when-none)."""
+    ordered = [d for d in DURACIONES_GERENTE_ORDEN if d in duraciones]
+    path = ("sites", site, "gerente_duraciones")
+    return ([cw.set_op(path, ordered)] if ordered else [cw.delete_op(path)]), ordered
+
+
+@router.post("/api/admin/sites/{site}/enlaces/gerente")
+async def gerente_duraciones(site: str, body: GerenteDuracionesRequest,
+                             session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Which link durations this site's manager may choose (owner, 20 Oct); none = only the admin, as before. A bitácora
+    row when it changes."""
+    antes = list(_site_cfg(await _config(), site).gerente_duraciones or [])
+    ops, despues = _gerente_ops(site, body.duraciones)
+    await _write(ops)
+    if antes != despues:
+        await asyncio.to_thread(log_action, session.user, "enlace.gerente",
+                                {"site": site, "antes": antes, "despues": despues}, session.uid)
+    return await _view_of(site)
+
+
+@router.post("/api/admin/enlaces/gerente")
+async def gerente_duraciones_todos(body: GerenteDuracionesRequest,
+                                   session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """The same durations for every site in config.yaml at once (owner, 20 Oct): one write, and one bitácora row when
+    something changed, with what each site had before (so a mistaken one can be undone by hand)."""
+    cfg = await _config()
+    sites = sorted(cfg.sites)
+    antes = {s: list(cfg.sites[s].gerente_duraciones or []) for s in sites}
+    ops: list[cw.Op] = []
+    despues = [d for d in DURACIONES_GERENTE_ORDEN if d in body.duraciones]
+    for s in sites:
+        ops.extend(_gerente_ops(s, body.duraciones)[0])
+    await _write(ops)
+    if any(antes[s] != despues for s in sites):
+        await asyncio.to_thread(log_action, session.user, "enlace.gerente_todos",
+                                {"sitios": sites, "antes": antes, "despues": despues}, session.uid)
+    return {"sitios": sites, "duraciones": despues}
 
 
 # --- the phones (Section 3.13.2): Aceptar and Rechazar (admin), Sacar ---------------------------
