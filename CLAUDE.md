@@ -6,7 +6,7 @@ Cameras photograph plates (returns and outgoing, per camera role); a worker send
 per-site menu reference to Claude (Sonnet 5); the validated result (dish, % leftover per component,
 confidence) lands as one row per plate in Postgres. Outgoing plates get an express presentation
 grade against their own reference photo.
-Fases 1 and 2 are LIVE on this laptop and on lpq-brain (deployed at main 1286eb9).
+Fases 1 and 2 are LIVE on this laptop and on lpq-brain; Fase 3's code reached lpq-brain in Section 3.18 (main 04c1f53).
 Current phase (Fase 3, El Producto, the Build Plan's Etapa F): the ADMIN module. Daily operation
 becomes a page, never an SSH session: two floors (/admin mostrador, /maquinas machine room), the
 knob registry + the one config writer + the knob cascade, the per-site gafete, horario + vigilantes
@@ -56,7 +56,8 @@ laptop Docker 27.1.1 + Compose v2.29.1-desktop.1; server Docker 29.8.0 + Compose
 - Telegram: bot @LPQ_vision_bot + group "LPQ demo-alertas". Each site's group lives in
   sites.telegram_chat_id (Destino Telegram in the mostrador); the temporal TELEGRAM_CHAT_ID in .env is
   only the last resort until the ceremony deletes it.
-- The butler: installed on the server only by the deploy section's listed commands.
+- The butler: lpq-butler.service on the server, installed in Section 3.18 by its listed commands (an update is the
+  same copy plus `systemctl restart lpq-butler`); never a service on the laptop.
 
 ## HARD RULES (never violate)
 1. Never trust remembered prices/versions/tags: verify at the source, then PIN.

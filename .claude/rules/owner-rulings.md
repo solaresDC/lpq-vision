@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.17.6 (HEAD was 9df75ed, Section 3.17.5).
+- Last update: Section 3.18 (HEAD was 04c1f53, Section 3.17.6).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -66,8 +66,6 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - Tailscale stays ON while working (lpq-brain resolves only through it). It goes off only for the push.
   It was found stopped at the start of two sessions: a section that touches the server first confirms
   that Tailscale is connected (the owner turns it on).
-- If lpq-brain does not resolve (seen on 11 Oct), the server answers on its Tailscale address:
-  `ssh root@100.126.179.123`. This note goes away once the name resolves again (3.18 checks).
 - Norton's HTTPS scanning was switched off in 3.2 (it intercepted the containers' HTTPS), but TLS
   trouble has been seen intermittently since. If the containers or git fail TLS, check Norton first
   (the owner switches it).
@@ -87,16 +85,20 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   fresh one (its lock remembers 10 minutes).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.17.6; one site, demo, whose Telegram chat is the real "LPQ demo-alertas"
-  group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
+- Laptop: Fase 3 through 3.18 (the server runs the same code); one site, demo, whose Telegram chat is the
+  real "LPQ demo-alertas" group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
   Since 3.10.2 every dish carries its component labels and its notes (copied once from menu.yaml's
   comments). demo's 4 reference photos are hand-placed pairs (light copies at 1600 px; uploads make
   1568), kept as demo's LOCAL photos. The universal (brand) level is empty.
-- Server lpq-brain: Fase 2 code deployed at 1286eb9, plus the 3.5.1 menu data (tartine_chipotle_club,
-  ensalada_queso_cabra and omelette_champinones on; tartine_aguacate off). Its Fase-2 bot is the live
-  poller. Fase 3 reaches the server only in 3.18.
+- Server lpq-brain: Fase 3 since Section 3.18 (the code of 04c1f53), on the database it had: the 3.5.1 menu data
+  (tartine_chipotle_club, ensalada_queso_cabra and omelette_champinones on; tartine_aguacate off), with the dishes'
+  notes and labels copied once by notas_from_menu in 3.18. Its two accounts were born once from its .env (admin and
+  demo); its config.yaml is the one it had, now operator state, and it has no textos.yaml until a bot text is edited.
+  demo has no Telegram chat in the mostrador yet: its alerts go to the .env chat (LPQ demo-alertas) until its
+  Destino Telegram is set (before the ceremony removes the .env chat). The butler runs there as lpq-butler.service.
+  Its bot is the live poller.
 - The two databases are separate: a change on one never reaches the other. Deploys carry code, never
   data: the server's reference photos came by the 3.5.1 manual road (the originals byte-identical
   under reference/<dish>/original/1.jpg with the light copy beside them, scp to
@@ -106,6 +108,38 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.18 (built in Section 3.18): the deploy to lpq-brain
+- The road (every later deploy to the server follows it; HQ's standard choices, the owner may change any):
+  - A safety copy before anything changes: one run of lpq-backup.service (the dump), and beside it
+    backups/config.before-<section>.yaml and backups/code.before-<section>.tgz (the code, without .env, backups/ and
+    reference_photos/), each written once and never overwritten, outside the backup's retention (it prunes only the
+    lpq_ files).
+  - The tree is the laptop's commit: `git archive` of HEAD without config/config.yaml and config/textos.yaml, checked
+    on the server against a sha256 list of the same files, and unpacked over /opt/lpq_vision. Nothing there is
+    deleted: .env, config.yaml, textos.yaml, backups/ and reference_photos/ stay as they are.
+  - The images are built while the old stack serves, and the new image reads the server's config.yaml and menu.yaml
+    before anything stops: a refusal ends the deploy there, with the old stack serving.
+  - The switch: the bot stops (the old one reports an api restart at once), fastapi starts first and runs its
+    migrations while the old worker keeps working (it ignores the added columns and tables), and only after its
+    "serving" line and every migration step `up -d` starts the new worker and bot. A new worker on an older schema
+    fails its first sweep and its first claim (seen in HQ's rehearsal of 3.18), and with a worker always running the
+    boot reconvergence never counts 0 (it would ask the butler to start the stopped old worker).
+  - Any time of day (owner, 30 Oct; on 20 Oct he had chosen after 22:00 CDMX): right after the switch the owner puts
+    demo in mantenimiento, so at most one 📵 reaches demo-alertas while no phone is its camera (the bot judges demo's
+    camera only inside its hours, and sends 📵 once per silence).
+  - The rollback, if the new code does not boot (fastapi, the worker or the bot): the code copy unpacked back without
+    config.yaml and textos.yaml, build, up -d (the database only gained columns and tables, which the old code
+    ignores). The old images stay until 3.18's ✋ passes (the rollback's build reuses their layers); 3.19 removes them.
+- The butler went in by the listed commands, before the new fastapi (its mount finds the folder): lpq_butler.py to
+  /usr/local/lib/lpq-butler/, lpq-butler.service to /etc/systemd/system/, daemon-reload, enable --now. A later update
+  of the butler: the same copy plus `systemctl restart lpq-butler`.
+- The server's cuarto password is born by the machine room's page in 3.18's ✋ (the owner types it twice; a password
+  manager files it as the server's "cuarto"): the butler's test needs the room, so 3.19 no longer carries it.
+- The cafés' devices (iPhone list item 9; owner, 20 Oct): they will reach the server through the company's own
+  Tailscale account; until then tests use the owner's.
+- Crear restaurante on the server (owner, 20 Oct): later, when a café is ready; not part of 3.18.
+- The laptop's network fixes of 11 Oct (owner, 20 Oct): the laptop reaches lpq-brain by name; nothing to keep or undo.
 
 ### 3.17.6 (owner, 20 Oct 2026; built in Section 3.17.6): the manager's link durations, as the admin allows
 - A restaurant's manager may choose how long his cameras' links last, but only the durations the admin allows his
@@ -663,19 +697,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
-- 3.18, deploy: a staged copy WITHOUT config.yaml or textos.yaml, built while the old one serves (no Aplicar between
-  the build and up -d); the butler installed BEFORE the new stack's up -d, so fastapi's new mount finds its folder
-  (lpq_butler.py copied to /usr/local/lib/lpq-butler/, lpq-butler.service to /etc/systemd/system/, daemon-reload,
-  enable --now; a later update of the butler is copy plus systemctl restart lpq-butler); then the room's checklist
-  shows it green, and once the boot reconvergence's log line is out (the butler takes one order at a time) one
-  Reiniciar el bot proves the real round trip; the backup script arrives with the staged copy and is made executable
-  there (the lpq-backup timer runs /opt/lpq_vision/scripts/pg_backup.sh in place; the copy never touches
-  /opt/lpq_vision/backups), and one run of lpq-backup.service by hand shows the dump with its config.yaml copy
-  beside it, both -rw-------; the one-time copy of the notes and labels (scripts/notas_from_menu.py, once the new
-  code has booted) on the server; the iPhone list and the cleanup (the two "Para 3.18" sections below); then the
-  owner's first real Crear restaurante.
-- 3.19, the ceremony: the server's own cuarto password; TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH and
-  DEMO_PASSWORD_HASH leave both .env files in the SPEC's order; the present/absent proof.
+- 3.19, the ceremony: TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH and DEMO_PASSWORD_HASH leave both .env files in the
+  SPEC's order; the present/absent proof; the server's old Fase 2 images (3.18's rollback) removed once 3.18's ✋
+  passed.
 - 3.20, T-F6 on the server: the full regression, the yes/no checklist against the 14 criteria, the
   final phone test, and disk headroom (a bigger disk before production if needed).
 
@@ -694,13 +718,16 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   6. A second phone with the same link gets "barra-1 ya tiene teléfono".
   7. Sacar sends the iPhone back to asking for the link.
   8. The screen does not lock while capturing.
-  9. Decide how staff phones join Tailscale: one invite per person, or a reusable one per manager.
+  9. Decided (owner, 20 Oct): the cafés' devices will reach the server through the company's own Tailscale
+     account; until then tests use the owner's (3.18's ✋ uses his iPhone).
   10. The link sent by WhatsApp or Telegram: in which browser it opens (an app's own browser keeps its
       own pass), and that the next day the same app's link goes straight to the camera.
   11. The screen-on button: one tap on "☀️ Toca aquí..." keeps the screen on; with Low Power Mode on,
       its own note shows.
   12. Leaving Safari for another app (or a call) and coming back: "cámara sin imagen" while away, then
       capturing again by itself.
+- 3.18's ✋ walks items 1 to 8 and 10 to 12 on the server (https://lpq-brain.taild4ddb0.ts.net) with the owner's
+  iPhone; the next section closes each one by the ✋'s report.
 
 ## Para 3.18: la limpieza
 - Owner's ruling (12 Oct): at 3.18, after the list, everything temporary is cleaned as if it never
@@ -741,15 +768,25 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   takes the camera out of config.yaml but leaves its camara_enlaces row (only Quitar deletes a link), and adding that
   name again brings the link back. Every ✋ removes its test cameras with Quitar before its put-back; 3.18 confirms no
   camara_enlaces row for a test camera (prueba-2, prueba-3).
+- Done in 3.18 (its report confirms each line): every check script and helper in photos/_smoke/ deleted, and the older
+  test files there from the 3.2 to 3.9 sessions (a database copy of 30 Sep among them) moved out of the project to
+  C:/Users/danie/Downloads/LPQ_VISION_archivo/smoke_3.2-3.9 (owner, 30 Oct: kept just in case, his to delete; never
+  in a synced folder); no test row in the laptop's database (sites, links, phones, plates, dishes, photos, hours:
+  nothing named prueba), except three accounts of 3.9's ✋ (gerente.prueba3, prueba.gerente, prueba.gerente2) in
+  Eliminadas since 7 Oct, which the worker erases on 6 Nov (owner, 30 Oct: committed with them noted); the photo
+  folders only demo and reference; config.yaml as the repo has it (no gerente_duraciones); the search for every
+  name a section replaced finds nothing; no lpq-butler-prueba container, no photos/backups_317, no lpq_restore_317; the
+  network fixes: not a topic (owner, 20 Oct). Still the owner's, in 3.18's ✋: the laptop browser's leftovers of
+  localhost:8000 (clear that site's data) and the laptop's database copy of 15 Oct (made before 3.17's ✋; its folder
+  is in that day's report): deleted (owner, 21 Oct).
 
 ## Waiting on the owner (no section owns these)
-- 3.17.5's ✋ (20 Oct, on the laptop): steps 1 to 5 as expected (the owner's note at step 5 became 3.17.6); steps 6 to
-  8 (the expiry, Quitar, the put-back) still to do, with no push of their own (owner, 20 Oct: one push with 3.17.6).
-- 3.17.6's ✋ (on the laptop after 3.17.6's commit): the admin's two controls (the card on top, the row in demo's card,
-  all unchecked); a test camera (prueba-3) and its link; the manager without Duración; demo allows 1 semana and
-  personalizado, and the manager sets personalizado 3 días, which the admin's box shows; 1 día for every restaurant, and
-  the manager then has only 1 día; none for every restaurant, and his Duración is gone; the camera removed with Quitar,
-  everything put back; one push of 3.17.5 and 3.17.6 (`7b54c54..<3.17.6>`).
+- 3.18's ✋ (on the server, after 3.18's commit): the new bot's greeting in demo-alertas; the admin's login on the
+  server; the machine room births the server's cuarto password, the butler green, one Reiniciar el bot (the greeting
+  again); the iPhone list (items 1 to 8 and 10 to 12; item 10's second half the next day); the laptop browser's
+  leftovers; the laptop's database copy of 15 Oct deleted; demo in mantenimiento from right after the switch until a
+  phone is its camera (owner, 21 and 30 Oct); one push (`04c1f53..<3.18>`).
+- Crear restaurante on the server: when the first real café is ready (owner, 20 Oct).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
 - ml written as grams: vinagreta_frambuesa 30, aderezo_chipotle 30, vinagreta_casa 15 (never
@@ -775,6 +812,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - 3.17.2's, 3.17.3's and 3.17.4's ✋ (18 and 19 Oct, on the laptop): every step correct; the link steps ran again after a
   clean start (prueba-3 had a link left by a put-back before Quitar: see the limpieza); the owner's note on it (the
   link buttons) became 3.17.5.
+- 3.17.5's and 3.17.6's ✋ (20 Oct, on the laptop): every step as expected (3.17.5's note at its step 5 became 3.17.6),
+  pushed `7b54c54..04c1f53`.
 
 ## Still forbidden (post-demo): STOP and flag if asked
 Coach screens, pi_csi/usb backends, the MODEL cascade (stays "off"), geometry v2, the báscula, POS,
