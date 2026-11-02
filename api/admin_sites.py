@@ -11,8 +11,8 @@ POST /api/admin/sites/{site}/cameras                 add one camera, or change i
 POST /api/admin/sites/{site}/cameras/{camera}/delete remove one camera with its link, its phone and its requests
                                                      (admin; double confirm; never the last one)
 POST /api/admin/sites/{site}/cameras/{camera}/source Relevo a Pi: a phone camera goes back to its Pi; its phone leaves
-POST /api/admin/sites/{site}/cameras/{camera}/enlace Dame el enlace (Ver enlace when live): the live link, a new one
-                                                     when none or expired
+POST /api/admin/sites/{site}/cameras/{camera}/enlace Dame el enlace (Ver enlace when live, Crear enlace when
+                                                     expired, 3.18.1): the live link, a new one when none or expired
 POST /api/admin/sites/{site}/cameras/{camera}/enlace/nuevo    Cambiar enlace (inside the link window since 3.17.5): a new
                                                      code (its life: the admin's choice, or a manager's among the
                                                      allowed ones, Section 3.17.6)
@@ -47,8 +47,9 @@ Section 3.17.1: a link ends at 12:00 of its last day on the site's own clock (ow
 from the click: 1 día made today ends tomorrow at noon. personalizado lasts 1 to 365 days, or until a chosen day
 within a year. Each site's view carries its timezone (zona) and the link answers the site's today (hoy), so the page
 shows and picks days on the site's calendar.
-Section 3.17.3 (owner, 17 Oct): a link that expired never works again. Its duration can't be changed: «Dame el enlace»
-makes a new code instead (until 3.17.3 the same code got a new end, and the old link opened again).
+Section 3.17.3 (owner, 17 Oct): a link that expired never works again. Its duration can't be changed: «Crear enlace»
+(its button's name since 3.18.1) makes a new code instead (until 3.17.3 the same code got a new end, and the old link
+opened again).
 Section 3.17.6 (owner, 20 Oct): the admin chooses, per site or for every site at once, which link durations that site's
 manager may choose (1 día, 1 semana, 1 mes, personalizado, permanente; none = only the admin, as before); the
 manager's duration and Cambiar enlace with a duration are refused outside them (403). Both change the same link.
@@ -113,8 +114,8 @@ SOURCE_WORDS = {"phone": "teléfono", "pi": "Pi"}
 ROLE_WORDS = {"return": "regreso", "outgoing": "salida", "both": "ambas"}
 MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 CODIGO_INTENTOS = 3                # a new link's code collides with another (1 in 10^11): try a fresh one
-VENCIDO_SIN_DURACION = ("Ese enlace ya venció y no vuelve a servir: cierra esta ventana y pulsa «Dame el enlace» "
-                        "para uno nuevo.")        # Section 3.17.3: an expired link gets no new end
+VENCIDO_SIN_DURACION = ("Ese enlace ya venció y no vuelve a servir: cierra esta ventana y pulsa «Crear enlace» "
+                        "para uno nuevo.")        # Section 3.17.3: an expired link gets no new end (3.18.1: the name)
 SOLO_ADMIN_DURACION = "Solo el admin elige cuánto dura un enlace."
 DURACION_PALABRAS = {"1d": "1 día", "7d": "1 semana", "30d": "1 mes", "personalizado": "personalizado",
                      "permanente": "permanente"}
@@ -554,7 +555,7 @@ async def camera_source(site: str, camera: str, body: SourceRequest, session: Se
     if body.source != "pi":
         raise HTTPException(
             status_code=400,
-            detail="Una cámara pasa a teléfono cuando el admin acepta un teléfono en su enlace («Dame el enlace» o «Ver enlace»).",
+            detail="Una cámara pasa a teléfono cuando el admin acepta un teléfono que entró con su enlace.",
         )
     cam = _camera_or_404(_site_cfg(await _config(), target), target, camera)
     if cam.source == "pi":
@@ -677,9 +678,9 @@ async def _link_tx(work: Callable[[psycopg.Connection, str], Any]) -> Any:
 
 @router.post("/api/admin/sites/{site}/cameras/{camera}/enlace")
 async def dame_enlace(site: str, camera: str, session: Session = Depends(require_mostrador)) -> dict[str, Any]:
-    """Dame el enlace: the camera's live link; when it has none or it expired, a new code (an expired link keeps its
-    duration; a first link lasts DURACION_DEFAULT), ending at noon of its last day. Its bitácora row only when a code
-    is born (never the code)."""
+    """The link button (Dame el enlace, Ver enlace, Crear enlace since 3.18.1): the camera's live link; when it has
+    none or it expired, a new code (an expired link keeps its duration; a first link lasts DURACION_DEFAULT), ending at
+    noon of its last day. Its bitácora row only when a code is born (never the code)."""
     target = write_scope(session, site)
     cfg = await _config()
     _camera_or_404(_site_cfg(cfg, target), target, camera)
@@ -748,7 +749,7 @@ async def duracion_enlace(site: str, camera: str, body: EnlaceDuracionRequest,
     """A camera's link duration: the same code, its last day counted again from the site's today (saved twice the same
     day, the same end: never a drift of hours). The admin chooses any; a manager, on his own site, one the admin allows
     it (Section 3.17.6; otherwise 403). A link that already expired is refused (410), changing nothing (Section 3.17.3,
-    owner 17 Oct: an expired link never works again; «Dame el enlace» makes a new code)."""
+    owner 17 Oct: an expired link never works again; «Crear enlace» makes a new code)."""
     site = write_scope(session, site)
     cfg = await _config()
     site_cfg = _site_cfg(cfg, site)

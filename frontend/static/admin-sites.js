@@ -2,7 +2,8 @@
 // Each visible site: the auditor (do the cameras' roles add up to the functions?), its two functions, its
 // cameras and, for the admin, its gafete (the machines' key) and its active switch. Each camera (Section 3.13.2):
 // its light (🟢 Pi conectada, 🟢 Teléfono conectado: «nombre», 🔴 Nada conectado), Mirilla (a window on this
-// page), its link ("Dame el enlace", or "Ver enlace" once it has a live one, and "Cambiar enlace" inside its window:
+// page), its link ("Dame el enlace" before its first, "Ver enlace" while one lives, "Crear enlace" once it expired, and
+// "Cambiar enlace" inside its window:
 // the admin and the site's manager; how long it lasts: the admin, or the manager among the durations the admin
 // allows his site, Section 3.17.6), its phone with Sacar, the phones waiting
 // with Aceptar and Rechazar (the admin's) and Relevo a Pi; a Pi that sends nothing shows its link, so a phone can
@@ -28,13 +29,17 @@
 // clock ("hora de <sitio>"); the admin picks 1 día, 1 semana, 1 mes, permanente or personalizado: the box for its days
 // (only digits, 1 to 365) or its last day (a calendar, tomorrow to a year from the site's today) shows only then.
 // Section 3.17.3 (owner, 17 Oct): the admin sees the captura address alone (no code) on top, with copiar; a link that
-// already expired gets no new duration (the server refuses it: «Dame el enlace» makes a new code).
+// already expired gets no new duration (the server refuses it: «Crear enlace» makes a new code, Section 3.18.1).
 // Section 3.17.5 (owner, 19 Oct): the box has ONE link button, «Dame el enlace» while the camera has no live link (none
-// yet, or expired: it makes a new code) and «Ver enlace» once it has one (the same link); «Cambiar enlace» (a new code
-// on purpose, after its confirm) lives inside the link window, no longer in the box.
+// yet, or expired: it makes a new code; an expired one's button says «Crear enlace» since 3.18.1) and «Ver enlace» once
+// it has one (the same link); «Cambiar enlace» (a new code on purpose, after its confirm) lives inside the link window,
+// no longer in the box.
 // Section 3.17.6 (owner, 20 Oct): the admin chooses which link durations each restaurant's manager may choose (a row of
 // five in each site card, and the same five for every restaurant at once in a card on top); the manager's link window
 // shows Duración with only those (none: no Duración, as before). Both change the same link and see the same end.
+// Section 3.18.1 (owner, 2 Nov): the button of a camera whose link expired says «Crear enlace» (it makes a new code);
+// «Dame el enlace» only before the camera's first link. The link window adds: never in a private tab (closing one
+// throws the phone's pass away; the owner's ✋ of 3.18).
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import {
@@ -89,7 +94,7 @@ const AYUDAS = {
   fuente: {
     que_es: "Qué aparato toma las fotos: una Raspberry Pi, o un teléfono que entra con el enlace de la cámara.",
     ejemplo: "Pi",
-    recomendacion: "Pi. Si la Pi no manda imagen, un teléfono toma su lugar con el enlace de la cámara («Dame el enlace» o «Ver enlace») cuando el admin lo acepta.",
+    recomendacion: "Pi. Si la Pi no manda imagen, un teléfono toma su lugar con el enlace de la cámara (el botón del enlace, en su caja) cuando el admin lo acepta.",
     copiar: false,
   },
   duracion: {
@@ -556,9 +561,11 @@ function cameraBlock(s, c, ctx, error) {
   if (offersLink) parts.push(el("div", { class: "muted", text: linkText(c.enlace, s) }));
   const buttons = [wire(btn("Mirilla"), error, () => openMirilla(s.site, c.name))];
   if (offersLink) {
-    // Section 3.17.5: one button; its name says whether it makes a code (no live link) or shows the one there is.
+    // Section 3.17.5: one button; its name says whether it shows the live link or makes a code. Section 3.18.1:
+    // «Dame el enlace» before the camera's first link, «Crear enlace» once its link expired.
     const live = Boolean(c.enlace && !c.enlace.vencido);
-    buttons.push(wire(btn(live ? "Ver enlace" : "Dame el enlace", "primary"), error, async () => {
+    const name = live ? "Ver enlace" : c.enlace ? "Crear enlace" : "Dame el enlace";
+    buttons.push(wire(btn(name, "primary"), error, async () => {
       const answer = await api(sitePath(s.site) + "/cameras/" + enc(c.name) + "/enlace", { method: "POST" });
       const changed = await linkDialog(s, c, ctx, answer, answer.nuevo ? "Enlace nuevo." : "");
       if (answer.nuevo || changed) ctx.refresh();        // the same link, untouched: the card already shows it
@@ -595,7 +602,7 @@ function siteTime(iso, s) {
 function linkText(link, s) {
   if (!link) return "Sin enlace todavía: «Dame el enlace» crea uno.";
   const life = link.vence ? (link.vencido ? "venció el " : "vence el ") + siteTime(link.vence, s) : "permanente";
-  return "Enlace: " + codeText(link.codigo) + " · " + life + (link.vencido ? " («Dame el enlace» crea uno nuevo)" : "");
+  return "Enlace: " + codeText(link.codigo) + " · " + life + (link.vencido ? " («Crear enlace» hace uno nuevo)" : "");
 }
 
 // A day on the site's calendar, n days after "YYYY-MM-DD" (calendar arithmetic in UTC: no clock can shift it).
@@ -759,7 +766,7 @@ function capturaCard() {
     el("p", {
       class: "muted",
       text: "La página de captura de todas las cámaras. Sola no deja entrar a ningún teléfono nuevo: el teléfono escribe ahí "
-        + "el código de su cámara (el que da «Dame el enlace» o «Ver enlace», a ti o al gerente de ese restaurante) "
+        + "el código de su cámara (el de la ventana del enlace de esa cámara, a ti o al gerente de ese restaurante) "
         + "y espera tu Aceptar. "
         + "Lo normal es mandar el enlace de la cámara, que ya trae su código.",
     }),
@@ -839,7 +846,7 @@ async function linkDialog(s, c, ctx, answer, note) {
       text: "Mándalo por WhatsApp al teléfono que va a ser " + c.name + ". Lo abre en su navegador (con Tailscale encendido), "
         + "escribe su nombre y espera a que el admin lo acepte. Cada día, el mismo enlace lo lleva directo a su cámara, "
         + "si lo abre siempre en el mismo navegador: cada navegador del teléfono (Safari, Chrome, el de WhatsApp) guarda "
-        + "su propio pase.",
+        + "su propio pase. Nunca en una pestaña privada: al cerrarla, el teléfono pierde su pase.",
     }),
   ];
   // Section 3.17.6: the admin picks any duration; a manager only the ones the admin allows his site (none: no Duración).
@@ -861,7 +868,7 @@ async function linkDialog(s, c, ctx, answer, note) {
         if (err.status === 410) {                     // Section 3.17.3: it expired and stays so; nothing to copy
           life.textContent = "Venció: ya no deja entrar a ningún teléfono nuevo.";
           copy.disabled = true;
-          changed = true;                              // Section 3.17.5: on close the box says «Dame el enlace» at once
+          changed = true;                              // Section 3.17.5: on close the box says «Crear enlace» at once
         }
         throw err;
       }

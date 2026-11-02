@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.18 (HEAD was 04c1f53, Section 3.17.6).
+- Last update: Section 3.18.1 (HEAD was c2f7297, Section 3.18).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -85,20 +85,22 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   fresh one (its lock remembers 10 minutes).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.18 (the server runs the same code); one site, demo, whose Telegram chat is the
+- Laptop: Fase 3 through 3.18.1 (the server runs the same code); one site, demo, whose Telegram chat is the
   real "LPQ demo-alertas" group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
   Since 3.10.2 every dish carries its component labels and its notes (copied once from menu.yaml's
   comments). demo's 4 reference photos are hand-placed pairs (light copies at 1600 px; uploads make
   1568), kept as demo's LOCAL photos. The universal (brand) level is empty.
-- Server lpq-brain: Fase 3 since Section 3.18 (the code of 04c1f53), on the database it had: the 3.5.1 menu data
-  (tartine_chipotle_club, ensalada_queso_cabra and omelette_champinones on; tartine_aguacate off), with the dishes'
+- Server lpq-brain: Fase 3 since Section 3.18 (04c1f53; since 3.18.1, 3.18.1's commit by 3.18's road), on the database
+  it had: the 3.5.1 menu data (tartine_chipotle_club, ensalada_queso_cabra and omelette_champinones on;
+  tartine_aguacate off), with the dishes'
   notes and labels copied once by notas_from_menu in 3.18. Its two accounts were born once from its .env (admin and
   demo); its config.yaml is the one it had, now operator state, and it has no textos.yaml until a bot text is edited.
   demo has no Telegram chat in the mostrador yet: its alerts go to the .env chat (LPQ demo-alertas) until its
-  Destino Telegram is set (before the ceremony removes the .env chat). The butler runs there as lpq-butler.service.
-  Its bot is the live poller.
+  Destino Telegram is set (before the ceremony removes the .env chat). demo is in mantenimiento since 3.18's switch
+  (owner, 21 and 30 Oct: until a phone is its camera; the owner takes it out in Voz del bot). The butler runs there as
+  lpq-butler.service. Its bot is the live poller.
 - The two databases are separate: a change on one never reaches the other. Deploys carry code, never
   data: the server's reference photos came by the 3.5.1 manual road (the originals byte-identical
   under reference/<dish>/original/1.jpg with the light copy beside them, scp to
@@ -108,6 +110,20 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.18.1 (owner, 2 Nov 2026; built in Section 3.18.1): «Crear enlace»; never a private tab
+- A camera's link button has three names (owner, 2 Nov, amending 3.17.5's): «Dame el enlace» only before the camera's
+  first link, «Ver enlace» while its link is live, and «Crear enlace» once it expired (it makes a new code, as
+  before). The box then says "(«Crear enlace» hace uno nuevo)", and 3.17.3's refusal "pulsa «Crear enlace» para uno
+  nuevo.". The texts that named «Dame el enlace» or «Ver enlace» for a live link now say where the link is, not which
+  button: the captura address card, the phone's code screen, the Fuente help, an api refusal and the bot's 📵
+  pi_callada factory text. Only names change: the endpoint, the codes and who may use them stay.
+- The link window's help ends with one line (owner, 2 Nov): "Nunca en una pestaña privada: al cerrarla, el teléfono
+  pierde su pase." (3.18's ✋: a Safari private tab erased the phone's pass when it closed, so the same link asked for
+  the code again; there iCloud Private Relay showed "Esta conexión no es privada" at every opening.)
+- 3.18.1's block deploys its commit to the server by 3.18's road right after the commit: the laptop first (its checks,
+  then the commit), then the server (backups/config.before-3.18.1.yaml and code.before-3.18.1.tgz; no migration; the
+  three services rebuilt and recreated; the bot's greeting once).
 
 ### 3.18 (built in Section 3.18): the deploy to lpq-brain
 - The road (every later deploy to the server follows it; HQ's standard choices, the owner may change any):
@@ -161,14 +177,15 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 ### 3.17.5 (owner, 19 Oct 2026; built in Section 3.17.5): one link button, «Cambiar enlace» in its window
 - A camera's box has ONE link button (owner, 19 Oct: «Dame el enlace» and «Cambiar enlace» looked the same and
   confused): «Dame el enlace» while the camera has no live link (none yet, or expired: it makes a new code and the
-  window says "Enlace nuevo.") and «Ver enlace» once it has one (the window shows that same link). «Cambiar enlace» (a
+  window says "Enlace nuevo."; since 3.18.1 an expired link's button says «Crear enlace») and «Ver enlace» once it has
+  one (the window shows that same link). «Cambiar enlace» (a
   new code on purpose: the old one stops opening, the phones already in keep going) is inside the link window, after the
   same browser question, and shows the new code in that window ("Enlace nuevo: el anterior ya no sirve."); it is no
   longer in the box. The window keeps one red line for its buttons. Nothing else changes: the admin and that site's
   manager use both; only the admin picks the duration (since 3.17.6 the manager too, among the ones the admin allows
   his restaurant). The texts that sent people to «Dame el enlace» for a live link
   now name both buttons (the captura address card, the phone's code screen, the Fuente help, an api refusal and the
-  bot's 📵 pi_callada factory text).
+  bot's 📵 pi_callada factory text; since 3.18.1 they say where the link is instead).
 
 ### 3.17.4 (owner, 18 Oct 2026; built in Section 3.17.4): the provider charges in dollars
 - Under the Gasto's Moneda, one line: "Anthropic (Claude) cobra su API siempre en dólares (USD), sin importar el país o
@@ -188,7 +205,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   sent: the box is a backup. A phone that is already the camera keeps going when its link expires or changes (its pass
   counts; Sacar removes it); a phone already waiting keeps waiting; every new phone needs the admin's Aceptar.
 - An expired link never works again (owner, 17 Oct: "that is a security breach"): its code stops opening at once, by the
-  link and by the box, and nothing brings it back. «Dame el enlace» on an expired link makes a new code; «Cambiar
+  link and by the box, and nothing brings it back. «Dame el enlace» (since 3.18.1 «Crear enlace») on an expired link
+  makes a new code; «Cambiar
   enlace» makes one at once; «Guardar duración» refuses a link that already expired (410, "Ese enlace ya venció y no
   vuelve a servir: ...", and the window's line says "Venció: ya no deja entrar a ningún teléfono nuevo."), changing
   nothing and writing no row. Until 3.17.3 it gave the same code a new end, so the old link opened again (HQ found it on
@@ -404,7 +422,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 ### 3.13.2 (owner, 11 and 12 Oct 2026; built in Section 3.13.2): camera links and the new captura
 - Each camera in Sitios y cuentas shows its light (🟢 "Pi conectada", 🟢 "Teléfono conectado: «nombre»",
   🔴 "Nada conectado"), Mirilla (a window on the same page), its link ("Dame el enlace", or "Ver enlace"
-  once it has a live one, with "Cambiar enlace" inside its window since 3.17.5; its code shown next to it),
+  once it has a live one, with "Cambiar enlace" inside its window since 3.17.5, and "Crear enlace" once it expired
+  since 3.18.1; its code shown next to it),
   its phone with Sacar, the phones waiting with Aceptar and Rechazar, and on a phone camera "Relevo a Pi".
 - Who does what: a camera's link, the admin and that site's manager (only the admin picks how long it
   lasts; since 3.17.6 the manager too, among the durations the admin allows his site); Sacar, the manager
@@ -448,7 +467,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
     holds (a reload, a site deactivated and back) until a start button, a request or another link. A
     camera with no picture (another app, a call) waits and resumes; one that closes says so.
   - The bot: a Pi camera's 📵 says a phone can take its place ("Dame el enlace", and "o «Ver enlace»"
-    from 3.17.5); 📱 posts each request with the phone's name and the camera; the relevo reads "🟢
+    from 3.17.5; "con el enlace de esa cámara (en el mostrador, Sitios y cuentas)" from 3.18.1); 📱 posts each
+    request with the phone's name and the camera; the relevo reads "🟢
     sitio/cámara cambió de fuente (ahora: fuente)", with "teléfono de emergencia" when an Aceptar moved a
     Pi camera to a phone. It reads its last 200 bitácora rows again each round, so a row that lands late
     is still announced once.
@@ -698,8 +718,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 
 ## Open promises (the section that keeps each one)
 - 3.19, the ceremony: TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH and DEMO_PASSWORD_HASH leave both .env files in the
-  SPEC's order; the present/absent proof; the server's old Fase 2 images (3.18's rollback) removed once 3.18's ✋
-  passed.
+  SPEC's order; the present/absent proof; the server's old images removed: Fase 2's (3.18's rollback; 3.18's ✋ passed
+  on 2 Nov), and 3.18's (3.18.1's rollback) once 3.18.1's ✋ passed.
 - 3.20, T-F6 on the server: the full regression, the yes/no checklist against the 14 criteria, the
   final phone test, and disk headroom (a bigger disk before production if needed).
 
@@ -728,6 +748,11 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
       capturing again by itself.
 - 3.18's ✋ walks items 1 to 8 and 10 to 12 on the server (https://lpq-brain.taild4ddb0.ts.net) with the owner's
   iPhone; the next section closes each one by the ✋'s report.
+- Closed by 3.18's ✋ (owner, 2 Nov, his iPhone 14 on the server): items 1 to 8 and 12 pass (item 4 in a normal Safari
+  tab: a private tab erased the pass on closing, which became 3.18.1's line); item 11: one tap on ☀️ keeps the screen
+  on, and the lock held with Low Power Mode on (its note shows only when Safari refuses a new request); item 10:
+  WhatsApp opens the link in Safari (Safari's pass), and its second half (the next day, straight to the camera) waits
+  for the owner's word.
 
 ## Para 3.18: la limpieza
 - Owner's ruling (12 Oct): at 3.18, after the list, everything temporary is cleaned as if it never
@@ -776,16 +801,15 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   Eliminadas since 7 Oct, which the worker erases on 6 Nov (owner, 30 Oct: committed with them noted); the photo
   folders only demo and reference; config.yaml as the repo has it (no gerente_duraciones); the search for every
   name a section replaced finds nothing; no lpq-butler-prueba container, no photos/backups_317, no lpq_restore_317; the
-  network fixes: not a topic (owner, 20 Oct). Still the owner's, in 3.18's ✋: the laptop browser's leftovers of
-  localhost:8000 (clear that site's data) and the laptop's database copy of 15 Oct (made before 3.17's ✋; its folder
-  is in that day's report): deleted (owner, 21 Oct).
+  network fixes: not a topic (owner, 20 Oct). The owner's, in 3.18's ✋ (2 Nov): the laptop browser's leftovers of
+  localhost:8000, cleared; the laptop's database copy of 15 Oct (made before 3.17's ✋), not found (one drive, C:, and
+  no lpq_2026101*.dump on it): none to delete.
 
 ## Waiting on the owner (no section owns these)
-- 3.18's ✋ (on the server, after 3.18's commit): the new bot's greeting in demo-alertas; the admin's login on the
-  server; the machine room births the server's cuarto password, the butler green, one Reiniciar el bot (the greeting
-  again); the iPhone list (items 1 to 8 and 10 to 12; item 10's second half the next day); the laptop browser's
-  leftovers; the laptop's database copy of 15 Oct deleted; demo in mantenimiento from right after the switch until a
-  phone is its camera (owner, 21 and 30 Oct); one push (`04c1f53..<3.18>`).
+- 3.18.1's ✋ (after its report): on the laptop, a test camera's three button names and the window's new line, then
+  Quitar and the put-back; on the server, the greeting of the deploy, «Ver enlace» on barra-1 and its window's new
+  line; one push (`c2f7297..<3.18.1>`).
+- 3.18's iPhone item 10, its second half: the same WhatsApp link, the next day, goes straight to the camera.
 - Crear restaurante on the server: when the first real café is ready (owner, 20 Oct).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
 - tartine_chipotle_club: pan_trigo 90 g and aguacate 40 g are estimates (the avocado looks like more).
@@ -814,6 +838,10 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   link buttons) became 3.17.5.
 - 3.17.5's and 3.17.6's ✋ (20 Oct, on the laptop): every step as expected (3.17.5's note at its step 5 became 3.17.6),
   pushed `7b54c54..04c1f53`.
+- 3.18's ✋ (2 Nov, on the server and the laptop): the new bot's greeting, the admin's login, the cuarto password born
+  in the room, the butler green and Reiniciar el bot (the greeting again), demo in mantenimiento, the iPhone list (see
+  "Para 3.18: la lista del iPhone"; item 10's second half waits), localhost's browser data cleared, the 15 Oct copy not
+  found; pushed `04c1f53..c2f7297`. The owner's note on it (an expired link's button) became 3.18.1.
 
 ## Still forbidden (post-demo): STOP and flag if asked
 Coach screens, pi_csi/usb backends, the MODEL cascade (stays "off"), geometry v2, the báscula, POS,

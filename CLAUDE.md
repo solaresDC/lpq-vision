@@ -6,7 +6,8 @@ Cameras photograph plates (returns and outgoing, per camera role); a worker send
 per-site menu reference to Claude (Sonnet 5); the validated result (dish, % leftover per component,
 confidence) lands as one row per plate in Postgres. Outgoing plates get an express presentation
 grade against their own reference photo.
-Fases 1 and 2 are LIVE on this laptop and on lpq-brain; Fase 3's code reached lpq-brain in Section 3.18 (main 04c1f53).
+Fases 1 and 2 are LIVE on this laptop and on lpq-brain; Fase 3's code reached lpq-brain in Section 3.18 (main 04c1f53),
+and 3.18.1's commit by the same road (the ledger's 3.18).
 Current phase (Fase 3, El Producto, the Build Plan's Etapa F): the ADMIN module. Daily operation
 becomes a page, never an SSH session: two floors (/admin mostrador, /maquinas machine room), the
 knob registry + the one config writer + the knob cascade, the per-site gafete, horario + vigilantes

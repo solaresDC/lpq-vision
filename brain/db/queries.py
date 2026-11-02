@@ -552,7 +552,7 @@ ON CONFLICT (site, camera) DO NOTHING
 RETURNING site, camera, codigo, dias, vence_at, false AS vencido
 """
 
-# A new code for a camera (Dame el enlace when it expired; Cambiar enlace): the old code stops opening at once, and
+# A new code for a camera (Crear enlace when it expired; Cambiar enlace): the old code stops opening at once, and
 # the phones already inside stay. dias NULL = permanente.
 UPSERT_ENLACE = """
 INSERT INTO camara_enlaces (site, camera, codigo, dias, vence_at)
