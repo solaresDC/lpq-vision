@@ -4,6 +4,8 @@ GET  /api/admin/sites?site=                          the visible sites: DB row +
                                                      camera its light, its phone, the phones waiting and its link
 POST /api/admin/sites                                Crear restaurante (admin): ALL OR NOTHING across DB and config
 POST /api/admin/sites/{site}/edit                    active / ingestion (admin; deactivating asks for the double confirm)
+POST /api/admin/sites/{site}/delete                  Eliminar restaurante (admin, Section 3.19.1): a deactivated one that
+                                                     never recorded a plate; typed name + double confirm; for good
 POST /api/admin/sites/{site}/funciones               the site's two function switches
 POST /api/admin/sites/{site}/enlaces/gerente         the link durations the site's manager may choose (admin)
 POST /api/admin/enlaces/gerente                      the same durations for every site at once (admin)
@@ -53,6 +55,11 @@ opened again).
 Section 3.17.6 (owner, 20 Oct): the admin chooses, per site or for every site at once, which link durations that site's
 manager may choose (1 día, 1 semana, 1 mes, personalizado, permanente; none = only the admin, as before); the
 manager's duration and Cambiar enlace with a duration are refused outside them (403). Both change the same link.
+Section 3.19.1 (owner, 2 Nov): Eliminar restaurante. A deactivated restaurant that never recorded a plate (a mistake or
+a test) goes for good, with no waiting, after its typed name and the double confirm: its row and gafete, its accounts,
+its block in config.yaml with its cameras, its links and phones, its local menu photo rows (a file only when no row of
+either level uses it any more) and its one-day hours. Its bitácora rows stay. A restaurant with plates waits for
+Descargar todo; a site of menu.yaml (the seed) is never deleted here. Each inactive site's view says which (eliminable).
 """
 
 from __future__ import annotations
@@ -104,6 +111,7 @@ from brain.validator.models import (
     UserCreateRequest,
     UserRoleRequest,
     load_config,
+    load_menu,
 )
 
 log = logging.getLogger("lpq.api.admin_sites")
@@ -265,7 +273,7 @@ def _camera_view(site: str, name: str, cam: CameraConfig, cfg: Config, phones: l
 
 
 def _site_view(row: dict[str, Any], site_cfg: SiteConfig | None, cfg: Config, phones: list[dict[str, Any]],
-               links: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any]:
+               links: dict[tuple[str, str], dict[str, Any]], borrable: dict[str, str] | None = None) -> dict[str, Any]:
     view: dict[str, Any] = {
         "site": row["site"],
         "active": bool(row["active"]),
@@ -273,6 +281,7 @@ def _site_view(row: dict[str, Any], site_cfg: SiteConfig | None, cfg: Config, ph
         "chat_set": row["telegram_chat_id"] is not None,
         "in_config": site_cfg is not None,
         "zona": knobs.timezone_of(cfg, row["site"]),     # the site's clock: a link's day and hour are read on it
+        "eliminable": (borrable or {}).get(row["site"]),  # Section 3.19.1: inactive only: si, platos, semilla, menu
     }
     if site_cfg is None:
         view.update({"funciones": None, "cameras": [], "gerente_duraciones": [],
@@ -294,16 +303,54 @@ def _phones_and_links(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], d
     return phones, links
 
 
+MENU_ILEGIBLE = "No se pudo leer menu.yaml: por ahora no se elimina ningún restaurante."
+
+
+def _seed_sites() -> set[str] | None:
+    """The sites menu.yaml names (the seed): never deleted from the mostrador (a boot checks them against config.yaml).
+    None when menu.yaml cannot be read: then no restaurant is deleted at all."""
+    try:
+        return set(load_menu().sites)
+    except Exception:                              # an unreadable seed protects every site rather than none
+        return None
+
+
+def _seed_refusal(site: str) -> HTTPException | None:
+    """The seed rule, read at step 1 and again under the writer's lock at step 2 (menu.yaml may change between)."""
+    seed = _seed_sites()
+    if seed is None:
+        log.warning("menu.yaml unreadable: Eliminar restaurante refused for %s", site)
+        return HTTPException(status_code=409, detail=MENU_ILEGIBLE)
+    if site in seed:
+        return HTTPException(status_code=409, detail=(
+            f"El restaurante {site} es parte de la semilla del menú (menu.yaml): no se elimina desde el mostrador."))
+    return None
+
+
+def _borrable(conn: psycopg.Connection, rows: list[dict[str, Any]]) -> dict[str, str]:
+    """Section 3.19.1: for each INACTIVE site, whether Eliminar restaurante is offered: si (no plate in the database),
+    platos (it has history: Descargar todo first), semilla (named in menu.yaml) or menu (menu.yaml could not be read:
+    none is deleted). One read, only when a site is off."""
+    inactive = [r["site"] for r in rows if not r["active"]]
+    if not inactive:
+        return {}
+    with_plates = {r["site"] for r in conn.execute(q.INACTIVE_SITES_WITH_PLATES).fetchall()}
+    seed = _seed_sites()
+    return {s: "menu" if seed is None else "semilla" if s in seed else "platos" if s in with_plates else "si"
+            for s in inactive}
+
+
 async def _view_of(site: str) -> dict[str, Any]:
     cfg = await _config()
 
-    def work(conn: psycopg.Connection) -> tuple[Any, list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
-        return (conn.execute(q.SELECT_SITE, {"site": site}).fetchone(), *_phones_and_links(conn))
+    def work(conn: psycopg.Connection) -> tuple[Any, list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], dict[str, str]]:
+        row = conn.execute(q.SELECT_SITE, {"site": site}).fetchone()
+        return (row, *_phones_and_links(conn), _borrable(conn, [row] if row else []))
 
-    row, phones, links = await asyncio.to_thread(_read, work)
+    row, phones, links, borrable = await asyncio.to_thread(_read, work)
     if row is None:
         raise HTTPException(status_code=404, detail=f"sitio desconocido: {site}")
-    return _site_view(row, cfg.sites.get(site), cfg, phones, links)
+    return _site_view(row, cfg.sites.get(site), cfg, phones, links, borrable)
 
 
 @router.get("/api/admin/sites")
@@ -311,12 +358,13 @@ async def list_sites(site: str | None = None, session: Session = Depends(require
     scope = (site or None) if session.is_admin else session.site
     cfg = await _config()
 
-    def work(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
-        return (conn.execute(q.SELECT_SITES_ALL).fetchall(), *_phones_and_links(conn))
+    def work(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], dict[str, str]]:
+        rows = conn.execute(q.SELECT_SITES_ALL).fetchall()
+        return (rows, *_phones_and_links(conn), _borrable(conn, [r for r in rows if scope is None or r["site"] == scope]))
 
-    rows, phones, links = await asyncio.to_thread(_read, work)
+    rows, phones, links, borrable = await asyncio.to_thread(_read, work)
     views = [
-        _site_view(r, cfg.sites.get(r["site"]), cfg, phones, links)
+        _site_view(r, cfg.sites.get(r["site"]), cfg, phones, links, borrable)
         for r in rows if scope is None or r["site"] == scope
     ]
     return {"sites": views}
@@ -399,6 +447,153 @@ async def edit_site(site: str, body: SiteEditRequest, session: Session = Depends
             run=apply,
         )
     return await apply()
+
+
+# --- Eliminar restaurante (admin; Section 3.19.1) -----------------------------------------------
+
+def _delete_guard(conn: psycopg.Connection, site: str, lock: bool) -> int:
+    """The rules Eliminar checks at step 1 and again inside its transaction: the site exists, is deactivated and has
+    no plate (papelera included). Answers its plate count (0)."""
+    row = conn.execute(q.LOCK_SITE if lock else q.SELECT_SITE, {"site": site}).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"sitio desconocido: {site}")
+    if row["active"]:
+        raise HTTPException(status_code=409, detail=f"El restaurante {site} está activo: desactívalo primero.")
+    plates = int(conn.execute(q.COUNT_SITE_PLATES, {"site": site}).fetchone()["n"])
+    if plates:
+        raise HTTPException(status_code=409, detail=(
+            f"El restaurante {site} ya registró platos ({plates}): sus datos se quedan. Por ahora solo se desactiva."))
+    return plates
+
+
+def _delete_rows(conn: psycopg.Connection, site: str, cameras: list[str], accounts: list[tuple[str, int]]) -> dict[str, Any]:
+    """Inside the transaction: every row that points at the site goes, then the site. A phone that captures another
+    restaurant's camera keeps it (only its request here goes); one that asks for another restaurant keeps asking.
+    accounts: the ones step 1 named; any other now (the site's row is locked, so none can join after) refuses."""
+    for camera in sorted(cameras):                 # the cameras' locks first (a phone writer takes its camera's first)
+        conn.execute(q.LOCK_CAMARA, {"site": site, "camera": camera})
+    _delete_guard(conn, site, lock=True)
+    if [(a["usuario"], a["uid"]) for a in conn.execute(q.SELECT_SITE_ACCOUNTS, {"site": site}).fetchall()] != accounts:
+        raise HTTPException(status_code=409, detail=f"El restaurante {site} cambió mientras tanto: mira la tarjeta otra vez.")
+    notes: list[tuple[str, str]] = []
+    gone = f"El restaurante {site} ya no existe: se eliminó en el mostrador."
+    for phone in conn.execute(q.LOCK_TELEFONOS_DE_SITIO, {"site": site}).fetchall():
+        captures_other = phone["site"] is not None and phone["site"] != site
+        asks_other = phone["pide_site"] is not None and phone["pide_site"] != site
+        if captures_other:
+            conn.execute(q.CLEAR_TELEFONO_PIDE, {"id": phone["id"]})
+        elif asks_other:
+            conn.execute(q.UNBIND_TELEFONO, {"id": phone["id"]})
+        else:
+            conn.execute(q.DELETE_TELEFONO, {"id": phone["id"]})
+        notes.append((phone["pase"], gone))
+    enlaces = conn.execute(q.DELETE_SITE_ENLACES, {"site": site}).rowcount
+    horarios = conn.execute(q.DELETE_SITE_HORARIOS, {"site": site}).rowcount
+    photo_rows = conn.execute(q.DELETE_SITE_PHOTOS, {"site": site}).fetchall()
+    photos = sorted({r["photo_path"] for r in photo_rows})        # each pair once, for the collector
+    accounts = conn.execute(q.DELETE_SITE_ACCOUNTS, {"site": site}).fetchall()
+    if conn.execute(q.DELETE_SITE, {"site": site}).fetchone() is None:
+        raise HTTPException(status_code=409, detail=f"El restaurante {site} cambió mientras tanto: mira la tarjeta otra vez.")
+    return {"notes": notes, "enlaces": enlaces, "horarios": horarios, "fotos": len(photo_rows), "photos": photos,
+            "accounts": [{"usuario": a["usuario"], "uid": a["uid"]} for a in accounts]}
+
+
+def _after_delete(site: str, photos: list[str]) -> list[str]:
+    """After the commit: the photo pairs no row of either level uses any more (copy-on-diverge: a file another
+    restaurant or the universal level still uses is never touched), and the site's empty photo folder."""
+    from api.admin_menu import _gc_pair            # the menu family's own collector (one rule for every pair)
+    from brain.capture.backends import PHOTO_ROOT
+
+    removed: list[str] = []
+    try:
+        with q.connect() as conn:
+            for path in photos:
+                removed.extend(_gc_pair(conn, path))
+    except Exception as exc:                       # the deletion already landed: a file left is only an orphan
+        log.warning("site %s: its photo files were not all collected (%s)", site, type(exc).__name__)
+    folder = PHOTO_ROOT / site
+    try:
+        if folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+    except OSError as exc:
+        log.warning("site %s: its photo folder stays (%s)", site, type(exc).__name__)
+    return removed
+
+
+@router.post("/api/admin/sites/{site}/delete")
+async def delete_site(site: str, body: ConfirmNameRequest, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Eliminar restaurante (Section 3.19.1): step 1 checks the typed name and the rules and answers the double
+    confirm; step 2 deletes across the database and config.yaml, all or nothing, then collects the photo files no row
+    uses any more, closes the deleted accounts' sessions and tells the deleted phones why."""
+    if body.name.strip() != site:
+        raise HTTPException(status_code=400, detail="El nombre escrito no coincide con el restaurante: no se eliminó nada.")
+    refusal = await asyncio.to_thread(_seed_refusal, site)
+    if refusal is not None:
+        raise refusal
+    cfg = await _config()
+    site_cfg = cfg.sites.get(site)
+    cameras = sorted(site_cfg.cameras) if site_cfg is not None else []
+
+    def look(conn: psycopg.Connection) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        _delete_guard(conn, site, lock=False)
+        return (conn.execute(q.SELECT_SITE_ACCOUNTS, {"site": site}).fetchall(),
+                conn.execute(q.COUNT_SITE_ROWS, {"site": site}).fetchone())
+
+    accounts, counts = await asyncio.to_thread(_read, look)
+    named = [(a["usuario"], a["uid"]) for a in accounts]
+    names = ", ".join(f"{a['usuario']} (#{a['uid']})" for a in accounts) or "ninguna"
+
+    async def run() -> dict[str, Any]:
+        def still_same(now: Config) -> None:
+            # Confirmed later, so read again under the writer's lock: still not the seed, and the cameras are the ones
+            # the locks will take.
+            late = _seed_refusal(site)
+            if late is not None:
+                raise late
+            now_cfg = now.sites.get(site)
+            if sorted(now_cfg.cameras if now_cfg is not None else []) != cameras:
+                raise HTTPException(status_code=409, detail=f"El restaurante {site} cambió mientras tanto: mira la tarjeta otra vez.")
+
+        def db_work(conn: psycopg.Connection) -> dict[str, Any]:
+            done = _delete_rows(conn, site, cameras, named)
+            _bitacora(conn, session, "site.delete", {
+                "site": site, "camaras": cameras, "cuentas": done["accounts"], "enlaces": done["enlaces"],
+                "telefonos": len(done["notes"]), "fotos": done["fotos"], "horarios": done["horarios"],
+                "platos": 0, "espera": False,
+            })
+            return done
+
+        ops = [cw.delete_op(("sites", site))] if site_cfg is not None else []
+        done = await _db_and_config(db_work, ops, still_same)
+        _note_all(done["notes"])
+        for account in done["accounts"]:
+            drop_sessions_of(account["usuario"])
+        removed = await asyncio.to_thread(_after_delete, site, done["photos"])
+        log.info("site deleted %s accounts=%d links=%d phones=%d photo_rows=%d files=%d user=%s", site,
+                 len(done["accounts"]), done["enlaces"], len(done["notes"]), done["fotos"], len(removed), session.user)
+        return {"site": site, "cuentas": done["accounts"], "camaras": cameras, "enlaces": done["enlaces"],
+                "telefonos": len(done["notes"]), "fotos": done["fotos"], "archivos": len(removed),
+                "horarios": done["horarios"]}
+
+    return propose(
+        session,
+        action="eliminar el restaurante " + site,
+        diff={
+            "resumen": (
+                f"Esta acción es permanente y no se puede deshacer. El restaurante {site} no tiene platos registrados, así "
+                "que se borra ahora, sin espera: su fila y su gafete, su bloque en config.yaml con sus cámaras, sus "
+                f"cuentas, sus enlaces y teléfonos ({counts['enlaces']} y {counts['telefonos']}), sus fotos locales del "
+                f"menú ({counts['fotos']}; un archivo solo si nada más lo usa) y sus cambios de horario "
+                f"({counts['horarios']}). Las filas de la bitácora se quedan."
+            ),
+            "cambios": [
+                {"que": "restaurante " + site, "antes": "desactivado, sin platos", "despues": "(eliminado)"},
+                {"que": "cámaras", "antes": ", ".join(cameras) or "ninguna", "despues": "(se borran)"},
+                {"que": "cuentas", "antes": names, "despues": "(se borran)"},
+            ],
+        },
+        run=run,
+    )
 
 
 # --- functions (own site for a manager) and cameras (admin) ------------------------------------

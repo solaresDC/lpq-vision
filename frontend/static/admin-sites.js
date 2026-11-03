@@ -40,6 +40,9 @@
 // Section 3.18.1 (owner, 2 Nov): the button of a camera whose link expired says «Crear enlace» (it makes a new code);
 // «Dame el enlace» only before the camera's first link. The link window adds: never in a private tab (closing one
 // throws the phone's pass away; the owner's ✋ of 3.18).
+// Section 3.19.1 (owner, 2 Nov): a deactivated restaurant that never recorded a plate shows «Eliminar restaurante» in its
+// card (the admin's): gate 1 = type its exact name; gate 2 = the server's double confirm; then it is gone for good, with
+// no waiting. One with plates keeps its data (only deactivated for now); a site of menu.yaml is never deleted here.
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import {
@@ -445,6 +448,7 @@ function siteCard(s, ctx, view) {
     }
   }
   if (ctx.sess.admin) parts.push(el("h3", { text: "Gafete y estado" }), adminRow(s, ctx, error));
+  if (ctx.sess.admin && !s.active && s.eliminable) parts.push(el("h3", { text: "Eliminar restaurante" }), deleteRow(s, ctx, error));
   parts.push(error);
   return card("Sitio " + s.site, ...parts);
 }
@@ -1007,6 +1011,38 @@ function adminRow(s, ctx, error) {
       ctx.refresh();
     });
   return el("div", {}, el("div", { class: "kit-edit" }, reveal, regen, active), shown);
+}
+
+// Section 3.19.1: Eliminar restaurante, in an inactive restaurant's card (the admin's). eliminable comes from the server:
+// si (no plate in the database), platos (it has history: its data stays), semilla (named in menu.yaml) or menu
+// (menu.yaml could not be read: none is deleted).
+const ELIMINABLE_NOTES = {
+  platos: "Ya registró platos: sus datos se quedan. Por ahora solo se desactiva.",
+  semilla: "Es un sitio de la semilla del menú (menu.yaml): no se elimina desde aquí.",
+  menu: "No se pudo leer menu.yaml: por ahora no se elimina ningún restaurante.",
+};
+
+function deleteRow(s, ctx, error) {
+  if (s.eliminable !== "si") return el("p", { class: "muted", text: ELIMINABLE_NOTES[s.eliminable] || "" });
+  const remove = wire(btn("Eliminar restaurante", "bad"), error, async () => {
+    const typed = await typeToConfirm({
+      title: "Eliminar el restaurante " + s.site,
+      name: s.site,
+      warning: "No tiene platos registrados, así que se borra para siempre, sin espera: sus cámaras, sus cuentas, sus "
+        + "enlaces y teléfonos, sus fotos locales del menú y sus cambios de horario. No se puede deshacer.",
+    });
+    if (!typed) return;
+    const result = await confirmFlow(() =>
+      api(sitePath(s.site) + "/delete", { method: "POST", json: { name: s.site } }));
+    if (result) {
+      toast("restaurante " + s.site + " eliminado", "ok");
+      await ctx.refreshOverview();
+      ctx.refresh();
+    }
+  });
+  return el("div", {},
+    el("p", { class: "muted", text: "No tiene platos registrados: se puede eliminar para siempre, sin espera." }),
+    el("div", { class: "kit-edit" }, remove));
 }
 
 // --- Crear restaurante (admin) -------------------------------------------------------------------

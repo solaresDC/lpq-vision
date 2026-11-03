@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.19 (HEAD was 48e3f7f, Section 3.18.1).
+- Last update: Section 3.19.1 (HEAD was dd553ec, Section 3.19).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -88,14 +88,14 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   between a listed stop and start of the server's bot (CLAUDE.md rule 18).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.19 (the server runs the same code); one site, demo, whose Telegram chat is the
+- Laptop: Fase 3 through 3.19.1 (the server runs the same code); one site, demo, whose Telegram chat is the
   real "LPQ demo-alertas" group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
   Since 3.10.2 every dish carries its component labels and its notes (copied once from menu.yaml's
   comments). demo's 4 reference photos are hand-placed pairs (light copies at 1600 px; uploads make
   1568), kept as demo's LOCAL photos. The universal (brand) level is empty.
-- Server lpq-brain: Fase 3 since Section 3.18 (04c1f53; since 3.18.1, 3.18.1's commit by 3.18's road), on the database
+- Server lpq-brain: Fase 3 since Section 3.18 (04c1f53; 3.18.1's and 3.19.1's commits by 3.18's road), on the database
   it had: the 3.5.1 menu data (tartine_chipotle_club, ensalada_queso_cabra and omelette_champinones on;
   tartine_aguacate off), with the dishes'
   notes and labels copied once by notas_from_menu in 3.18. Its two accounts were born once from its .env (admin and
@@ -113,6 +113,35 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.19.1 (owner, 2 Nov 2026; built in Section 3.19.1): Eliminar restaurante, one that never recorded a plate
+- The owner's design (2 Nov), two roads. A restaurant that never recorded a plate (a mistake or a test): Eliminar
+  directly, with its typed name and the double confirm, for good and with no waiting (3.19.1). A restaurant with
+  history: deactivated first, then «Descargar todo» (a data file plus a separate photos download; the admin's only; no
+  secret in either), then Eliminar with a waiting period and «Restaurar» meanwhile (3.19.2; 30 days by default, as the
+  accounts' Eliminadas; the owner may change it at 3.19.2).
+- What 3.19.1 does: an inactive restaurant's card (the admin's) shows «Eliminar restaurante». Gate 1: its exact name,
+  typed (paste refused); gate 2: the server's double confirm, which names what goes. Then in one write across the
+  database and config.yaml (all or nothing): its row and gafete; its block in config.yaml (cameras, functions,
+  knobs); its accounts, Eliminadas included (their open sessions closed); its links; its one-day hours; its local
+  menu photo rows (a file only when no row of either level uses it any more, as every photo pair); its phones (one
+  capturing another restaurant's camera keeps it and only its request here goes; one asking for another restaurant
+  keeps asking; each one's page says "El restaurante <sitio> ya no existe: se eliminó en el mostrador."). One
+  bitácora row site.delete (its cameras, its accounts with their numbers, how many of each; never a code or a pass).
+  Its earlier bitácora rows stay (the password history keeps its manager's birth row).
+- The rules, checked at step 1 and again inside the write: deactivated (an active one: 409, "desactívalo
+  primero"); no plate in the database, the papelera's included (409: its data stays, only deactivated for now); not a
+  site of menu.yaml (the seed, demo: 409, never from the mostrador; an unreadable menu.yaml refuses every one); a camera
+  or an account that changed between the two steps makes step 2 refuse (409, "cambió mientras tanto"). Each inactive
+  site's view says which (eliminable: si, platos, semilla, or menu when menu.yaml cannot be read); only the admin's
+  card shows it. A deleted restaurant's name and its manager's name are free again.
+- Known limit, as with Quitar cámara: the api keeps a deleted camera's last image in memory until its next restart
+  (the frame store is not touched), so a restaurant born again with the same name and camera before a restart could
+  show that old image in its Mirilla or /foto.
+- 3.19.1's block deploys its commit to the server by 3.18's road right after the commit (the safety copy with
+  backups/config.before-3.19.1.yaml and backups/code.before-3.19.1.tgz; no migration; the three services rebuilt and
+  recreated; the bot's greeting once). Its check (photos/_smoke/check_3191.py) is deleted after its run on the laptop,
+  its copy in the container too.
 
 ### 3.19 (built in Section 3.19): the ceremony
 - The SPEC's order, as it ran: (1) the accounts born from .env at the first Fase 3 boot (the server's in 3.18, 30
@@ -744,6 +773,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
+- 3.19.2, Eliminar restaurante for one with history: «Descargar todo» (a data file plus a separate photos download;
+  the admin's only; no secret in either), then Eliminar with a waiting period (30 days unless the owner changes it at
+  3.19.2) and «Restaurar» meanwhile.
 - 3.20, T-F6 on the server: the full regression, the yes/no checklist against the 14 criteria, the
   final phone test, and disk headroom (a bigger disk before production if needed).
 
@@ -830,9 +862,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   no lpq_2026101*.dump on it): none to delete.
 
 ## Waiting on the owner (no section owns these)
-- 3.19's ✋ (after its report): the recreate's greeting in LPQ demo-alertas; the admin's login on the server and on
-  the laptop; Voz del bot on the server (demo's chat assigned, no note about the temporal chat); "Enviar prueba"; /foto
-  answered for demo; one push (`48e3f7f..<3.19>`).
+- 3.19.1's ✋ (after its report): on the laptop, a test restaurant (prueba-borrar) created, deactivated and
+  eliminated with its typed name and the double confirm; on the server, the deploy's greeting and demo's card with no
+  «Eliminar restaurante» (it is active); one push (`dd553ec..<3.19.1>`).
 - 3.18's iPhone item 10, its second half: the same WhatsApp link, the next day, goes straight to the camera.
 - Crear restaurante on the server: when the first real café is ready (owner, 20 Oct).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
@@ -869,6 +901,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 - 3.18.1's ✋ (2 Nov, on the laptop and the server): a test camera's three button names and the window's new line,
   Quitar and the put-back; the deploy's greeting, «Ver enlace» on barra-1 and its window's line; pushed
   `c2f7297..48e3f7f`.
+- 3.19's ✋ (2 Nov, on the server and the laptop): the recreate's greeting in LPQ demo-alertas, the admin's logins
+  (from the database), Voz del bot (demo's chat assigned, no note about the temporal chat), "Enviar prueba" and /foto;
+  "everything working correctly", pushed `48e3f7f..dd553ec`.
 
 ## Still forbidden (post-demo): STOP and flag if asked
 Coach screens, pi_csi/usb backends, the MODEL cascade (stays "off"), geometry v2, the báscula, POS,

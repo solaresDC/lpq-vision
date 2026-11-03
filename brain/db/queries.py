@@ -281,6 +281,35 @@ INSERT INTO sites (site, ingestion, device_key)
 VALUES (%(site)s, %(ingestion)s, %(device_key)s)
 """
 
+# Section 3.19.1 (owner, 2 Nov): Eliminar restaurante, for a restaurant that never recorded a plate. Its row, locked
+# for the deletion (a deactivated site takes no plate meanwhile), its plates counted (any plate, papelera included,
+# means history: it waits for Descargar todo), and every row that points at it, removed in one transaction.
+LOCK_SITE = "SELECT site, active FROM sites WHERE site = %(site)s FOR UPDATE"
+COUNT_SITE_PLATES = "SELECT COUNT(*) AS n FROM plates WHERE site = %(site)s"
+INACTIVE_SITES_WITH_PLATES = """
+SELECT s.site FROM sites s
+WHERE NOT s.active AND EXISTS (SELECT 1 FROM plates p WHERE p.site = s.site)
+"""
+SELECT_SITE_ACCOUNTS = "SELECT usuario, uid FROM users WHERE site = %(site)s ORDER BY usuario"
+COUNT_SITE_ROWS = """
+SELECT (SELECT COUNT(*) FROM camara_enlaces WHERE site = %(site)s) AS enlaces,
+       (SELECT COUNT(*) FROM telefonos WHERE site = %(site)s OR pide_site = %(site)s) AS telefonos,
+       (SELECT COUNT(*) FROM site_dish_photos WHERE site = %(site)s) AS fotos,
+       (SELECT COUNT(*) FROM horario_extensiones WHERE site = %(site)s) AS horarios
+"""
+LOCK_TELEFONOS_DE_SITIO = """
+SELECT id, pase, nombre, site, camera, pide_site, pide_camera
+FROM telefonos
+WHERE site = %(site)s OR pide_site = %(site)s
+ORDER BY id
+FOR UPDATE
+"""
+DELETE_SITE_ENLACES = "DELETE FROM camara_enlaces WHERE site = %(site)s"
+DELETE_SITE_HORARIOS = "DELETE FROM horario_extensiones WHERE site = %(site)s"
+DELETE_SITE_PHOTOS = "DELETE FROM site_dish_photos WHERE site = %(site)s RETURNING photo_path"
+DELETE_SITE_ACCOUNTS = "DELETE FROM users WHERE site = %(site)s RETURNING usuario, uid"
+DELETE_SITE = "DELETE FROM sites WHERE site = %(site)s AND NOT active RETURNING site"
+
 # The gafete's reads and writes. The value is compared in constant time by the caller, never logged.
 SELECT_DEVICE_KEY = "SELECT device_key FROM sites WHERE site = %(site)s AND active"
 SELECT_SITE_KEYS = "SELECT site, device_key FROM sites WHERE active AND device_key IS NOT NULL ORDER BY site"
