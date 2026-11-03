@@ -55,8 +55,8 @@ laptop Docker 27.1.1 + Compose v2.29.1-desktop.1; server Docker 29.8.0 + Compose
   config.yaml and textos.yaml).
 - Anthropic: prepaid account, auto-reload OFF (spending hard-lock). Key in .env only.
 - Telegram: bot @LPQ_vision_bot + group "LPQ demo-alertas". Each site's group lives in
-  sites.telegram_chat_id (Destino Telegram in the mostrador); the temporal TELEGRAM_CHAT_ID in .env is
-  only the last resort until the ceremony deletes it.
+  sites.telegram_chat_id (Destino Telegram in the mostrador); the temporal TELEGRAM_CHAT_ID died at the
+  ceremony (Section 3.19), so a site without its chat has its alerts logged as undeliverable.
 - The butler: lpq-butler.service on the server, installed in Section 3.18 by its listed commands (an update is the
   same copy plus `systemctl restart lpq-butler`); never a service on the laptop.
 
@@ -96,8 +96,9 @@ laptop Docker 27.1.1 + Compose v2.29.1-desktop.1; server Docker 29.8.0 + Compose
 15. Whitelists are the security model: the knob registry, the butler's three verbs, the keyed-model
     selector. Every dangerous action: double confirm with the visible diff. Every admin action: a
     bitácora row. The admin's name never appears in a public message.
-16. The three temporal .env keys (TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH, DEMO_PASSWORD_HASH) die at
-    the ceremony in the SPEC's exact order; config.yaml carries ZERO temporal keys.
+16. The three temporal .env keys (TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH, DEMO_PASSWORD_HASH) died at
+    the ceremony (Section 3.19, the SPEC's exact order): neither .env nor config.yaml carries a temporal key, and
+    none comes back.
 17. Reference photos (owner ruling 3.10.1): two levels, UNIVERSAL (brand: admin only, every site current
     and future; table brand_dish_photos) and LOCAL (per site; wins over the universal for that site).
     Every upload is a PAIR with one stem: the ORIGINAL at full resolution (shown in the panels; never
@@ -118,8 +119,8 @@ laptop Docker 27.1.1 + Compose v2.29.1-desktop.1; server Docker 29.8.0 + Compose
 
 ## Environment variables (.env: values typed only by the human)
 ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, DATABASE_URL
-(+ BIND_IP in the SERVER's .env only). Until the ceremony also: TELEGRAM_CHAT_ID,
-ADMIN_PASSWORD_HASH, DEMO_PASSWORD_HASH. Committed only as .env.example.
+(+ BIND_IP in the SERVER's .env only). The three temporal keys died at the ceremony (3.19): accounts live in
+the database, Telegram chats in the mostrador. Committed only as .env.example.
 
 ## My workflow
 Windows 11 (Acer Predator) · PowerShell (bash for the rule-20 one-liners) · VS Code + Claude Code ·

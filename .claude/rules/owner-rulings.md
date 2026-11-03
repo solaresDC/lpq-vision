@@ -8,7 +8,7 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   CLAUDE.md's hard rules and a ruling here ever disagree, STOP and flag.
 - Only HQ's section blocks add or change a line here, each section in its own commit. Never add a
   ruling on your own: if a log, a file or the owner's words seem to carry one that is missing, report it.
-- Last update: Section 3.18.1 (HEAD was c2f7297, Section 3.18).
+- Last update: Section 3.19 (HEAD was 48e3f7f, Section 3.18.1).
 
 ## How the build runs (standing rules)
 - A section arrives in parts, one part per message (Claude Code's input limit is about 50,000
@@ -83,9 +83,12 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (lpq-butler-prueba), started from a Windows shell (Git Bash or PowerShell; a WSL distro's own shell sees another
   /run/lpq-butler), then stops it with docker stop (it removes its socket) and removes it; a second run needs a
   fresh one (its lock remembers 10 minutes).
+- Since 3.19 the laptop has no bot container: the ceremony removed the stopped one, if there was one (its
+  environment still held the temporal keys). A laptop bot test creates it with its section's listed `up -d bot`,
+  between a listed stop and start of the server's bot (CLAUDE.md rule 18).
 
 ## The two machines today
-- Laptop: Fase 3 through 3.18.1 (the server runs the same code); one site, demo, whose Telegram chat is the
+- Laptop: Fase 3 through 3.19 (the server runs the same code); one site, demo, whose Telegram chat is the
   real "LPQ demo-alertas" group (set in 3.8). The menu is at version 1 and holds 4 dishes: tartine_chipotle_club,
   ensalada_queso_cabra and omelette_champinones, plus tartine_aguacate, the retired placeholder, off on
   both machines.
@@ -97,8 +100,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   tartine_aguacate off), with the dishes'
   notes and labels copied once by notas_from_menu in 3.18. Its two accounts were born once from its .env (admin and
   demo); its config.yaml is the one it had, now operator state, and it has no textos.yaml until a bot text is edited.
-  demo has no Telegram chat in the mostrador yet: its alerts go to the .env chat (LPQ demo-alertas) until its
-  Destino Telegram is set (before the ceremony removes the .env chat). demo is in mantenimiento since 3.18's switch
+  demo's Telegram chat is LPQ demo-alertas, written in its Destino Telegram by the owner before the ceremony (3.19).
+  Neither machine's .env holds a temporal key since 3.19. demo is in mantenimiento since 3.18's switch
   (owner, 21 and 30 Oct: until a phone is its camera; the owner takes it out in Voz del bot). The butler runs there as
   lpq-butler.service. Its bot is the live poller.
 - The two databases are separate: a change on one never reaches the other. Deploys carry code, never
@@ -110,6 +113,30 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   (before-recetario, before-ensalada).
 
 ## Rulings in force (newest first)
+
+### 3.19 (built in Section 3.19): the ceremony
+- The SPEC's order, as it ran: (1) the accounts born from .env at the first Fase 3 boot (the server's in 3.18, 30
+  Oct); (2) the cuarto password, born by the owner in the room's page (3.18's ✋, 2 Nov: the page replaced the SPEC's
+  set_password road there); (3) demo's chat written in its Destino Telegram on the server by the owner (the /id
+  number of LPQ demo-alertas); (4) checked by the owner: his login, "Enviar prueba" and /foto; (5) the owner deleted
+  the three lines from the server's .env (one listed sed in Git Bash that prints only a count) and from the laptop's
+  (by hand); (6) the recreate (a plain restart keeps the old environment: in HQ's rehearsal the keys were still inside
+  every container after a restart): the laptop first as the canary (its stopped bot container removed, then
+  `up -d --force-recreate postgres fastapi worker`), then the server (`stop bot`, `up -d --force-recreate postgres
+  fastapi worker`, and once fastapi serves `up -d --no-deps --force-recreate bot`, as 3.18's switch: a bot that
+  starts before fastapi serves reports the api down at once); (7) checked again: no container on either machine
+  holds a key (names only, never a value) and the server's greeting reached demo's chat from the database; the
+  owner's logins, test and /foto wait in 3.19's ✋.
+- From now: accounts and the cuarto password live only in the database, and Telegram chats only in the mostrador
+  (sites.telegram_chat_id, admin_chat_id). The code's env roads stay inert (SPEC): with no last-resort chat, a site
+  without its Destino Telegram has its alerts logged as undeliverable ("sin destino para ..."), and a fresh install
+  births its first admin with scripts/set_password (.env.example says how). No key comes back.
+- 3.19 changed no code, so nothing was deployed: the server keeps running 3.18.1's commit.
+- The server's old images (Fase 2's, 3.18's rollback; 3.18's, 3.18.1's) were already gone when 3.19 listed them
+  with `docker image ls -a` (2 Nov): only the four tagged images in use were left, and `docker image prune -f`
+  reclaimed 0B. When they went is not known (3.18's and 3.18.1's listings used `docker image ls`, which hides
+  untagged images in Docker 29). The build cache stays: a rollback builds from its code copy and that cache. From
+  now, list images with `docker image ls -a` or `--filter dangling=true`.
 
 ### 3.18.1 (owner, 2 Nov 2026; built in Section 3.18.1): «Crear enlace»; never a private tab
 - A camera's link button has three names (owner, 2 Nov, amending 3.17.5's): «Dame el enlace» only before the camera's
@@ -603,8 +630,8 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
 ### 3.11 (built in Section 3.11): the new bot
 - The bot is rewritten for the admin era (SPEC 1.5 and 1.8, and 3.11's promise list). Built defaults
   (HQ's standard choices; the owner may change any of them):
-  - A group serves the sites whose Telegram chat it is; the admin chat and the temporal .env chat
-    serve every active site. In a group with several sites, /foto, /cola and /extender take the
+  - A group serves the sites whose Telegram chat it is; the admin chat (and the temporal .env chat until the
+    ceremony of 3.19) serves every active site. In a group with several sites, /foto, /cola and /extender take the
     site first (/extender roma 23:30) and the bot asks instead of guessing.
   - /cola counts THAT site's plates and names the dish by its name (the clave is never shown).
   - /extender: "tonight" is the service day still open; between two service days, the nearer one
@@ -717,9 +744,6 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   is 2 g; garnishes stay components, and perejil stays even on plates where it may not show.
 
 ## Open promises (the section that keeps each one)
-- 3.19, the ceremony: TELEGRAM_CHAT_ID, ADMIN_PASSWORD_HASH and DEMO_PASSWORD_HASH leave both .env files in the
-  SPEC's order; the present/absent proof; the server's old images removed: Fase 2's (3.18's rollback; 3.18's ✋ passed
-  on 2 Nov), and 3.18's (3.18.1's rollback) once 3.18.1's ✋ passed.
 - 3.20, T-F6 on the server: the full regression, the yes/no checklist against the 14 criteria, the
   final phone test, and disk headroom (a bigger disk before production if needed).
 
@@ -806,9 +830,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   no lpq_2026101*.dump on it): none to delete.
 
 ## Waiting on the owner (no section owns these)
-- 3.18.1's ✋ (after its report): on the laptop, a test camera's three button names and the window's new line, then
-  Quitar and the put-back; on the server, the greeting of the deploy, «Ver enlace» on barra-1 and its window's new
-  line; one push (`c2f7297..<3.18.1>`).
+- 3.19's ✋ (after its report): the recreate's greeting in LPQ demo-alertas; the admin's login on the server and on
+  the laptop; Voz del bot on the server (demo's chat assigned, no note about the temporal chat); "Enviar prueba"; /foto
+  answered for demo; one push (`48e3f7f..<3.19>`).
 - 3.18's iPhone item 10, its second half: the same WhatsApp link, the next day, goes straight to the camera.
 - Crear restaurante on the server: when the first real café is ready (owner, 20 Oct).
 - omelette_champinones: switch it off on the server? (asked 30 Sep, unanswered)
@@ -842,6 +866,9 @@ the owner pastes the blocks here; Claude Code executes and commits; the owner pu
   in the room, the butler green and Reiniciar el bot (the greeting again), demo in mantenimiento, the iPhone list (see
   "Para 3.18: la lista del iPhone"; item 10's second half waits), localhost's browser data cleared, the 15 Oct copy not
   found; pushed `04c1f53..c2f7297`. The owner's note on it (an expired link's button) became 3.18.1.
+- 3.18.1's ✋ (2 Nov, on the laptop and the server): a test camera's three button names and the window's new line,
+  Quitar and the put-back; the deploy's greeting, «Ver enlace» on barra-1 and its window's line; pushed
+  `c2f7297..48e3f7f`.
 
 ## Still forbidden (post-demo): STOP and flag if asked
 Coach screens, pi_csi/usb backends, the MODEL cascade (stays "off"), geometry v2, the báscula, POS,
