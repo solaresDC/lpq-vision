@@ -345,6 +345,18 @@ def _align_state(key: tuple[str, str], now: datetime) -> dict[str, Any]:
     return {"active": True, "until": until.isoformat(), "seconds_left": int((until - now).total_seconds())}
 
 
+def forget_camera(site: str, camera: str) -> None:
+    """Section 3.19.2 (owner, 3 Nov, his explicit word for this addition): a camera that no longer exists (Quitar,
+    Eliminar restaurante) leaves nothing here: its last copy, its watcher and its alignment pause go, so a camera born
+    later with the same name starts clean. Only that exact (site, camera), called after the removal landed; nothing
+    can put them back, since push_frame refuses a camera that is not in config.yaml."""
+    key = (site, camera)
+    with _LOCK:
+        _FRAMES.pop(key, None)
+        _WATCHED.pop(key, None)
+        _ALIGN.pop(key, None)
+
+
 @router.post("/api/camera/frame")
 async def push_frame(
     request: Request,

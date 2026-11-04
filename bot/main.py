@@ -737,6 +737,32 @@ def rule_bitacora(rows: Iterable[Mapping[str, Any]], cfg: Config, now: datetime)
     return out
 
 
+def forget_deleted(state: BotState, rows: Iterable[Mapping[str, Any]]) -> None:
+    """Section 3.19.2 (owner, 3 Nov): a camera removed (camera.delete) or a restaurant gone for good (site.delete
+    without a wait, or the erase's site.erase) leaves nothing in the bot's memory: its 📵, lens, black and alignment
+    marks go (a restaurant's later-close marks too), so a camera born later with the same name starts clean. A
+    site.delete that only starts the wait forgets nothing (Restaurar brings it back as it was). Only what those
+    bitácora rows name; each row is read once (the rows take_log_rows handed this round)."""
+    for row in rows:
+        action, detail = row["action"], row.get("detail") or {}
+        site = detail.get("site")
+        if not site:
+            continue
+        if action == "camera.delete" and detail.get("camera"):
+            gone = {(site, detail["camera"])}
+            match = gone.__contains__
+        elif action == "site.erase" or (action == "site.delete" and not detail.get("espera")):
+            match = (lambda key, s=site: key[0] == s)
+        else:
+            continue
+        for marks in (state.lens_last, state.black_last, state.align_active):
+            for key in [k for k in marks if match(k)]:
+                del marks[key]
+        state.silent = {k for k in state.silent if not match(k)}
+        if action != "camera.delete":           # the later-close marks are the restaurant's, keyed by its close
+            state.ended = {k for k in state.ended if not match(k)}
+
+
 # --- gathering the inputs (threads: psycopg and urllib are sync) -------------------------------
 
 def _http_get(path: str, key: str | None = None) -> tuple[int, bytes, dict[str, str]]:
@@ -1120,7 +1146,9 @@ class Bot:
                 rule_extension_end(state, nights, now, announce=False)
             else:
                 messages += rule_failures(state, db)
-                messages += rule_bitacora(take_log_rows(state, db.log_rows), cfg, now)
+                fresh = take_log_rows(state, db.log_rows)
+                messages += rule_bitacora(fresh, cfg, now)
+                forget_deleted(state, fresh)        # Section 3.19.2: a removed camera's marks go
                 messages += rule_extension_end(state, nights, now)
             messages += rule_backlog(state, db, cfg)
             messages += rule_silent_worker(state, db, cfg, now)

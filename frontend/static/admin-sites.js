@@ -43,6 +43,9 @@
 // Section 3.19.1 (owner, 2 Nov): a deactivated restaurant that never recorded a plate shows «Eliminar restaurante» in its
 // card (the admin's): gate 1 = type its exact name; gate 2 = the server's double confirm; then it is gone for good, with
 // no waiting. One with plates keeps its data (only deactivated for now); a site of menu.yaml is never deleted here.
+// Section 3.19.2 (owner, 2 and 3 Nov): one WITH plates, deactivated, offers Descargar todo (its data and its photos,
+// one zip each, saved by the browser) and, once both left whole, Eliminar with a 30-day wait; in its wait its card
+// is eliminatedCard (Restaurar). Its plates stay in Panel, Review and Galería meanwhile.
 
 import { api, el, fmtDate, poll, qs, toast } from "/static/app.js";
 import {
@@ -427,6 +430,7 @@ function restore(node, kept) {
 // here: the ctx its own actions use, whose refresh() rebuilds this card alone. Activar and Desactivar keep the
 // whole tab's refresh (the site list above changes with them).
 function siteCard(s, ctx, view) {
+  if (s.eliminable === "eliminado") return eliminatedCard(s, ctx);   // Section 3.19.2: in its wait
   const here = { ...ctx, refresh: () => refreshCard(ctx, view, s.site) };
   const error = el("div", { class: "kit-error" });
   const parts = [
@@ -1013,16 +1017,18 @@ function adminRow(s, ctx, error) {
   return el("div", {}, el("div", { class: "kit-edit" }, reveal, regen, active), shown);
 }
 
-// Section 3.19.1: Eliminar restaurante, in an inactive restaurant's card (the admin's). eliminable comes from the server:
-// si (no plate in the database), platos (it has history: its data stays), semilla (named in menu.yaml) or menu
-// (menu.yaml could not be read: none is deleted).
+// Sections 3.19.1 and 3.19.2: Eliminar restaurante, in an inactive restaurant's card (the admin's). eliminable comes
+// from the server: si (no plate in the database: for good, at once), descargar, cola or listo (it has plates:
+// Descargar todo first, then Eliminar with the wait), semilla (named in menu.yaml) or menu (menu.yaml could not be
+// read: none is deleted). One in its wait (eliminado) has its own card (eliminatedCard).
 const ELIMINABLE_NOTES = {
-  platos: "Ya registró platos: sus datos se quedan. Por ahora solo se desactiva.",
   semilla: "Es un sitio de la semilla del menú (menu.yaml): no se elimina desde aquí.",
   menu: "No se pudo leer menu.yaml: por ahora no se elimina ningún restaurante.",
 };
+const HISTORY_STATES = new Set(["descargar", "cola", "listo"]);
 
 function deleteRow(s, ctx, error) {
+  if (HISTORY_STATES.has(s.eliminable)) return historyRow(s, ctx, error);
   if (s.eliminable !== "si") return el("p", { class: "muted", text: ELIMINABLE_NOTES[s.eliminable] || "" });
   const remove = wire(btn("Eliminar restaurante", "bad"), error, async () => {
     const typed = await typeToConfirm({
@@ -1043,6 +1049,81 @@ function deleteRow(s, ctx, error) {
   return el("div", {},
     el("p", { class: "muted", text: "No tiene platos registrados: se puede eliminar para siempre, sin espera." }),
     el("div", { class: "kit-edit" }, remove));
+}
+
+// Section 3.19.2: a restaurant with plates. Descargar todo is two files (its data, its photos); the browser saves
+// each where the admin chooses, and the card shows the date of each once its last byte left. Eliminar is offered
+// only once both were downloaded (and nothing waits in the queue); it then waits its days before the erase.
+function megas(bytes) {
+  return bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(bytes / 1024)) + " KB";
+}
+
+function downloadButton(s, que, label, error) {
+  return wire(btn(label), error, async () => {
+    const path = sitePath(s.site) + "/descarga/" + que;
+    const info = await api(path + qs({ revisar: 1 }));
+    const what = que === "datos" ? info.platos + " platos" : info.archivos + " fotos, " + megas(info.bytes);
+    const link = el("a", { href: path, download: "" });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    toast("descargando " + que + " de " + s.site + " (" + what + "): el navegador lo guarda", "ok");
+  });
+}
+
+function historyRow(s, ctx, error) {
+  const b = s.baja;
+  const when = (at, word) => (at ? word + " el " + fmtDate(at) : "sin descargar");
+  const parts = [
+    el("p", { class: "muted", text: "Tiene " + b.platos + " platos. Antes de eliminarlo, descarga sus datos y sus "
+      + "fotos (cada uno es un archivo .zip que guardas donde quieras). Eliminar lo deja " + b.dias + " días en "
+      + "«Restaurantes eliminados», donde se puede restaurar; después se borra para siempre." }),
+    el("p", { text: "Datos: " + when(b.datos, "descargados") }),
+    el("p", { text: "Fotos: " + when(b.fotos, "descargadas") }),
+  ];
+  if (s.eliminable === "cola") parts.push(el("p", { class: "kit-note", text: "Aún hay platos de este restaurante en la cola: espera a que terminen." }));
+  const row = el("div", { class: "kit-edit" });
+  if (s.eliminable !== "cola") row.append(downloadButton(s, "datos", "Descargar datos", error), downloadButton(s, "fotos", "Descargar fotos", error));
+  if (s.eliminable === "listo") {
+    row.append(wire(btn("Eliminar restaurante", "bad"), error, async () => {
+      const typed = await typeToConfirm({
+        title: "Eliminar el restaurante " + s.site,
+        name: s.site,
+        warning: "Tiene " + b.platos + " platos: queda " + b.dias + " días en «Restaurantes eliminados», con "
+          + "sus cuentas cerradas, y se puede restaurar. Después se borra para siempre.",
+      });
+      if (!typed) return;
+      const result = await confirmFlow(() =>
+        api(sitePath(s.site) + "/delete", { method: "POST", json: { name: s.site } }));
+      if (result) {
+        toast("restaurante " + s.site + " eliminado: se borra el " + fmtDate(result.borra), "ok");
+        await ctx.refreshOverview();
+        ctx.refresh();
+      }
+    }));
+  }
+  parts.push(row);
+  return el("div", {}, ...parts);
+}
+
+// Section 3.19.2: a restaurant in its wait. Nothing of it changed but its accounts (closed, in Eliminadas);
+// Restaurar brings it back as it was, still deactivated.
+function eliminatedCard(s, ctx) {
+  const error = el("div", { class: "kit-error" });
+  const restore = wire(btn("Restaurar", "ok"), error, async () => {
+    await api(sitePath(s.site) + "/restore", { method: "POST" });
+    toast("restaurante " + s.site + " restaurado: sigue desactivado", "ok");
+    await ctx.refreshOverview();
+    ctx.refresh();
+  });
+  return card("Sitio " + s.site,
+    el("div", { class: "kit-head" }, el("span", { class: "chip bad", text: "eliminado" })),
+    el("p", { text: "Eliminado el " + fmtDate(s.baja.eliminado) + "; se borra para siempre el " + fmtDate(s.baja.borra)
+      + ": sus " + s.baja.platos + " platos y sus fotos, sus cámaras, sus cuentas (cerradas, en Eliminadas), sus enlaces y "
+      + "teléfonos, sus fotos locales del menú y sus cambios de horario." }),
+    el("p", { class: "muted", text: "Hasta entonces, «Restaurar» lo devuelve tal cual, desactivado y con sus cuentas." }),
+    ctx.sess.admin ? el("div", { class: "kit-edit" }, restore) : null,
+    error);
 }
 
 // --- Crear restaurante (admin) -------------------------------------------------------------------

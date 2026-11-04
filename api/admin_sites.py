@@ -4,8 +4,11 @@ GET  /api/admin/sites?site=                          the visible sites: DB row +
                                                      camera its light, its phone, the phones waiting and its link
 POST /api/admin/sites                                Crear restaurante (admin): ALL OR NOTHING across DB and config
 POST /api/admin/sites/{site}/edit                    active / ingestion (admin; deactivating asks for the double confirm)
-POST /api/admin/sites/{site}/delete                  Eliminar restaurante (admin, Section 3.19.1): a deactivated one that
-                                                     never recorded a plate; typed name + double confirm; for good
+POST /api/admin/sites/{site}/delete                  Eliminar restaurante (admin, Sections 3.19.1 and 3.19.2): a
+                                                     deactivated one; typed name + double confirm; without plates for
+                                                     good at once, with plates after Descargar todo and a 30-day wait
+POST /api/admin/sites/{site}/restore                 Restaurar (admin, Section 3.19.2): a restaurant in its wait comes back
+GET  /api/admin/sites/{site}/descarga/{que}          Descargar todo (admin, Section 3.19.2): datos or fotos, one zip each
 POST /api/admin/sites/{site}/funciones               the site's two function switches
 POST /api/admin/sites/{site}/enlaces/gerente         the link durations the site's manager may choose (admin)
 POST /api/admin/enlaces/gerente                      the same durations for every site at once (admin)
@@ -60,20 +63,35 @@ a test) goes for good, with no waiting, after its typed name and the double conf
 its block in config.yaml with its cameras, its links and phones, its local menu photo rows (a file only when no row of
 either level uses it any more) and its one-day hours. Its bitácora rows stay. A restaurant with plates waits for
 Descargar todo; a site of menu.yaml (the seed) is never deleted here. Each inactive site's view says which (eliminable).
+Section 3.19.2 (owner, 2 and 3 Nov): a restaurant WITH plates. Deactivated, it offers Descargar todo: two zips the admin
+saves where he chooses (its data: restaurant, menu, bitácora, plates and jobs; its photos: plates and local menu
+photos), never a password hash, a gafete, a pass, a link code or a chat number; each leaves its mark once its last
+byte left. With both (and nothing in the queue), Eliminar closes its accounts (to Eliminadas) and starts a 30-day
+wait in which it cannot be switched on and Restaurar brings it back as it was; then the api's look (once a minute)
+erases it for good (its plates and photos, then everything 3.19.1 deletes). Its plates stay visible meanwhile (owner,
+3 Nov).
+Quitar and Eliminar also clear the removed cameras' RAM (routes.forget_camera; the owner's explicit word, 3 Nov).
 """
 
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
+import json
 import logging
 import secrets
-from collections.abc import Callable
+import shutil
+import zipfile
+from collections.abc import Callable, Iterator
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from psycopg import errors as pg_errors
 from psycopg.types.json import Jsonb
 
@@ -98,6 +116,8 @@ from brain.validator.models import (
     Config,
     ConfirmNameRequest,
     DURACIONES_GERENTE_ORDEN,
+    RESERVED_SITE_SLUGS,
+    SITE_SLUG_RE,
     EnlaceDuracionRequest,
     EnlaceNuevoRequest,
     Funciones,
@@ -281,7 +301,8 @@ def _site_view(row: dict[str, Any], site_cfg: SiteConfig | None, cfg: Config, ph
         "chat_set": row["telegram_chat_id"] is not None,
         "in_config": site_cfg is not None,
         "zona": knobs.timezone_of(cfg, row["site"]),     # the site's clock: a link's day and hour are read on it
-        "eliminable": (borrable or {}).get(row["site"]),  # Section 3.19.1: inactive only: si, platos, semilla, menu
+        "eliminable": ((borrable or {}).get(row["site"]) or {}).get("eliminable"),   # Sections 3.19.1, 3.19.2
+        "baja": ((borrable or {}).get(row["site"]) or {}).get("baja"),               # inactive only (else None)
     }
     if site_cfg is None:
         view.update({"funciones": None, "cameras": [], "gerente_duraciones": [],
@@ -327,17 +348,43 @@ def _seed_refusal(site: str) -> HTTPException | None:
     return None
 
 
-def _borrable(conn: psycopg.Connection, rows: list[dict[str, Any]]) -> dict[str, str]:
-    """Section 3.19.1: for each INACTIVE site, whether Eliminar restaurante is offered: si (no plate in the database),
-    platos (it has history: Descargar todo first), semilla (named in menu.yaml) or menu (menu.yaml could not be read:
-    none is deleted). One read, only when a site is off."""
-    inactive = [r["site"] for r in rows if not r["active"]]
+def _borrable(conn: psycopg.Connection, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Sections 3.19.1 and 3.19.2: for each INACTIVE site, which road Eliminar restaurante offers (eliminable) and
+    where it stands (baja). eliminable: eliminado (in its wait: Restaurar until borra), menu (menu.yaml could not be
+    read: none is deleted), semilla (named in menu.yaml), si (no plate in the database: for good, at once), cola (its
+    plates still wait in the queue), descargar (Descargar todo first: both files) or listo (both downloaded since its
+    last switch: Eliminar with the wait). One read, only when a site is off."""
+    inactive = {r["site"] for r in rows if not r["active"]}
     if not inactive:
         return {}
-    with_plates = {r["site"] for r in conn.execute(q.INACTIVE_SITES_WITH_PLATES).fetchall()}
     seed = _seed_sites()
-    return {s: "menu" if seed is None else "semilla" if s in seed else "platos" if s in with_plates else "si"
-            for s in inactive}
+    out: dict[str, dict[str, Any]] = {}
+    for r in conn.execute(q.INACTIVE_SITES_BAJA).fetchall():
+        site = r["site"]
+        if site not in inactive:
+            continue
+        platos, cola = int(r["platos"]), int(r["cola"])
+        if r["eliminado_at"] is not None:
+            state = "eliminado"
+        elif seed is None:
+            state = "menu"
+        elif site in seed:
+            state = "semilla"
+        elif not platos:
+            state = "si"
+        elif cola:
+            state = "cola"
+        elif r["descarga_datos_at"] is None or r["descarga_fotos_at"] is None:
+            state = "descargar"
+        else:
+            state = "listo"
+        out[site] = {"eliminable": state, "baja": {
+            "platos": platos, "cola": cola, "dias": SITE_RECOVERY_DAYS,
+            "datos": _iso(r["descarga_datos_at"]), "fotos": _iso(r["descarga_fotos_at"]),
+            "eliminado": _iso(r["eliminado_at"]),
+            "borra": _iso(_erase_day(r["eliminado_at"])) if r["eliminado_at"] is not None else None,
+        }}
+    return out
 
 
 async def _view_of(site: str) -> dict[str, Any]:
@@ -367,6 +414,7 @@ async def list_sites(site: str | None = None, session: Session = Depends(require
         _site_view(r, cfg.sites.get(r["site"]), cfg, phones, links, borrable)
         for r in rows if scope is None or r["site"] == scope
     ]
+    views.sort(key=lambda v: v["eliminable"] == "eliminado")     # Section 3.19.2: the ones in their wait, last
     return {"sites": views}
 
 
@@ -425,6 +473,13 @@ async def edit_site(site: str, body: SiteEditRequest, session: Session = Depends
 
     async def apply() -> dict[str, Any]:
         def db_work(conn: psycopg.Connection) -> None:
+            if body.active is not None:
+                # Section 3.19.2: one in its wait switches only through Restaurar; any switch clears the downloads'
+                # marks (a download counts only for data that no longer changes).
+                if conn.execute(q.LOCK_SITE_BAJA, {"site": site}).fetchone()["eliminado_at"] is not None:
+                    raise HTTPException(status_code=409, detail=(
+                        f"El restaurante {site} está en Restaurantes eliminados: restáuralo primero."))
+                conn.execute(q.CLEAR_SITE_DESCARGAS, {"site": site})
             conn.execute(q.EDIT_SITE, {"site": site, "ingestion": body.ingestion, "active": body.active})
             _bitacora(conn, session, "site.edit", {"site": site, "ingestion": body.ingestion, "active": body.active})
 
@@ -451,28 +506,32 @@ async def edit_site(site: str, body: SiteEditRequest, session: Session = Depends
 
 # --- Eliminar restaurante (admin; Section 3.19.1) -----------------------------------------------
 
-def _delete_guard(conn: psycopg.Connection, site: str, lock: bool) -> int:
-    """The rules Eliminar checks at step 1 and again inside its transaction: the site exists, is deactivated and has
-    no plate (papelera included). Answers its plate count (0)."""
-    row = conn.execute(q.LOCK_SITE if lock else q.SELECT_SITE, {"site": site}).fetchone()
+def _delete_guard(conn: psycopg.Connection, site: str, lock: bool, erasing: bool = False) -> int:
+    """The rules Eliminar checks at step 1 and again inside its transaction: the site exists, is deactivated, has no
+    plate (papelera included) and is not in its wait (erasing: the end of that wait, Section 3.19.2). Answers its
+    plate count (0)."""
+    row = conn.execute(q.LOCK_SITE_BAJA if lock else q.SELECT_SITE_BAJA, {"site": site}).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail=f"sitio desconocido: {site}")
     if row["active"]:
         raise HTTPException(status_code=409, detail=f"El restaurante {site} está activo: desactívalo primero.")
+    if row["eliminado_at"] is not None and not erasing:
+        raise HTTPException(status_code=409, detail=f"El restaurante {site} ya está en Restaurantes eliminados.")
     plates = int(conn.execute(q.COUNT_SITE_PLATES, {"site": site}).fetchone()["n"])
     if plates:
-        raise HTTPException(status_code=409, detail=(
-            f"El restaurante {site} ya registró platos ({plates}): sus datos se quedan. Por ahora solo se desactiva."))
+        raise HTTPException(status_code=409, detail=f"El restaurante {site} cambió mientras tanto: mira la tarjeta otra vez.")
     return plates
 
 
-def _delete_rows(conn: psycopg.Connection, site: str, cameras: list[str], accounts: list[tuple[str, int]]) -> dict[str, Any]:
+def _delete_rows(conn: psycopg.Connection, site: str, cameras: list[str], accounts: list[tuple[str, int]],
+                 erasing: bool = False) -> dict[str, Any]:
     """Inside the transaction: every row that points at the site goes, then the site. A phone that captures another
     restaurant's camera keeps it (only its request here goes); one that asks for another restaurant keeps asking.
-    accounts: the ones step 1 named; any other now (the site's row is locked, so none can join after) refuses."""
+    accounts: the ones step 1 named; any other now (the site's row is locked, so none can join after) refuses.
+    erasing: the end of a wait (Section 3.19.2), its plates already gone."""
     for camera in sorted(cameras):                 # the cameras' locks first (a phone writer takes its camera's first)
         conn.execute(q.LOCK_CAMARA, {"site": site, "camera": camera})
-    _delete_guard(conn, site, lock=True)
+    _delete_guard(conn, site, lock=True, erasing=erasing)
     if [(a["usuario"], a["uid"]) for a in conn.execute(q.SELECT_SITE_ACCOUNTS, {"site": site}).fetchall()] != accounts:
         raise HTTPException(status_code=409, detail=f"El restaurante {site} cambió mientras tanto: mira la tarjeta otra vez.")
     notes: list[tuple[str, str]] = []
@@ -530,6 +589,8 @@ async def delete_site(site: str, body: ConfirmNameRequest, session: Session = De
     refusal = await asyncio.to_thread(_seed_refusal, site)
     if refusal is not None:
         raise refusal
+    if await asyncio.to_thread(_read, lambda c: int(c.execute(q.COUNT_SITE_PLATES, {"site": site}).fetchone()["n"])):
+        return await _delete_with_wait(site, session)        # Section 3.19.2: a restaurant with history waits
     cfg = await _config()
     site_cfg = cfg.sites.get(site)
     cameras = sorted(site_cfg.cameras) if site_cfg is not None else []
@@ -568,6 +629,7 @@ async def delete_site(site: str, body: ConfirmNameRequest, session: Session = De
         _note_all(done["notes"])
         for account in done["accounts"]:
             drop_sessions_of(account["usuario"])
+        _forget_cameras(site, cameras)                      # Section 3.19.2: its cameras' RAM goes too
         removed = await asyncio.to_thread(_after_delete, site, done["photos"])
         log.info("site deleted %s accounts=%d links=%d phones=%d photo_rows=%d files=%d user=%s", site,
                  len(done["accounts"]), done["enlaces"], len(done["notes"]), done["fotos"], len(removed), session.user)
@@ -594,6 +656,558 @@ async def delete_site(site: str, body: ConfirmNameRequest, session: Session = De
         },
         run=run,
     )
+
+
+# --- Eliminar restaurante with history: Descargar todo, the wait and Restaurar (admin; Section 3.19.2) -----------
+
+SITE_RECOVERY_DAYS = 30            # owner, 3 Nov: a deleted restaurant with history waits this long (as Eliminadas)
+SITE_ERASE_POLL_S = 60             # the api looks for restaurants past their wait once a minute (one cheap read)...
+SITE_ERASE_SETTLE_S = 120          # ...the first time two minutes after its boot
+SITE_ERASE_BATCH = 500             # plates per erase transaction
+SITE_ERASE_LOCK = 31902            # one erase at a time (a Postgres advisory lock, held for the whole look)
+_ERASE_NOTED: dict[str, str] = {}  # what the look last logged of each restaurant it could not erase (said once)
+FORGET_AGAIN_S = 5                 # a copy already past its checks when its camera went is forgotten again this late
+DOWNLOADS = ("datos", "fotos")
+ZIP_ROWS = 2000                    # rows a download's server-side cursor fetches at a time
+COLA_ACTIVA = "Aún hay platos de este restaurante en la cola: espera a que terminen."
+DOWNLOAD_FROM = ("same-origin", "none")   # a browser's Sec-Fetch-Site a download may come with (never another site)
+
+
+class _NotDue(Exception):
+    """The erase found the restaurant no longer due (restored, its row gone, now a seed site): it waits for the next
+    look."""
+
+
+def _erase_day(eliminado_at: datetime) -> datetime:
+    return eliminado_at + timedelta(days=SITE_RECOVERY_DAYS)
+
+
+def _forget_cameras(site: str, cameras: list[str]) -> None:
+    """Section 3.19.2 (owner, 3 Nov): the removed cameras leave nothing in the api's RAM (their last copy, watcher and
+    alignment pause), now and once more FORGET_AGAIN_S later (a copy that passed its checks just before the removal
+    lands after it). Only these exact names, only after the removal landed."""
+    names = sorted(set(cameras))
+
+    def forget() -> None:
+        for camera in names:
+            lane.forget_camera(site, camera)
+
+    forget()
+    try:
+        asyncio.get_running_loop().call_later(FORGET_AGAIN_S, forget)
+    except RuntimeError:           # no running loop: the pass above is the only one
+        pass
+
+
+def _wait_guard(conn: psycopg.Connection, site: str, lock: bool) -> dict[str, Any]:
+    """The rules of Eliminar with the wait, at step 1 and again inside its transaction: the site exists, is
+    deactivated and not yet in its wait, has plates, none of them in the queue, and both downloads were made since
+    its last switch, with no plate newer than either and no result newer than the data file. Answers the site's row
+    and its plate count."""
+    row = conn.execute(q.LOCK_SITE_BAJA if lock else q.SELECT_SITE_BAJA, {"site": site}).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"sitio desconocido: {site}")
+    if row["active"]:
+        raise HTTPException(status_code=409, detail=f"El restaurante {site} está activo: desactívalo primero.")
+    if row["eliminado_at"] is not None:
+        raise HTTPException(status_code=409, detail=(
+            f"El restaurante {site} ya está en Restaurantes eliminados: se borra el "
+            f"{_human_date(_erase_day(row['eliminado_at']))}."))
+    plates = int(conn.execute(q.COUNT_SITE_PLATES, {"site": site}).fetchone()["n"])
+    if not plates:
+        raise HTTPException(status_code=409, detail=f"El restaurante {site} cambió mientras tanto: mira la tarjeta otra vez.")
+    if int(conn.execute(q.COUNT_SITE_COLA, {"site": site}).fetchone()["n"]):
+        raise HTTPException(status_code=409, detail=COLA_ACTIVA)
+    missing = [word for word, at in (("los datos", row["descarga_datos_at"]), ("las fotos", row["descarga_fotos_at"]))
+               if at is None]
+    if missing:
+        raise HTTPException(status_code=409, detail=(
+            f"Primero Descargar todo de {site}: sus datos y sus fotos (falta: {' y '.join(missing)})."))
+    newest = conn.execute(q.SITE_NEWEST, {"site": site}).fetchone()
+    if newest["plato"] is not None and newest["plato"] > min(row["descarga_datos_at"], row["descarga_fotos_at"]):
+        raise HTTPException(status_code=409, detail=(
+            f"Hay platos nuevos de {site} después de sus descargas: descarga sus datos y sus fotos otra vez."))
+    if newest["resultado"] is not None and newest["resultado"] > row["descarga_datos_at"]:
+        raise HTTPException(status_code=409, detail=(
+            f"Hay resultados nuevos de {site} después de la descarga de sus datos: descárgalos otra vez."))
+    return {**row, "platos": plates}
+
+
+async def _delete_with_wait(site: str, session: Session) -> dict[str, Any]:
+    """Eliminar with the wait (Section 3.19.2), the road of a restaurant with plates: step 2 closes its accounts at
+    once (to Eliminadas, their state kept for Restaurar) and starts its SITE_RECOVERY_DAYS, in which it cannot be
+    switched on. Its plates and its config.yaml block stay (Restaurar gives it back as it was)."""
+    cfg = await _config()
+    site_cfg = cfg.sites.get(site)
+    cameras = sorted(site_cfg.cameras) if site_cfg is not None else []
+
+    def look(conn: psycopg.Connection) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        return _wait_guard(conn, site, lock=False), conn.execute(q.SELECT_SITE_OPEN_ACCOUNTS, {"site": site}).fetchall()
+
+    row, accounts = await asyncio.to_thread(_read, look)
+    named = [(a["usuario"], a["uid"]) for a in accounts]
+    names = ", ".join(f"{a['usuario']} (#{a['uid']})" for a in accounts) or "ninguna"
+    erase_day = _human_date(_erase_day(datetime.now(timezone.utc)))
+
+    async def run() -> dict[str, Any]:
+        late = await asyncio.to_thread(_seed_refusal, site)     # menu.yaml read again at step 2 (as 3.19.1's road)
+        if late is not None:
+            raise late
+
+        def work(conn: psycopg.Connection) -> tuple[datetime, list[dict[str, Any]], int]:
+            again = _wait_guard(conn, site, lock=True)
+            now_accounts = conn.execute(q.SELECT_SITE_OPEN_ACCOUNTS, {"site": site}).fetchall()
+            if [(a["usuario"], a["uid"]) for a in now_accounts] != named:
+                raise HTTPException(status_code=409, detail=f"El restaurante {site} cambió mientras tanto: mira la tarjeta otra vez.")
+            kept = [{"usuario": a["usuario"], "uid": a["uid"], "activa": bool(a["active"])} for a in now_accounts]
+            at = conn.execute(q.SET_SITE_ELIMINADO, {"site": site, "cuentas": Jsonb(kept)}).fetchone()["eliminado_at"]
+            conn.execute(q.CLOSE_SITE_ACCOUNTS, {"site": site, "at": at})
+            _bitacora(conn, session, "site.delete", {
+                "site": site, "camaras": cameras, "cuentas": [{"usuario": a["usuario"], "uid": a["uid"]} for a in kept],
+                "platos": again["platos"], "espera": True, "borra": _erase_day(at).isoformat(),
+            })
+            return at, kept, again["platos"]
+
+        at, kept, plates = await asyncio.to_thread(_tx, work)
+        for account in kept:
+            drop_sessions_of(account["usuario"])
+        log.info("site deleted with wait %s plates=%d accounts=%d erase=%s user=%s", site, plates, len(kept),
+                 _erase_day(at).date().isoformat(), session.user)
+        return {"site": site, "espera": True, "borra": _erase_day(at).isoformat(), "platos": plates,
+                "cuentas": [{"usuario": a["usuario"], "uid": a["uid"]} for a in kept]}
+
+    return propose(
+        session,
+        action="eliminar el restaurante " + site,
+        diff={
+            "resumen": (
+                f"El restaurante {site} tiene {row['platos']} platos: se elimina con espera de {SITE_RECOVERY_DAYS} días. "
+                f"Ahora sus cuentas se cierran (pasan a Eliminadas) y el restaurante pasa a «Restaurantes eliminados»; "
+                f"hasta el {erase_day} «Restaurar» lo devuelve tal cual. Ese día se borra para siempre, y esto ya no se "
+                "puede deshacer: sus platos y sus fotos, sus cámaras, sus cuentas, sus enlaces y teléfonos, sus fotos "
+                "locales del menú y sus cambios de horario. Sus datos y sus fotos ya se descargaron "
+                f"({_human_date(row['descarga_datos_at'])} y {_human_date(row['descarga_fotos_at'])}): antes de "
+                "confirmar, revisa que los dos .zip abren en tu computadora. Las filas de la bitácora se quedan."
+            ),
+            "cambios": [
+                {"que": "restaurante " + site, "antes": f"desactivado, {row['platos']} platos",
+                 "despues": f"eliminado (se borra el {erase_day})"},
+                {"que": "cuentas", "antes": names, "despues": "(a Eliminadas)"},
+            ],
+        },
+        run=run,
+    )
+
+
+@router.post("/api/admin/sites/{site}/restore")
+async def restore_site(site: str, session: Session = Depends(require_admin)) -> dict[str, Any]:
+    """Restaurar (Section 3.19.2): a restaurant in its wait comes back as it was, still deactivated; the accounts its
+    Eliminar closed come back with the state each one had (an account deleted before it stays in Eliminadas)."""
+    def work(conn: psycopg.Connection) -> tuple[list[str], list[str]]:
+        row = conn.execute(q.LOCK_SITE_BAJA, {"site": site}).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"sitio desconocido: {site}")
+        if row["eliminado_at"] is None:
+            raise HTTPException(status_code=409, detail=f"El restaurante {site} no está en Restaurantes eliminados.")
+        if _erase_day(row["eliminado_at"]) <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=409, detail=f"La espera de {site} terminó: se está borrando para siempre.")
+        back: list[str] = []
+        lost: list[str] = []
+        for account in row["eliminado_cuentas"] or []:
+            done = conn.execute(q.REOPEN_SITE_ACCOUNT, {
+                "usuario": account["usuario"], "uid": account["uid"], "site": site, "at": row["eliminado_at"],
+                "active": bool(account["activa"]),
+            }).fetchone()
+            (back if done else lost).append(account["usuario"])
+        conn.execute(q.CLEAR_SITE_ELIMINADO, {"site": site})
+        _bitacora(conn, session, "site.restore", {"site": site, "cuentas": back, "no_volvieron": lost})
+        return back, lost
+
+    back, lost = await asyncio.to_thread(_tx, work)
+    log.info("site restored %s accounts=%d user=%s", site, len(back), session.user)
+    view = await _view_of(site)
+    return {"site": site, "cuentas": back, "no_volvieron": lost, "view": view}
+
+
+class _ZipPipe:
+    """Where the zip writes: it keeps what was written until the stream takes it (a zip written to a stream that
+    cannot seek carries its sizes after each file, so nothing is ever written twice)."""
+
+    def __init__(self) -> None:
+        self.chunks: list[bytes] = []
+
+    def write(self, data: bytes) -> int:
+        self.chunks.append(bytes(data))
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def take(self) -> bytes:
+        out = b"".join(self.chunks)
+        self.chunks.clear()
+        return out
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
+
+
+def _json_bytes(value: Any) -> bytes:
+    return json.dumps(value, ensure_ascii=False, indent=1, default=_jsonable).encode("utf-8")
+
+
+def _rows_json(sql: str, params: dict[str, Any]) -> Callable[[], Iterator[bytes]]:
+    """A table as one JSON list, read with a server-side cursor (a long history never sits whole in memory)."""
+    def chunks() -> Iterator[bytes]:
+        with q.connect() as conn, conn.cursor(name="lpq_descarga") as cur:
+            cur.itersize = ZIP_ROWS
+            cur.execute(sql, params)
+            yield b"["
+            first = True
+            for row in cur:
+                yield (b"\n" if first else b",\n") + json.dumps(row, ensure_ascii=False, default=_jsonable).encode("utf-8")
+                first = False
+            yield b"\n]\n"
+    return chunks
+
+
+PLATE_CSV_COLUMNS = ("id", "ts", "camera", "record_type", "dish_predicted", "dish_verified", "confidence",
+                     "review_status", "discarded_at", "leftovers", "leftovers_verified", "presentation", "photo_path",
+                     "model", "prompt_version", "menu_version")
+
+
+def _plates_csv(site: str) -> Callable[[], Iterator[bytes]]:
+    """The plates as a CSV Excel opens as it is (UTF-8 with its mark); the JSON columns as JSON text."""
+    def chunks() -> Iterator[bytes]:
+        yield chr(0xFEFF).encode("utf-8")
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(PLATE_CSV_COLUMNS)
+        with q.connect() as conn, conn.cursor(name="lpq_descarga_csv") as cur:
+            cur.itersize = ZIP_ROWS
+            cur.execute(q.EXPORT_SITE_PLATES, {"site": site})
+            for row in cur:
+                writer.writerow([
+                    json.dumps(row[c], ensure_ascii=False) if isinstance(row[c], (dict, list))
+                    else _jsonable(row[c]) if isinstance(row[c], (datetime, date)) else ("" if row[c] is None else row[c])
+                    for c in PLATE_CSV_COLUMNS])
+                if out.tell() > 1 << 16:
+                    yield out.getvalue().encode("utf-8")
+                    out.seek(0)
+                    out.truncate()
+        yield out.getvalue().encode("utf-8")
+    return chunks
+
+
+def _datos_parts(site: str, cfg: Config) -> tuple[list[tuple[str, Any]], dict[str, Any]]:
+    """The data file's members (Section 3.19.2): its restaurant, menu, bitácora, plates and jobs. Never a password
+    hash, a gafete, a pass, a link code or a chat number: the reads name their columns one by one."""
+    with q.connect() as conn:
+        row = conn.execute(q.SELECT_SITE_EXPORT, {"site": site}).fetchone()
+        accounts = conn.execute(q.EXPORT_SITE_ACCOUNTS, {"site": site}).fetchall()
+        restaurante = {
+            "sitio": row["site"], "activo": row["active"], "ingestion": row["ingestion"],
+            "chat": "asignado" if row["chat_asignado"] else "sin chat",
+            "config": cfg.sites[site].model_dump(mode="json", exclude_none=True) if site in cfg.sites else None,
+            "zona": knobs.timezone_of(cfg, site),
+            "cuentas": accounts,
+            "enlaces": conn.execute(q.EXPORT_SITE_ENLACES, {"site": site}).fetchall(),
+            "telefonos": conn.execute(q.EXPORT_SITE_TELEFONOS, {"site": site}).fetchall(),
+            "cambios_de_horario": conn.execute(q.EXPORT_SITE_HORARIOS, {"site": site}).fetchall(),
+        }
+        menu = {
+            "platillos": conn.execute(q.EXPORT_MENU_DISHES).fetchall(),
+            "nombres_anteriores": conn.execute(q.EXPORT_DISH_NAMES).fetchall(),
+            "fotos_locales": conn.execute(q.EXPORT_SITE_PHOTOS, {"site": site}).fetchall(),
+        }
+        bitacora = conn.execute(q.EXPORT_SITE_BITACORA, {
+            "site": site, "cuentas": [a["usuario"] for a in accounts]}).fetchall()
+        counts = conn.execute(q.COUNT_SITE_EXPORT, {"site": site}).fetchone()
+    when = datetime.now(timezone.utc).astimezone(ZoneInfo(knobs.timezone_of(cfg, site)))
+    leeme = (
+        f"LPQ_VISION: datos del restaurante {site}, descargados el {when:%Y-%m-%d %H:%M} ({knobs.timezone_of(cfg, site)}).\n\n"
+        "restaurante.json  el restaurante: su configuración, cámaras, cuentas (sin contraseñas), enlaces (sin código),\n"
+        "                  teléfonos (sin pase) y sus cambios de horario\n"
+        "menu.json         el menú: los platillos, sus nombres anteriores y las fotos locales del restaurante\n"
+        f"platos.json       cada plato con su resultado, platillo y fecha ({counts['platos']})\n"
+        "platos.csv        lo mismo, para abrir en Excel\n"
+        f"trabajos.json     cada análisis de esos platos, con su consumo ({counts['trabajos']})\n"
+        f"bitacora.json     las filas de la bitácora del restaurante y de sus cuentas ({len(bitacora)})\n\n"
+        "Las fotos van en su propio archivo (Descargar fotos).\n"
+    )
+    parts: list[tuple[str, Any]] = [
+        ("LEEME.txt", leeme.encode("utf-8")),
+        ("restaurante.json", _json_bytes(restaurante)),
+        ("menu.json", _json_bytes(menu)),
+        ("bitacora.json", _json_bytes(bitacora)),
+        ("platos.json", _rows_json(q.EXPORT_SITE_PLATES, {"site": site})),
+        ("platos.csv", _plates_csv(site)),
+        ("trabajos.json", _rows_json(q.EXPORT_SITE_JOBS, {"site": site})),
+    ]
+    return parts, {"platos": counts["platos"], "trabajos": counts["trabajos"], "bitacora": len(bitacora)}
+
+
+def _fotos_parts(site: str) -> tuple[list[tuple[str, Any]], dict[str, Any]]:
+    """The photos file's members: every file of the restaurant's photo folder (its plates) and its local menu photos
+    (each light copy with its original). Sizes are read now; a file gone by the time it is zipped is listed apart."""
+    from api.admin_menu import ORIGINAL_DIR, _safe_diet
+    from brain.capture.backends import PHOTO_ROOT
+
+    parts: list[tuple[str, Any]] = []
+    size = 0
+    folder = PHOTO_ROOT / site
+    if folder.is_dir():
+        for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+            parts.append(("platos/" + path.relative_to(folder).as_posix(), path))
+            size += path.stat().st_size
+    with q.connect() as conn:
+        menu_paths = sorted({r["photo_path"] for r in conn.execute(q.EXPORT_SITE_PHOTOS, {"site": site}).fetchall()})
+    menu_files = 0
+    for rel in menu_paths:
+        if _safe_diet(rel) is None:
+            continue
+        light = PHOTO_ROOT / rel
+        for path in [light, *sorted((light.parent / ORIGINAL_DIR).glob(light.stem + ".*"))]:
+            if path.is_file():
+                parts.append(("menu/" + path.relative_to(PHOTO_ROOT).as_posix(), path))
+                size += path.stat().st_size
+                menu_files += 1
+    leeme = (f"LPQ_VISION: fotos del restaurante {site}.\n\n"
+             f"platos/  las fotos de sus platos, por día ({len(parts) - menu_files})\n"
+             f"menu/    sus fotos locales del menú, cada una con su original ({menu_files})\n")
+    return [("LEEME.txt", leeme.encode("utf-8")), *parts], {"archivos": len(parts), "bytes": size}
+
+
+def _zip_stream(site: str, que: str, parts: list[tuple[str, Any]], desde: datetime, session: Session) -> Iterator[bytes]:
+    """The download as it is written (Starlette runs this in a thread). Only when its last byte left the api is it
+    recorded, with the moment its export began (desde) and only when the site was not switched meanwhile: a download
+    cut before its end records nothing, and whatever changed after desde is newer than its mark."""
+    pipe = _ZipPipe()
+    sent = 0
+    missing: list[str] = []
+    kind = zipfile.ZIP_DEFLATED if que == "datos" else zipfile.ZIP_STORED
+    with zipfile.ZipFile(pipe, "w", compression=kind, allowZip64=True) as zf:   # type: ignore[arg-type]
+        for name, source in parts:
+            if isinstance(source, bytes):
+                zf.writestr(name, source)
+            elif isinstance(source, Path):
+                try:
+                    zf.write(source, name)
+                except FileNotFoundError:
+                    missing.append(name)
+            else:
+                with zf.open(name, "w", force_zip64=True) as member:
+                    for chunk in source():
+                        member.write(chunk)
+                        out = pipe.take()
+                        if out:
+                            sent += len(out)
+                            yield out
+            out = pipe.take()
+            if out:
+                sent += len(out)
+                yield out
+        if missing:
+            zf.writestr("faltaron.txt", ("Ya no estaban al descargar:\n" + "\n".join(missing) + "\n").encode("utf-8"))
+    out = pipe.take()
+    sent += len(out)
+    yield out
+    with q.connect() as conn, conn.transaction():
+        marked = conn.execute(q.MARK_SITE_DESCARGA_DATOS if que == "datos" else q.MARK_SITE_DESCARGA_FOTOS,
+                              {"site": site, "desde": desde}).fetchone()
+        if marked is not None:
+            _bitacora(conn, session, "site.descarga", {
+                "site": site, "que": que, "archivos": len(parts), "faltaron": len(missing), "bytes": sent,
+            })
+    log.info("site download %s %s files=%d bytes=%d recorded=%s user=%s", site, que, len(parts), sent,
+             marked is not None, session.user)
+
+
+@router.get("/api/admin/sites/{site}/descarga/{que}")
+async def download_site(site: str, que: str, request: Request, revisar: bool = False,
+                        session: Session = Depends(require_admin)) -> Any:
+    """Descargar todo (Section 3.19.2; admin): que = datos (one zip: its restaurant, menu, bitácora, plates and jobs)
+    or fotos (one zip: its plates' photos and its local menu photos). Only a deactivated restaurant (its data no
+    longer changes) with nothing in the queue, and never asked by another site's page (a browser's Sec-Fetch-Site).
+    revisar=1 answers what the file holds, without the file."""
+    if que not in DOWNLOADS:
+        raise HTTPException(status_code=404, detail="descarga desconocida: datos o fotos")
+    origin = request.headers.get("sec-fetch-site")
+    if origin is not None and origin not in DOWNLOAD_FROM:
+        raise HTTPException(status_code=403, detail="Descargar todo se pide solo desde el mostrador.")
+
+    def check(conn: psycopg.Connection) -> datetime:
+        row = conn.execute(q.SELECT_SITE_BAJA, {"site": site}).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"sitio desconocido: {site}")
+        if row["active"]:
+            raise HTTPException(status_code=409, detail=(
+                f"El restaurante {site} está activo: desactívalo primero (así sus datos ya no cambian)."))
+        if int(conn.execute(q.COUNT_SITE_COLA, {"site": site}).fetchone()["n"]):
+            raise HTTPException(status_code=409, detail=COLA_ACTIVA)
+        return conn.execute(q.DB_NOW).fetchone()["at"]
+
+    desde = await asyncio.to_thread(_read, check)
+    cfg = await _config()
+    if que == "datos":
+        parts, info = await asyncio.to_thread(_datos_parts, site, cfg)
+    else:
+        parts, info = await asyncio.to_thread(_fotos_parts, site)
+    if revisar:
+        return {"site": site, "que": que, **info}
+    stamp = datetime.now(timezone.utc).astimezone(ZoneInfo(knobs.timezone_of(cfg, site))).strftime("%Y%m%d-%H%M")
+    return StreamingResponse(
+        _zip_stream(site, que, parts, desde, session), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="lpq_{site}_{que}_{stamp}.zip"', "Cache-Control": "no-store"},
+    )
+
+
+def _remove_site_folder(site: str) -> bool:
+    """The erase's last step on disk: the restaurant's whole photo folder (its plates' photos were unlinked one by
+    one; this takes what is left: empty days, a file a crash left). Only a folder directly in the photos root whose
+    name is a site's (never reference/ or brand)."""
+    from brain.capture.backends import PHOTO_ROOT
+
+    if not SITE_SLUG_RE.match(site) or site in RESERVED_SITE_SLUGS:
+        return False
+    folder = PHOTO_ROOT / site
+    if not folder.is_dir() or folder.resolve().parent != PHOTO_ROOT.resolve():
+        return False
+    shutil.rmtree(folder, ignore_errors=True)
+    return not folder.exists()
+
+
+def _still_due(conn: psycopg.Connection, site: str) -> dict[str, Any]:
+    row = conn.execute(q.LOCK_SITE_BAJA, {"site": site}).fetchone()
+    if row is None or row["active"] or row["eliminado_at"] is None or _erase_day(row["eliminado_at"]) > datetime.now(timezone.utc):
+        raise _NotDue(site)
+    return row
+
+
+async def _erase_site(site: str) -> dict[str, Any]:
+    """The end of one restaurant's wait: its plates (their jobs first) in batches with their photos, then every
+    other row that points at it and its config.yaml block in one write (as Eliminar of a restaurant without plates),
+    its local menu photos when nothing else uses them, its photo folder, and the RAM of its cameras. A site menu.yaml
+    names meanwhile (or an unreadable menu.yaml) is not erased."""
+    from brain.capture.backends import unlink_plate_photo
+
+    seed = await asyncio.to_thread(_seed_sites)
+    if seed is None or site in seed:
+        raise _NotDue("menu.yaml no se pudo leer" if seed is None else "es un sitio de menu.yaml")
+    plates = files = 0
+    while True:
+        def batch(conn: psycopg.Connection) -> list[dict[str, Any]]:
+            _still_due(conn, site)
+            rows = conn.execute(q.LOCK_SITE_PLATES_BATCH, {"site": site, "limit": SITE_ERASE_BATCH}).fetchall()
+            ids = [int(r["id"]) for r in rows]
+            if ids:
+                conn.execute(q.DELETE_JOBS_OF_PLATES, {"ids": ids})
+                conn.execute(q.DELETE_SITE_PLATES_BY_IDS, {"ids": ids, "site": site})
+            return rows
+
+        rows = await asyncio.to_thread(_tx, batch)
+        for row in rows:       # files only after their rows are gone for good (a crash leaves a file, never a row)
+            files += bool(await asyncio.to_thread(unlink_plate_photo, row["photo_path"]))
+        plates += len(rows)
+        if len(rows) < SITE_ERASE_BATCH:
+            break
+
+    cfg = await _config()
+    site_cfg = cfg.sites.get(site)
+    cameras = sorted(site_cfg.cameras) if site_cfg is not None else []
+
+    def same_cameras(now: Config) -> None:
+        now_cfg = now.sites.get(site)
+        if sorted(now_cfg.cameras if now_cfg is not None else []) != cameras:
+            raise _NotDue(site)
+
+    def db_work(conn: psycopg.Connection) -> dict[str, Any]:
+        _still_due(conn, site)
+        accounts = [(a["usuario"], a["uid"]) for a in conn.execute(q.SELECT_SITE_ACCOUNTS, {"site": site}).fetchall()]
+        done = _delete_rows(conn, site, cameras, accounts, erasing=True)
+        conn.execute(q.INSERT_ADMIN_LOG, {"usuario": None, "action": "site.erase", "detail": Jsonb({
+            "site": site, "camaras": cameras, "cuentas": done["accounts"], "platos": plates, "fotos_de_platos": files,
+            "enlaces": done["enlaces"], "telefonos": len(done["notes"]), "fotos": done["fotos"], "horarios": done["horarios"],
+        })})
+        return done
+
+    ops = [cw.delete_op(("sites", site))] if site_cfg is not None else []
+    done = await _db_and_config(db_work, ops, same_cameras)
+    _note_all(done["notes"])
+    for account in done["accounts"]:
+        drop_sessions_of(account["usuario"])
+    removed = await asyncio.to_thread(_after_delete, site, done["photos"])
+    folder = await asyncio.to_thread(_remove_site_folder, site)
+    _forget_cameras(site, cameras)
+    log.info("site erased %s plates=%d plate_files=%d accounts=%d menu_files=%d folder=%s", site, plates, files,
+             len(done["accounts"]), len(removed), folder)
+    return {"site": site, "platos": plates, "archivos_de_platos": files, "archivos_del_menu": len(removed),
+            "carpeta": folder, "cuentas": done["accounts"]}
+
+
+async def erase_due_sites() -> list[dict[str, Any]]:
+    """Every restaurant whose wait ended is erased for good (one at a time; another look already running makes this
+    one return at once; one that fails is logged and tried again at the next look, the others go on). The api runs
+    it once a minute (startup); nothing else calls it."""
+    lock_conn = await asyncio.to_thread(q.connect)
+    try:
+        lock_conn.autocommit = True
+        got = await asyncio.to_thread(lambda: lock_conn.execute(
+            "SELECT pg_try_advisory_lock(%(k)s) AS ok", {"k": SITE_ERASE_LOCK}).fetchone()["ok"])
+        if not got:
+            return []
+        due = await asyncio.to_thread(_read, lambda c: [r["site"] for r in c.execute(
+            q.SITES_DUE_ERASE, {"retention": timedelta(days=SITE_RECOVERY_DAYS)}).fetchall()])
+        erased: list[dict[str, Any]] = []
+        for site in set(_ERASE_NOTED) - set(due):          # no longer due (restored, gone): forget what was said
+            _ERASE_NOTED.pop(site, None)
+        for site in due:
+            try:
+                erased.append(await _erase_site(site))
+                _ERASE_NOTED.pop(site, None)
+            except (_NotDue, HTTPException) as exc:
+                why = f"{type(exc).__name__}: {exc.detail if isinstance(exc, HTTPException) else exc}"
+                if _ERASE_NOTED.get(site) != why:         # said once, not every minute
+                    _ERASE_NOTED[site] = why
+                    log.info("site erase of %s waits for the next look (%s)", site, why)
+            except Exception as exc:
+                why = type(exc).__name__
+                if _ERASE_NOTED.get(site) != why:
+                    _ERASE_NOTED[site] = why
+                    log.exception("site erase of %s failed; it is tried again at each look", site)
+        return erased
+    finally:
+        await asyncio.to_thread(lock_conn.close)
+
+
+async def _erase_loop() -> None:
+    await asyncio.sleep(SITE_ERASE_SETTLE_S)
+    first, failing = True, False
+    while True:
+        try:
+            erased = await erase_due_sites()
+            if first:
+                log.info("site erase look: the first one done (%d erased), then every %d s", len(erased), SITE_ERASE_POLL_S)
+                first = False
+            if failing:
+                log.info("site erase look: working again")
+                failing = False
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if not failing:                               # said once, not every minute
+                log.exception("site erase look failed; it looks again every %d s", SITE_ERASE_POLL_S)
+                failing = True
+        await asyncio.sleep(SITE_ERASE_POLL_S)
+
+
+async def startup(app: FastAPI) -> None:
+    """The hub runs this once the gate is up (Section 3.19.2): the look (once a minute) for restaurants whose wait
+    ended."""
+    app.state.site_erase = asyncio.create_task(_erase_loop())
 
 
 # --- functions (own site for a manager) and cameras (admin) ------------------------------------
@@ -716,6 +1330,7 @@ async def delete_camera(site: str, camera: str, session: Session = Depends(requi
             return notes
 
         _note_all(await _db_and_config(db_work, [cw.delete_op(("sites", site, "cameras", camera))], still_there))
+        _forget_cameras(site, [camera])                     # Section 3.19.2: its RAM goes too
         log.info("camera deleted %s/%s user=%s", site, camera, session.user)
         return await _view_of(site)
 
@@ -1168,8 +1783,13 @@ def _person_row(conn: psycopg.Connection, usuario: str, *, allow_deleted: bool =
 
 
 def _site_exists(conn: psycopg.Connection, site: str | None) -> None:
-    if site and conn.execute(q.SELECT_SITE, {"site": site}).fetchone() is None:
+    if not site:
+        return
+    row = conn.execute(q.SELECT_SITE_BAJA, {"site": site}).fetchone()
+    if row is None:
         raise HTTPException(status_code=400, detail=f"sitio desconocido: {site}")
+    if row["eliminado_at"] is not None:           # Section 3.19.2: no account joins a restaurant in its wait
+        raise HTTPException(status_code=409, detail=f"El restaurante {site} está en Restaurantes eliminados: restáuralo primero.")
 
 
 def _last_admin(conn: psycopg.Connection, row: dict[str, Any]) -> bool:
@@ -1360,6 +1980,11 @@ async def recover_user(usuario: str, session: Session = Depends(require_admin)) 
     """Recuperar: the deleted account comes back active, with its same number."""
 
     def work(conn: psycopg.Connection) -> dict[str, Any]:
+        home = conn.execute(q.SELECT_USER_SITE_BAJA, {"usuario": usuario}).fetchone()
+        if home is not None and home["eliminado_at"] is not None:     # Section 3.19.2: it comes back with its site
+            raise HTTPException(status_code=409, detail=(
+                f"La cuenta {usuario} es del restaurante {home['site']}, que está en Restaurantes eliminados: "
+                "restaura el restaurante primero."))
         done = conn.execute(q.RECOVER_USER, {"usuario": usuario}).fetchone()
         if done is None:
             raise HTTPException(status_code=404, detail=f"La cuenta {usuario} no está en Eliminadas.")

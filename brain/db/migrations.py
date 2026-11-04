@@ -46,6 +46,10 @@ Fase 3 (table steps are gated on to_regclass, column steps on information_schema
     to_regclass like a table.
 25. idx_jobs_done_finished ON jobs (finished_at) WHERE status = 'done': the gasto reads only its range of days,
     however long the history grows (Section 3.14). Gated the same way.
+26. sites.descarga_datos_at TIMESTAMPTZ and 27. sites.descarga_fotos_at TIMESTAMPTZ: when Descargar todo's data file
+    and photos file of a deactivated restaurant last left whole (Section 3.19.2); a switch on or off clears both.
+28. sites.eliminado_at TIMESTAMPTZ: when Eliminar started the restaurant's wait (NULL = not in one; Section 3.19.2).
+29. sites.eliminado_cuentas JSONB: the accounts that Eliminar closed, with the state each had, for Restaurar.
 
 Nothing here ever ALTERs or DROPs what exists: every step CREATEs a missing table or index or ADDs a missing column.
 """
@@ -166,6 +170,16 @@ MIGRATIONS: tuple[ColumnMigration | TableMigration | IndexMigration, ...] = (
     TableMigration(name="telefonos", table="telefonos", statement=q.CREATE_TELEFONOS_TABLE),
     IndexMigration(name="jobs.plate_id index", index="idx_jobs_plate", statement=q.CREATE_JOBS_PLATE_INDEX),
     IndexMigration(name="jobs.finished_at index", index="idx_jobs_done_finished", statement=q.CREATE_JOBS_DONE_FINISHED_INDEX),
+    ColumnMigration(
+        name="sites.descarga_datos_at", table="sites", column="descarga_datos_at", statement=q.ADD_SITES_DESCARGA_DATOS_AT,
+    ),
+    ColumnMigration(
+        name="sites.descarga_fotos_at", table="sites", column="descarga_fotos_at", statement=q.ADD_SITES_DESCARGA_FOTOS_AT,
+    ),
+    ColumnMigration(name="sites.eliminado_at", table="sites", column="eliminado_at", statement=q.ADD_SITES_ELIMINADO_AT),
+    ColumnMigration(
+        name="sites.eliminado_cuentas", table="sites", column="eliminado_cuentas", statement=q.ADD_SITES_ELIMINADO_CUENTAS,
+    ),
 )
 
 

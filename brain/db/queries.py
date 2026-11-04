@@ -284,12 +284,7 @@ VALUES (%(site)s, %(ingestion)s, %(device_key)s)
 # Section 3.19.1 (owner, 2 Nov): Eliminar restaurante, for a restaurant that never recorded a plate. Its row, locked
 # for the deletion (a deactivated site takes no plate meanwhile), its plates counted (any plate, papelera included,
 # means history: it waits for Descargar todo), and every row that points at it, removed in one transaction.
-LOCK_SITE = "SELECT site, active FROM sites WHERE site = %(site)s FOR UPDATE"
 COUNT_SITE_PLATES = "SELECT COUNT(*) AS n FROM plates WHERE site = %(site)s"
-INACTIVE_SITES_WITH_PLATES = """
-SELECT s.site FROM sites s
-WHERE NOT s.active AND EXISTS (SELECT 1 FROM plates p WHERE p.site = s.site)
-"""
 SELECT_SITE_ACCOUNTS = "SELECT usuario, uid FROM users WHERE site = %(site)s ORDER BY usuario"
 COUNT_SITE_ROWS = """
 SELECT (SELECT COUNT(*) FROM camara_enlaces WHERE site = %(site)s) AS enlaces,
@@ -309,6 +304,128 @@ DELETE_SITE_HORARIOS = "DELETE FROM horario_extensiones WHERE site = %(site)s"
 DELETE_SITE_PHOTOS = "DELETE FROM site_dish_photos WHERE site = %(site)s RETURNING photo_path"
 DELETE_SITE_ACCOUNTS = "DELETE FROM users WHERE site = %(site)s RETURNING usuario, uid"
 DELETE_SITE = "DELETE FROM sites WHERE site = %(site)s AND NOT active RETURNING site"
+
+# Section 3.19.2 (owner, 2 and 3 Nov): Eliminar restaurante for one WITH history. Each of Descargar todo's two files
+# leaves its mark (cleared whenever the site is switched on or off: a download counts only for data that no longer
+# changes); Eliminar then waits SITE_RECOVERY_DAYS (eliminado_at; the accounts it closed, with their state, in
+# eliminado_cuentas), during which Restaurar brings it back; then the api's look (once a minute) erases it for good.
+ADD_SITES_DESCARGA_DATOS_AT = "ALTER TABLE sites ADD COLUMN descarga_datos_at TIMESTAMPTZ"
+ADD_SITES_DESCARGA_FOTOS_AT = "ALTER TABLE sites ADD COLUMN descarga_fotos_at TIMESTAMPTZ"
+ADD_SITES_ELIMINADO_AT = "ALTER TABLE sites ADD COLUMN eliminado_at TIMESTAMPTZ"
+ADD_SITES_ELIMINADO_CUENTAS = "ALTER TABLE sites ADD COLUMN eliminado_cuentas JSONB"
+INACTIVE_SITES_BAJA = """
+SELECT s.site, s.descarga_datos_at, s.descarga_fotos_at, s.eliminado_at,
+       (SELECT COUNT(*) FROM plates p WHERE p.site = s.site) AS platos,
+       (SELECT COUNT(*) FROM jobs j JOIN plates p ON p.id = j.plate_id
+        WHERE p.site = s.site AND j.status IN ('pending', 'working')) AS cola
+FROM sites s
+WHERE NOT s.active
+"""
+SELECT_SITE_BAJA = """
+SELECT site, active, descarga_datos_at, descarga_fotos_at, eliminado_at, eliminado_cuentas
+FROM sites WHERE site = %(site)s
+"""
+LOCK_SITE_BAJA = SELECT_SITE_BAJA.rstrip() + " FOR UPDATE\n"
+COUNT_SITE_COLA = """
+SELECT COUNT(*) AS n FROM jobs j JOIN plates p ON p.id = j.plate_id
+WHERE p.site = %(site)s AND j.status IN ('pending', 'working')
+"""
+SITE_NEWEST = """
+SELECT (SELECT MAX(j.finished_at) FROM jobs j JOIN plates p ON p.id = j.plate_id WHERE p.site = %(site)s) AS resultado,
+       (SELECT MAX(created_at) FROM plates WHERE site = %(site)s) AS plato
+"""
+CLEAR_SITE_DESCARGAS = "UPDATE sites SET descarga_datos_at = NULL, descarga_fotos_at = NULL WHERE site = %(site)s"
+# A file's mark is the moment its export began (desde), set once its last byte left, and only when the site was not
+# switched on or off meanwhile (a switch's site.edit row with active since desde): a plate or a result after desde is
+# newer than the mark, which Eliminar refuses (a Review correction is not seen; timestamps are their transaction's
+# start, so only transactions overlapping within milliseconds could slip by).
+_MARK_UNLESS_SWITCHED = """
+WHERE site = %(site)s AND NOT active
+  AND NOT EXISTS (SELECT 1 FROM admin_log WHERE action = 'site.edit' AND detail->>'site' = %(site)s
+                  AND detail->>'active' IS NOT NULL AND ts >= %(desde)s)
+RETURNING site
+"""
+MARK_SITE_DESCARGA_DATOS = "UPDATE sites SET descarga_datos_at = %(desde)s" + _MARK_UNLESS_SWITCHED
+MARK_SITE_DESCARGA_FOTOS = "UPDATE sites SET descarga_fotos_at = %(desde)s" + _MARK_UNLESS_SWITCHED
+DB_NOW = "SELECT now() AS at"
+SELECT_SITE_OPEN_ACCOUNTS = """
+SELECT usuario, uid, active FROM users
+WHERE site = %(site)s AND deleted_at IS NULL AND role <> 'machine'
+ORDER BY usuario
+"""
+SET_SITE_ELIMINADO = """
+UPDATE sites SET eliminado_at = now(), eliminado_cuentas = %(cuentas)s
+WHERE site = %(site)s AND NOT active AND eliminado_at IS NULL
+RETURNING eliminado_at
+"""
+CLOSE_SITE_ACCOUNTS = """
+UPDATE users SET deleted_at = %(at)s, active = FALSE, erase_warned_at = NULL
+WHERE site = %(site)s AND deleted_at IS NULL AND role <> 'machine'
+"""
+REOPEN_SITE_ACCOUNT = """
+UPDATE users SET deleted_at = NULL, erase_warned_at = NULL, active = %(active)s
+WHERE usuario = %(usuario)s AND uid = %(uid)s AND site = %(site)s AND deleted_at = %(at)s
+RETURNING usuario
+"""
+CLEAR_SITE_ELIMINADO = "UPDATE sites SET eliminado_at = NULL, eliminado_cuentas = NULL WHERE site = %(site)s"
+SELECT_USER_SITE_BAJA = """
+SELECT s.site, s.eliminado_at FROM users u JOIN sites s ON s.site = u.site WHERE u.usuario = %(usuario)s
+"""
+SITES_DUE_ERASE = """
+SELECT site FROM sites
+WHERE eliminado_at IS NOT NULL AND eliminado_at < now() - %(retention)s AND NOT active
+ORDER BY eliminado_at
+"""
+LOCK_SITE_PLATES_BATCH = """
+SELECT id, photo_path FROM plates WHERE site = %(site)s ORDER BY id LIMIT %(limit)s FOR UPDATE
+"""
+DELETE_SITE_PLATES_BY_IDS = "DELETE FROM plates WHERE id = ANY(%(ids)s) AND site = %(site)s"
+# Descargar todo's reads: each column named, so a password hash, a gafete, a pass, a link code or a chat number can
+# never ride along (the plates and jobs carry none).
+SELECT_SITE_EXPORT = """
+SELECT site, ingestion, active, telegram_chat_id IS NOT NULL AS chat_asignado FROM sites WHERE site = %(site)s
+"""
+EXPORT_SITE_ACCOUNTS = """
+SELECT usuario, uid, role, active, created_at, deleted_at, password_changed_at, password_changed_by
+FROM users WHERE site = %(site)s ORDER BY usuario
+"""
+EXPORT_SITE_ENLACES = "SELECT camera, dias, vence_at, creado_at FROM camara_enlaces WHERE site = %(site)s ORDER BY camera"
+EXPORT_SITE_TELEFONOS = """
+SELECT id, nombre, site, camera, pide_site, pide_camera, pide_at, creado_at
+FROM telefonos WHERE site = %(site)s OR pide_site = %(site)s ORDER BY id
+"""
+EXPORT_SITE_HORARIOS = """
+SELECT id, dia, abre_at, until, cerrado, created_at FROM horario_extensiones WHERE site = %(site)s ORDER BY id
+"""
+EXPORT_MENU_DISHES = """
+SELECT dish_id, nombre, plate_type, componentes, contable, activo, menu_version, orden, notas
+FROM menu_dishes ORDER BY orden NULLS LAST, dish_id
+"""
+EXPORT_DISH_NAMES = "SELECT dish_id, nombre, hasta, usuario FROM dish_name_history ORDER BY dish_id, hasta"
+EXPORT_SITE_PHOTOS = """
+SELECT dish_id, photo_path, condition FROM site_dish_photos WHERE site = %(site)s ORDER BY dish_id, photo_path
+"""
+EXPORT_SITE_BITACORA = """
+SELECT id, ts, usuario, usuario_uid, action, detail FROM admin_log
+WHERE detail->>'site' = %(site)s OR usuario = ANY(%(cuentas)s) OR detail->>'usuario' = ANY(%(cuentas)s)
+   OR detail->>'manager' = ANY(%(cuentas)s)
+ORDER BY id
+"""
+EXPORT_SITE_PLATES = """
+SELECT id, site, camera, record_type, ts, photo_path, burst_id, dish_predicted, dish_verified, leftovers,
+       leftovers_verified, presentation, scale, pairing, confidence, model, prompt_version, menu_version, validator,
+       review_status, created_at, capture, discarded_at
+FROM plates WHERE site = %(site)s ORDER BY ts, id
+"""
+EXPORT_SITE_JOBS = """
+SELECT j.id, j.plate_id, j.kind, j.priority, j.status, j.attempts, j.last_error, j.created_at, j.started_at,
+       j.finished_at, j.usage
+FROM jobs j JOIN plates p ON p.id = j.plate_id WHERE p.site = %(site)s ORDER BY j.id
+"""
+COUNT_SITE_EXPORT = """
+SELECT (SELECT COUNT(*) FROM plates WHERE site = %(site)s) AS platos,
+       (SELECT COUNT(*) FROM jobs j JOIN plates p ON p.id = j.plate_id WHERE p.site = %(site)s) AS trabajos
+"""
 
 # The gafete's reads and writes. The value is compared in constant time by the caller, never logged.
 SELECT_DEVICE_KEY = "SELECT device_key FROM sites WHERE site = %(site)s AND active"
@@ -917,7 +1034,9 @@ WHERE id = %(job_id)s
 
 # Reintentar (Fase 3): failed -> pending with attempts reset, the whole scope at once (site NULL =
 # every site: admin only; a manager passes its own). A discarded plate is never retried: the plates with a
-# failed job are read FOR SHARE (Section 3.14), so a Descartar committing meanwhile is waited for and seen.
+# failed job are read FOR SHARE (Section 3.14), so a Descartar committing meanwhile is waited for and seen. A
+# restaurant in its wait (Section 3.19.2) is never retried: its data stays as its download left it (its sites row is
+# read FOR SHARE too, so an Eliminar committing meanwhile is waited for and seen).
 RETRY_FAILED = """
 UPDATE jobs AS j SET
   status = 'pending', attempts = 0, run_after = now(), last_error = NULL,
@@ -926,11 +1045,12 @@ FROM plates AS p
 WHERE p.id = j.plate_id
   AND j.status = 'failed'
   AND j.plate_id IN (
-    SELECT pl.id FROM plates AS pl
+    SELECT pl.id FROM plates AS pl JOIN sites AS st ON st.site = pl.site
     WHERE pl.id IN (SELECT plate_id FROM jobs WHERE status = 'failed')
       AND pl.review_status <> 'discarded'
       AND (%(site)s::text IS NULL OR pl.site = %(site)s)
-    FOR SHARE OF pl
+      AND st.eliminado_at IS NULL
+    FOR SHARE OF pl, st
   )
 RETURNING j.id, p.site
 """
@@ -940,15 +1060,17 @@ QUEUE_DEPTHS = "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status ORDER BY 
 
 # The mostrador's Cola (Section 3.14), scoped through the plate (site NULL = every site), read every 5 s while the
 # tab is open: only jobs not done are read (the claim index serves the status). Fallidos counts what Reintentar
-# would take: a failed job whose plate sits in the papelera is never retried, so it is not counted. A plate
+# would take: a failed job whose plate sits in the papelera, or of a restaurant in its wait (Section 3.19.2), is
+# never retried, so it is not counted (nor listed). A plate
 # discarded while its analysis waits is still analyzed (the claim is the queue's verbatim one): Esperando counts it.
 COLA_COUNTS = """
 SELECT
   COUNT(*) FILTER (WHERE j.status = 'pending') AS esperando,
   COUNT(*) FILTER (WHERE j.status = 'working') AS en_proceso,
-  COUNT(*) FILTER (WHERE j.status = 'failed' AND p.review_status <> 'discarded') AS fallidos
+  COUNT(*) FILTER (WHERE j.status = 'failed' AND p.review_status <> 'discarded' AND st.eliminado_at IS NULL) AS fallidos
 FROM jobs AS j
 JOIN plates AS p ON p.id = j.plate_id
+JOIN sites AS st ON st.site = p.site
 WHERE j.status IN ('pending', 'working', 'failed')
   AND (%(site)s::text IS NULL OR p.site = %(site)s)
 """
@@ -958,7 +1080,8 @@ SELECT j.id AS job, j.plate_id AS plate, j.kind, j.attempts, j.last_error, j.fin
        p.site, p.camera, p.record_type
 FROM jobs AS j
 JOIN plates AS p ON p.id = j.plate_id
-WHERE j.status = 'failed' AND p.review_status <> 'discarded'
+JOIN sites AS st ON st.site = p.site
+WHERE j.status = 'failed' AND p.review_status <> 'discarded' AND st.eliminado_at IS NULL
   AND (%(site)s::text IS NULL OR p.site = %(site)s)
 ORDER BY j.finished_at DESC NULLS LAST, j.id DESC
 LIMIT %(limit)s
